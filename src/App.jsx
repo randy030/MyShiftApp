@@ -42,13 +42,14 @@ import {
   FileBarChart,
   UserX,
   Upload,
-  ListFilter
+  ListFilter,
+  History
 } from 'lucide-react';
 
 // ==========================================
-// 🔴 修正重點：請將您的 Firebase 設定填寫在下方
-// (請從 Firebase Console -> 專案設定 -> 一般 -> 下方的「您的應用程式」區塊複製)
+// 🔴 您的 Firebase 設定
 // ==========================================
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
   authDomain: "our-company-d1ef6.firebaseapp.com",
@@ -64,7 +65,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// 修正：直接指定 ID，避免在 Vercel 找不到變數
 const appId = 'team-shift-pc-v1';
 
 // --- 假別設定 ---
@@ -72,7 +72,7 @@ const DEFAULT_LEAVE_TYPES = [
   { id: 'rostered', label: '自畫假', note: '自選畫休 (不扣薪)', deduct: false },
   { id: 'official', label: '排休', note: '排定休假 (管理員排)', deduct: false }, 
   { id: 'annual', label: '特休', note: '全薪，依年資給予 (不扣薪)', deduct: false },
-  { id: 'comp', label: '補休', note: '使用加班時數折抵 (不扣薪)', deduct: false },
+  { id: 'comp', label: '補休', note: '輸入時數扣抵加班 (扣餘額)', deduct: false }, // 修改說明
   { id: 'menstrual', label: '生理假', note: '每月得請1日，半薪。', deduct: true },
   { id: 'sick', label: '病假', note: '一年未超過30日半薪。', deduct: true },
   { id: 'personal', label: '事假', note: '無薪，一年限14日。', deduct: true },
@@ -135,7 +135,6 @@ export default function App() {
 
   useEffect(() => {
     if (!auth) { setLoading(false); return; }
-    
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
@@ -422,10 +421,12 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
                       if (a.type !== 'LEAVE') return null;
                       const lLabel = leaveTypes.find(t=>t.id===a.leaveType)?.label || '休';
                       const pColor = getUserColor(a.uid);
+                      // 顯示補休時數
+                      const extraLabel = (a.leaveType==='comp' && a.leaveHours) ? ` ${a.leaveHours}h` : '';
                       return (
                         <div key={ix} className={`text-[10px] p-0.5 rounded border ${pColor} bg-opacity-20 flex justify-between items-center mb-1`}>
                           <span className="font-medium">{allUsers[a.uid]?.name}</span>
-                          <span className={`text-[9px] bg-white bg-opacity-80 px-1 rounded ml-1 border shadow-sm`}>{lLabel}</span>
+                          <span className={`text-[9px] bg-white bg-opacity-80 px-1 rounded ml-1 border shadow-sm`}>{lLabel}{extraLabel}</span>
                         </div>
                       )
                     })}
@@ -476,7 +477,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
   );
 };
 
-// --- Shift Modal (修正換假邏輯：我休假 vs 對方上班) ---
+// --- Shift Modal (更新：補休要問時數) ---
 const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, userColors, sortedUserIds }) => {
   const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
   const [note, setNote] = useState(dayData.note || '');
@@ -547,8 +548,20 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
         }
     }
 
-    if(idx>=0) next[idx] = { uid, type, leaveType: lType };
-    else next.push({ uid, type, leaveType: lType });
+    // 🔴 補休輸入時數邏輯 🔴
+    let leaveHours = 0;
+    if (lType === 'comp') {
+        const p = prompt("請輸入補休時數 (例如 8 或 12):", "8");
+        if (p === null) return; // 取消
+        leaveHours = parseFloat(p);
+        if (isNaN(leaveHours)) return alert("請輸入有效的數字");
+    }
+
+    const newEntry = { uid, type, leaveType: lType };
+    if (leaveHours > 0) newEntry.leaveHours = leaveHours;
+
+    if(idx>=0) next[idx] = newEntry;
+    else next.push(newEntry);
 
     update({ assignments: next });
     
@@ -674,7 +687,10 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
                 </div>
                 {assign?.type === 'LEAVE' && (
                    <div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}>
-                     <span className="font-medium text-gray-900">狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'}</span>
+                     <span className="font-medium text-gray-900">
+                        狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'}
+                        {(assign.leaveType==='comp' && assign.leaveHours) && ` (${assign.leaveHours}小時)`}
+                     </span>
                      {canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}
                    </div>
                 )}
@@ -696,7 +712,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   );
 };
 
-// --- Salary View (移除上班天數統計) ---
+// --- Salary View (更新：顯示生涯累計) ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const isAdmin = users.find(u => u.uid === currentUser.uid)?.isAdmin;
@@ -707,21 +723,42 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
   }, [users, currentUser, isAdmin]);
 
   const calc = (uid) => {
-    let otTotal=0, leaveCounts = {};
-    Object.keys(shifts).forEach(d => {
-      if(d.startsWith(targetMonth)) {
-        const data = shifts[d];
-        const a = data.assignments?.find(as => as.uid === uid);
-        if (!data.isClosed && a) {
-            if (a.type === 'LEAVE') {
-                const lType = a.leaveType || 'unknown';
-                leaveCounts[lType] = (leaveCounts[lType] || 0) + 1;
-            }
-            if (a.otHours && a.otConfirmed) otTotal += a.otHours;
+    let monthStats = { ot: 0, leaves: {} };
+    let totalStats = { otEarned: 0, compHoursUsed: 0 }; // 改用 compHoursUsed
+
+    Object.keys(shifts).forEach(date => {
+        const data = shifts[date];
+        if(data.isClosed) return;
+
+        const assign = data.assignments?.find(a => a.uid === uid);
+        if(!assign) return;
+
+        // 1. 生涯累計 (所有歷史資料)
+        if(assign.otHours && assign.otConfirmed) {
+            totalStats.otEarned += assign.otHours;
         }
-      }
+        if(assign.type === 'LEAVE' && assign.leaveType === 'comp') {
+            // 🔴 改為累計「輸入的時數」，如果沒有(舊資料)則不扣
+            const used = assign.leaveHours || 0; 
+            totalStats.compHoursUsed += used;
+        }
+
+        // 2. 本月統計 (僅限選定月份)
+        if(date.startsWith(targetMonth)) {
+             if(assign.otHours && assign.otConfirmed) {
+                monthStats.ot += assign.otHours;
+             }
+             if(assign.type === 'LEAVE') {
+                 const lType = assign.leaveType || 'unknown';
+                 monthStats.leaves[lType] = (monthStats.leaves[lType] || 0) + 1;
+             }
+        }
     });
-    return { leaveCounts, otTotal };
+
+    // 計算餘額: 總賺取 - 總花費
+    const balance = totalStats.otEarned - totalStats.compHoursUsed;
+
+    return { monthStats, totalStats, balance };
   };
 
   const handleClearMonth = async () => {
@@ -754,20 +791,34 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
             <div key={u.uid} className="bg-white p-4 rounded shadow-sm border">
               <div className="flex justify-between items-start mb-2 border-b pb-2">
                 <div className="font-bold text-lg">{u.name}</div>
-                <div className="text-xs text-gray-400 pt-1">本月累計</div>
+                <div className="text-right">
+                    <div className="text-xs text-gray-400">剩餘可休</div>
+                    <div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{s.balance} <span className="text-xs">hr</span></div>
+                </div>
               </div>
-              <div className="space-y-2 text-sm text-gray-700">
-                <div className="flex justify-between"><span>累計加班/補休:</span><span className="font-bold text-orange-600">{s.otTotal} 小時</span></div>
-                <div className="bg-gray-50 p-2 rounded text-xs mt-2">
-                    <div className="font-bold text-gray-500 mb-1">請假明細:</div>
-                    {Object.keys(s.leaveCounts).length === 0 ? <span className="text-gray-400">無請假紀錄</span> : 
-                        <div className="grid grid-cols-2 gap-1">
-                            {Object.entries(s.leaveCounts).map(([typeId, count]) => {
+              
+              <div className="space-y-3 text-sm">
+                {/* 生涯累計區塊 */}
+                <div className="bg-orange-50 p-2 rounded border border-orange-100">
+                    <div className="text-xs font-bold text-orange-800 mb-1 flex items-center gap-1"><History size={12}/> 生涯累計</div>
+                    <div className="flex justify-between text-xs text-gray-600">
+                        <span>總加班賺取: {s.totalStats.otEarned} hr</span>
+                        <span>總補休時數: {s.totalStats.compHoursUsed} hr</span>
+                    </div>
+                </div>
+
+                {/* 本月統計區塊 */}
+                <div className="bg-gray-50 p-2 rounded border border-gray-100">
+                    <div className="text-xs font-bold text-gray-500 mb-1">本月 ({targetMonth}) 小計</div>
+                    <div className="flex justify-between mb-1"><span>本月加班:</span><span className="font-bold text-gray-800">{s.monthStats.ot} 小時</span></div>
+                    {Object.keys(s.monthStats.leaves).length > 0 && (
+                        <div className="grid grid-cols-2 gap-1 mt-1 border-t pt-1">
+                            {Object.entries(s.monthStats.leaves).map(([typeId, count]) => {
                                 const typeInfo = leaveTypes.find(t => t.id === typeId);
-                                return <span key={typeId} className={`${typeInfo?.deduct ? 'text-red-500' : 'text-gray-700'}`}>{typeInfo?.label || '假'}: {count} 天</span>;
+                                return <span key={typeId} className={`text-xs ${typeInfo?.deduct ? 'text-red-500' : 'text-gray-600'}`}>{typeInfo?.label || '假'}: {count} 天</span>;
                             })}
                         </div>
-                    }
+                    )}
                 </div>
               </div>
             </div>
