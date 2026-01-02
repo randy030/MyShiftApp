@@ -46,16 +46,26 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 🔴 您的 Firebase 設定
+// 🔴 修正重點：請將您的 Firebase 設定填寫在下方
+// (請從 Firebase Console -> 專案設定 -> 一般 -> 下方的「您的應用程式」區塊複製)
 // ==========================================
-const firebaseConfig = JSON.parse(__firebase_config);
+const firebaseConfig = {
+  apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
+  authDomain: "our-company-d1ef6.firebaseapp.com",
+  projectId: "our-company-d1ef6",
+  storageBucket: "our-company-d1ef6.firebasestorage.app",
+  messagingSenderId: "354573964228",
+  appId: "1:354573964228:web:2133ba855b7eedda9c0a91",
+  measurementId: "G-FDNMNT7QQ6"
+};
 // ==========================================
 
 // --- 初始化 Firebase ---
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'team-shift-pc-v1';
+// 修正：直接指定 ID，避免在 Vercel 找不到變數
+const appId = 'team-shift-pc-v1';
 
 // --- 假別設定 ---
 const DEFAULT_LEAVE_TYPES = [
@@ -125,15 +135,7 @@ export default function App() {
 
   useEffect(() => {
     if (!auth) { setLoading(false); return; }
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        // Use custom token if available
-        // Note: For this simplified preview, we assume standard Firebase Auth flow is preferred 
-        // but if integrated, custom token logic goes here.
-      }
-    };
-    initAuth();
-
+    
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
@@ -872,23 +874,23 @@ const SettingsView = ({ users, currentUser, leaveTypes, geminiKey, setGeminiKey,
              {editingId === u.uid ? (
                <div className="space-y-3 p-3 bg-gray-50 rounded">
                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                        <label className="text-xs text-gray-500">姓名</label>
-                        <input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="w-full border p-2 rounded"/>
-                    </div>
-                    {isCurrentUserAdmin && (
-                        <div>
-                            <label className="text-xs text-gray-500">在職狀態</label>
-                            <select 
-                                value={formData.isResigned ? 'true' : 'false'} 
-                                onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})}
-                                className="w-full border p-2 rounded bg-white"
-                            >
-                                <option value="false">在職中</option>
-                                <option value="true">已離職</option>
-                            </select>
-                        </div>
-                    )}
+                   <div>
+                       <label className="text-xs text-gray-500">姓名</label>
+                       <input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="w-full border p-2 rounded"/>
+                   </div>
+                   {isCurrentUserAdmin && (
+                       <div>
+                           <label className="text-xs text-gray-500">在職狀態</label>
+                           <select 
+                               value={formData.isResigned ? 'true' : 'false'} 
+                               onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})}
+                               className="w-full border p-2 rounded bg-white"
+                           >
+                               <option value="false">在職中</option>
+                               <option value="true">已離職</option>
+                           </select>
+                       </div>
+                   )}
                  </div>
 
                  {isCurrentUserAdmin && (
