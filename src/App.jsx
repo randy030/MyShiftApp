@@ -25,32 +25,60 @@ import {
   Users, 
   ChevronLeft, 
   ChevronRight, 
-  Save,
+  Save, 
   ShieldAlert,
-  Plus,
-  Trash2,
-  BookOpen,
-  LogOut,
-  CheckCircle2,
-  Lock,
-  Eye,
-  Clock,
-  Store,
-  Bell,
-  ArrowRightLeft,
-  FileBarChart,
-  UserX,
-  Upload,
-  ListFilter,
-  History,
-  StickyNote, // 備註圖示
-  DollarSign, // 薪資圖示
-  Gift,       // 福利圖示
-  Megaphone   // 公告圖示
+  Plus, 
+  Trash2, 
+  BookOpen, 
+  LogOut, 
+  CheckCircle2, 
+  Lock, 
+  Eye, 
+  Clock, 
+  Store, 
+  Bell, 
+  ArrowRightLeft, 
+  FileBarChart, 
+  UserX, 
+  Upload, 
+  ListFilter, 
+  History, 
+  StickyNote, 
+  DollarSign, 
+  Gift, 
+  Megaphone 
 } from 'lucide-react';
 
 // ==========================================
-// 🟢 您的 Firebase 設定 (已自動填入)
+// 🚀 系統版本與更新紀錄
+// ==========================================
+const CURRENT_VERSION = "v2.1"; 
+
+const UPDATE_LOGS = [
+  { 
+    version: "v2.1", 
+    date: "2026-02-15", 
+    content: "新增「系統更新時序」功能，顯示版本號與更新日期；優化公告欄位排版。" 
+  },
+  { 
+    version: "v2.0", 
+    date: "2026-02-15", 
+    content: "重大更新：新增薪資管理分頁、支援代班人功能、月曆格子加大、備註紅點標記、統計頁面支援跨年累計。" 
+  },
+  { 
+    version: "v1.5", 
+    date: "2026-02-01", 
+    content: "優化補休邏輯 (改為手動輸入時數)、修正統計顯示問題。" 
+  },
+  { 
+    version: "v1.0", 
+    date: "2026-01-01", 
+    content: "TeamShift 排班系統正式上線 (基礎排班、請假、統計功能)。" 
+  }
+];
+
+// ==========================================
+// 🟢 您的 Firebase 設定 (已填入)
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
@@ -67,7 +95,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'team-shift-pc-v2-optimized'; // 升級版本號，確保資料結構清晰
+const appId = 'team-shift-pc-v2-optimized'; 
 
 // --- 假別設定 ---
 const DEFAULT_LEAVE_TYPES = [
@@ -231,7 +259,10 @@ export default function App() {
       <nav className="bg-white shadow-sm border-b sticky top-0 z-20">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 font-bold text-xl text-indigo-600">
-            <Calendar className="w-6 h-6" /> <span className="hidden sm:inline">TeamShift</span>
+            <Calendar className="w-6 h-6" /> 
+            <span className="hidden sm:inline">TeamShift</span>
+            {/* 顯示版本號 */}
+            <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1">{CURRENT_VERSION}</span>
           </div>
           <div className="flex gap-1 sm:gap-2 items-center overflow-x-auto">
             <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
@@ -301,7 +332,7 @@ const NavBtn = ({ active, onClick, icon: Icon, label }) => (
   </button>
 );
 
-// --- 1. Calendar View (移除AI，改為公告，格子加大，備註標記) ---
+// --- 1. Calendar View (更新：顯示動態更新日誌) ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, currentUser, leaveTypes }) => {
   const [selectedDate, setSelectedDate] = useState(null);
   const year = currentDate.getFullYear();
@@ -325,7 +356,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
 
   return (
     <div className="space-y-4">
-      {/* 頂部導航與公告欄 */}
+      {/* 頂部導航與更新日誌 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-white p-4 rounded-xl border shadow-sm flex justify-between items-center md:col-span-1">
             <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft/></button>
@@ -333,13 +364,26 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
             <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight/></button>
           </div>
           
-          <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 md:col-span-2 flex flex-col justify-center">
-             <h4 className="font-bold text-indigo-700 flex items-center gap-2 mb-1 text-sm"><Megaphone size={16}/> 系統公告 & 更新紀錄</h4>
-             <ul className="text-xs text-indigo-800 list-disc list-inside space-y-0.5">
-                <li>新增「薪資管理」功能，管理員可記錄獎金與福利。</li>
-                <li>月曆格子已加大，支援備註紅點標記與代班人顯示。</li>
-                <li>統計頁面已優化：各類請假時數分開統計，餘額自動跨年累計。</li>
-             </ul>
+          <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 md:col-span-2 flex flex-col max-h-40 overflow-y-auto">
+             <div className="flex justify-between items-center mb-2 sticky top-0 bg-indigo-50 z-10">
+                <h4 className="font-bold text-indigo-700 flex items-center gap-2 text-sm">
+                    <Megaphone size={16}/> 系統更新日誌
+                </h4>
+                <span className="text-[10px] bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-full font-bold">
+                    Latest: {CURRENT_VERSION}
+                </span>
+             </div>
+             <div className="space-y-3">
+                {UPDATE_LOGS.map((log, idx) => (
+                    <div key={idx} className="text-xs border-l-2 border-indigo-300 pl-3">
+                        <div className="flex justify-between items-center mb-0.5">
+                            <span className="font-bold text-indigo-900 bg-white px-1.5 rounded border border-indigo-100">{log.version}</span>
+                            <span className="text-gray-500 font-mono text-[10px]">{log.date}</span>
+                        </div>
+                        <p className="text-indigo-800 leading-relaxed">{log.content}</p>
+                    </div>
+                ))}
+             </div>
           </div>
       </div>
       
