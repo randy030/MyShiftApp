@@ -52,23 +52,28 @@ import {
 // ==========================================
 // 🚀 系統版本與更新紀錄
 // ==========================================
-const CURRENT_VERSION = "v2.1 (Data Restored)"; 
+const CURRENT_VERSION = "v2.4 (Fix Payroll)"; 
 
 const UPDATE_LOGS = [
+  { 
+    version: "v2.4", 
+    date: "2026-02-16", 
+    content: "修正：修復薪資管理頁面白屏問題；優化通知系統。" 
+  },
+  { 
+    version: "v2.3", 
+    date: "2026-02-16", 
+    content: "新增：瀏覽器通知功能。當有新申請時，若網頁開啟中會跳出系統通知提醒。" 
+  },
   { 
     version: "v2.1", 
     date: "2026-02-15", 
     content: "資料路徑修正：已重新連結至原始資料庫 (v1)，找回所有舊資料。" 
-  },
-  { 
-    version: "v2.0", 
-    date: "2026-02-15", 
-    content: "重大更新：新增薪資管理分頁、支援代班人功能、月曆格子加大、備註紅點標記、統計頁面支援跨年累計。" 
   }
 ];
 
 // ==========================================
-// 🟢 您的 Firebase 設定 (已填入)
+// 🟢 您的 Firebase 設定 (已自動填入)
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
@@ -85,9 +90,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-
-// 🔴 關鍵修正：指回原本的資料位置 'team-shift-pc-v1'，讓舊資料復活！
-const appId = 'team-shift-pc-v1'; 
+const appId = 'team-shift-pc-v1'; // 確保連到舊資料庫
 
 // --- 假別設定 ---
 const DEFAULT_LEAVE_TYPES = [
@@ -141,10 +144,16 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // --- 通知功能邏輯 ---
+  useEffect(() => {
+      if ('Notification' in window && Notification.permission !== 'granted') {
+          Notification.requestPermission();
+      }
+  }, []);
+
   useEffect(() => {
     if (!user || !db) return;
     
-    // Users
     const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => {
       const d = {}; snap.forEach(doc => d[doc.id] = doc.data());
       setUsers(d);
@@ -157,20 +166,33 @@ export default function App() {
       }
     });
 
-    // Shifts
     const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => {
       const d = {}; snap.forEach(doc => d[doc.id] = doc.data());
       setShifts(d);
     });
 
-    // Requests
     const unsubRequests = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => {
       const list = [];
-      snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+      let newCount = 0;
+      snap.forEach(doc => {
+          const data = doc.data();
+          list.push({ id: doc.id, ...data });
+          const isRecent = data.timestamp && (new Date() - data.timestamp.toDate()) < 10000;
+          if (isRecent) newCount++;
+      });
       setRequests(list);
+
+      if (newCount > 0 && Notification.permission === 'granted' && document.hidden) {
+          new Notification("TeamShift 通知", {
+              body: `您有 ${newCount} 筆新的排班/請假申請待處理！`,
+              icon: "https://cdn-icons-png.flaticon.com/512/3652/3652191.png"
+          });
+      }
+      const myPending = list.filter(r => r.toUid === user?.uid || (r.type === 'ot_confirm' && r.uid === user?.uid));
+      if (myPending.length > 0) document.title = `(${myPending.length}) TeamShift 待辦`;
+      else document.title = "TeamShift 排班系統";
     });
 
-    // Settings
     const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), (snap) => {
       if (snap.exists()) setLeaveTypes(snap.data().types || DEFAULT_LEAVE_TYPES);
       else setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), { types: DEFAULT_LEAVE_TYPES });
@@ -253,7 +275,6 @@ export default function App() {
           <div className="flex items-center gap-2 font-bold text-xl text-indigo-600">
             <Calendar className="w-6 h-6" /> 
             <span className="hidden sm:inline">TeamShift</span>
-            {/* 顯示版本號 */}
             <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1">{CURRENT_VERSION}</span>
           </div>
           <div className="flex gap-1 sm:gap-2 items-center overflow-x-auto">
@@ -324,7 +345,6 @@ const NavBtn = ({ active, onClick, icon: Icon, label }) => (
   </button>
 );
 
-// --- 1. Calendar View (更新：顯示動態更新日誌) ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, currentUser, leaveTypes }) => {
   const [selectedDate, setSelectedDate] = useState(null);
   const year = currentDate.getFullYear();
@@ -339,16 +359,8 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
     return USER_COLORS[idx % USER_COLORS.length];
   };
 
-  const myLeaveCount = useMemo(() => {
-    let count = 0;
-    const prefix = `${year}-${String(month+1).padStart(2,'0')}`;
-    Object.keys(shifts).forEach(d => { if(d.startsWith(prefix)) shifts[d].assignments?.forEach(a => { if(a.uid===currentUser.uid && a.type==='LEAVE' && a.leaveType==='rostered') count++ }) });
-    return count;
-  }, [shifts, year, month, currentUser.uid]);
-
   return (
     <div className="space-y-4">
-      {/* 頂部導航與更新日誌 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-white p-4 rounded-xl border shadow-sm flex justify-between items-center md:col-span-1">
             <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft/></button>
@@ -398,7 +410,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
             >
               <div className="flex justify-between items-start">
                   <span className="text-xs font-bold text-gray-700 ml-1">{d}</span>
-                  {/* 備註小箭頭 (紅色三角形) */}
                   {hasNote && (
                       <div className="w-0 h-0 border-t-[8px] border-r-[8px] border-t-red-500 border-r-transparent" title="有備註"></div>
                   )}
@@ -416,7 +427,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
                       if (a.type !== 'LEAVE') return null;
                       const lLabel = leaveTypes.find(t=>t.id===a.leaveType)?.label || '休';
                       const pColor = getUserColor(a.uid);
-                      const subName = a.subUid ? allUsers[a.subUid]?.name : null; // 代班人名字
+                      const subName = a.subUid ? allUsers[a.subUid]?.name : null; 
                       
                       return (
                         <div key={ix} className={`text-[10px] p-1 rounded border ${pColor} bg-opacity-20 mb-1 flex flex-col`}>
@@ -424,7 +435,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
                              <span className="font-medium">{allUsers[a.uid]?.name}</span>
                              <span className={`text-[9px] bg-white bg-opacity-80 px-1 rounded border shadow-sm`}>{lLabel}</span>
                           </div>
-                          {/* 顯示代班資訊 */}
                           {subName && (
                               <div className="text-[9px] text-gray-500 mt-0.5 flex items-center gap-1">
                                   <ArrowRightLeft size={8}/> {subName}代
@@ -445,7 +455,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
   );
 };
 
-// --- Shift Modal (新增代班人選項) ---
 const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, userColors, sortedUserIds }) => {
   const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
   const [note, setNote] = useState(dayData.note || '');
@@ -489,7 +498,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
     }
   };
 
-  // 處理排班/請假 (包含代班邏輯)
   const toggle = (uid, type, lType=null, subUid=null) => {
     if(uid!==currentUser.uid && !isAdmin) return alert("無權限");
     if(isClosed) return alert("本日店休");
@@ -522,7 +530,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
 
     const newEntry = { uid, type, leaveType: lType };
     if (leaveHours > 0) newEntry.leaveHours = leaveHours;
-    if (subUid) newEntry.subUid = subUid; // 儲存代班人
+    if (subUid) newEntry.subUid = subUid; 
 
     if(idx>=0) next[idx] = newEntry;
     else next.push(newEntry);
@@ -592,8 +600,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
             const isMe = u.uid === currentUser.uid;
             const canEdit = isMe || isAdmin;
             const showSwapBtn = amIOnLeave && !isMe && assign?.type === 'WORK';
-            
-            // 下拉選單用的代班人列表 (排除自己)
             const availableSubs = users.filter(sub => sub.uid !== u.uid && !sub.isResigned);
 
             return (
@@ -671,7 +677,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   );
 };
 
-// --- 2. Salary View (統計優化：分類、年累計) ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const isAdmin = users.find(u => u.uid === currentUser.uid)?.isAdmin;
@@ -687,14 +692,12 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
         const assign = data.assignments?.find(a => a.uid === uid);
         if(!assign) return;
 
-        // 生涯累計 (跨年累計)
         if(assign.otHours && assign.otConfirmed) totalStats.otEarned += assign.otHours;
         if(assign.type === 'LEAVE' && assign.leaveType === 'comp') {
-            const used = (assign.leaveHours !== undefined && assign.leaveHours !== null) ? assign.leaveHours : 8; // 舊資料預設8
+            const used = (assign.leaveHours !== undefined && assign.leaveHours !== null) ? assign.leaveHours : 8; 
             totalStats.compHoursUsed += parseFloat(used);
         }
 
-        // 本月統計
         if(date.startsWith(targetMonth)) {
              if(assign.otHours && assign.otConfirmed) monthStats.ot += assign.otHours;
              if(assign.type === 'LEAVE') {
@@ -751,13 +754,11 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
   );
 };
 
-// --- 3. New Payroll View (薪資管理) ---
 const PayrollView = ({ users, currentDate }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
     const [loading, setLoading] = useState(false);
 
-    // 讀取當月薪資資料
     useEffect(() => {
         setLoading(true);
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => {
@@ -770,12 +771,12 @@ const PayrollView = ({ users, currentDate }) => {
 
     const updatePayroll = async (uid, field, value) => {
         const newData = { ...payrollData, [uid]: { ...(payrollData[uid] || {}), [field]: value } };
-        setPayrollData(newData); // 樂觀更新
-        // 儲存到 Firestore
+        setPayrollData(newData);
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true });
     };
 
-    const activeUsers = users.filter(u => !u.isResigned);
+    // 🟢 這裡的 Object.values(users) 修正了白畫面問題
+    const activeUsers = Object.values(users).filter(u => !u.isResigned);
 
     return (
         <div className="space-y-4 pb-20">
@@ -822,7 +823,6 @@ const PayrollView = ({ users, currentDate }) => {
     );
 };
 
-// --- Settings View (維持原樣) ---
 const SettingsView = ({ users, currentUser, leaveTypes }) => {
   const userList = Object.values(users);
   const currentUserInfo = users[currentUser.uid] || {};
