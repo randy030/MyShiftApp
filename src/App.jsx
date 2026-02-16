@@ -52,28 +52,18 @@ import {
 // ==========================================
 // 🚀 系統版本與更新紀錄
 // ==========================================
-const CURRENT_VERSION = "v2.1"; 
+const CURRENT_VERSION = "v2.1 (Data Restored)"; 
 
 const UPDATE_LOGS = [
   { 
     version: "v2.1", 
     date: "2026-02-15", 
-    content: "新增「系統更新時序」功能，顯示版本號與更新日期；優化公告欄位排版。" 
+    content: "資料路徑修正：已重新連結至原始資料庫 (v1)，找回所有舊資料。" 
   },
   { 
     version: "v2.0", 
     date: "2026-02-15", 
     content: "重大更新：新增薪資管理分頁、支援代班人功能、月曆格子加大、備註紅點標記、統計頁面支援跨年累計。" 
-  },
-  { 
-    version: "v1.5", 
-    date: "2026-02-01", 
-    content: "優化補休邏輯 (改為手動輸入時數)、修正統計顯示問題。" 
-  },
-  { 
-    version: "v1.0", 
-    date: "2026-01-01", 
-    content: "TeamShift 排班系統正式上線 (基礎排班、請假、統計功能)。" 
   }
 ];
 
@@ -95,7 +85,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'team-shift-pc-v2-optimized'; 
+
+// 🔴 關鍵修正：指回原本的資料位置 'team-shift-pc-v1'，讓舊資料復活！
+const appId = 'team-shift-pc-v1'; 
 
 // --- 假別設定 ---
 const DEFAULT_LEAVE_TYPES = [
