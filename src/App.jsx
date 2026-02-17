@@ -335,7 +335,8 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
   const [note, setNote] = useState(dayData.note || '');
   const [expanded, setExpanded] = useState(null);
-  const isAdmin = (users || []).find(u => u.uid === currentUser.uid)?.isAdmin;
+  // 👇 修改後 (加入您的 Email 當作超級管理員)
+const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.com";
   const isClosed = dayData.isClosed === true;
   const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : userColors[idx % userColors.length]; };
   
