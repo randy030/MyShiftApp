@@ -7,18 +7,20 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v3.2 (Stable Fix)"; 
+const CURRENT_VERSION = "v3.3 (UI & Bug Fix)"; 
 
 const UPDATE_LOGS = [
-  { version: "v3.2", date: "2026-02-17", content: "緊急修復：解決點擊日期白屏問題 (資料格式防呆處理)，並整合管理員權限。" },
-  { version: "v3.1", date: "2026-02-17", content: "設定完成：已填入專屬 Firebase 設定，並整合 Vercel API。" }
+  { version: "v3.3", date: "2026-02-17", content: "介面優化：放大月曆格子與字體，顯示代班人資訊；修復點擊店休白屏問題。" },
+  { version: "v3.2", date: "2026-02-17", content: "緊急修復：解決點擊日期白屏問題 (資料格式防呆處理)，並整合管理員權限。" }
 ];
 
-// Vercel 內部 API 路徑
 const LINE_API_URL = "/api/webhook"; 
 
+// 🔴 請確認這是您的管理員 Email (已更新)
+const ADMIN_EMAIL = "randy22444289@gmail.com";
+
 // ==========================================
-// 🟢 您的 Firebase 設定 (已填入)
+// 🟢 您的 Firebase 設定
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
@@ -129,7 +131,6 @@ export default function App() {
         if(targetLineId) sendLineNotification([targetLineId], `❌ 您的申請 (${req.date}) 已被拒絕。`);
         return;
     }
-    // ... (ot_confirm & swap logic same as previous) ...
     if (req.type === 'ot_confirm') {
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
@@ -174,11 +175,10 @@ export default function App() {
   if (!user) return <div className="flex h-screen items-center justify-center p-4 bg-gray-50"><div className="bg-white p-8 rounded-xl shadow-lg text-center"><h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 排班系統</h1><button onClick={handleLogin} className="bg-white border px-6 py-2 rounded shadow hover:bg-gray-50 flex items-center gap-2 mx-auto"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5"/> Google 登入</button></div></div>;
 
   const myNotifications = requests.filter(r => r.toUid === user.uid || (r.type === 'ot_confirm' && r.uid === user.uid));
-  // 🟢 確保資料格式正確
   const activeUsers = Object.values(users).filter(u => !u.isResigned);
   const currentUserInfo = users[user.uid] || {};
-  // 🟢 管理員無敵通行證 (強制賦予權限)
-  const isAdmin = currentUserInfo.isAdmin || user?.email === "teatop11312@gmail.com";
+  // 🟢 管理員權限鎖定 (修正)
+  const isAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-slate-800 pb-20 sm:pb-0 relative">
@@ -231,7 +231,6 @@ export default function App() {
       <main className="max-w-6xl mx-auto p-3 sm:p-4">
         {view === 'calendar' && (
             <>
-                {/* 🔴 關鍵修正：確保傳入的是 Array */}
                 <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} shifts={shifts} users={activeUsers} allUsers={users} currentUser={user} leaveTypes={leaveTypes} sendLineNotification={sendLineNotification} />
                 {isAdmin && (
                     <div className="fixed bottom-4 right-4 z-10">
@@ -252,7 +251,7 @@ const NavBtn = ({ active, onClick, icon: Icon, label }) => (
   <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
 );
 
-// --- 1. Calendar View ---
+// --- 1. Calendar View (UI 放大 & 顯示代班人) ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, currentUser, leaveTypes, sendLineNotification }) => {
   const [selectedDate, setSelectedDate] = useState(null);
   const year = currentDate.getFullYear();
@@ -265,43 +264,70 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
     <div className="space-y-4">
        <div className="bg-white p-4 rounded-xl border shadow-sm flex justify-between items-center md:col-span-1">
             <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft/></button>
-            <div className="font-bold text-lg">{year}年 {month+1}月</div>
+            <div className="font-bold text-xl">{year}年 {month+1}月</div>
             <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight/></button>
        </div>
        <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7">
-        {['日','一','二','三','四','五','六'].map(d=><div key={d} className="py-2 text-center text-sm text-gray-500 bg-gray-50 border-b">{d}</div>)}
-        {Array.from({length:firstDay}).map((_,i)=><div key={'e'+i} className="min-h-[120px] border-b border-r bg-gray-50/30"/>)}
+        {['日','一','二','三','四','五','六'].map(d=><div key={d} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{d}</div>)}
+        {Array.from({length:firstDay}).map((_,i)=><div key={'e'+i} className="min-h-[150px] border-b border-r bg-gray-50/30"/>)}
         {Array.from({length:days}).map((_,i)=>{
           const d=i+1, dateStr=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
           const data = shifts[dateStr] || {};
-          return (<div key={d} onClick={()=>setSelectedDate(dateStr)} className={`min-h-[120px] border-b border-r p-1 cursor-pointer transition-colors ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}><span className="text-xs font-bold text-gray-700 ml-1">{d}</span>
-            <div className="mt-1 space-y-1 overflow-y-auto max-h-[90px]">{data.assignments?.map((a,ix)=>{ if (a.type !== 'LEAVE') return null; const pColor = getUserColor(a.uid); return (<div key={ix} className={`text-[10px] p-1 rounded border ${pColor} bg-opacity-20 mb-1`}>{allUsers[a.uid]?.name} {leaveTypes.find(t=>t.id===a.leaveType)?.label}</div>)})}</div>
+          // 🔴 放大：高度 120px -> 150px
+          return (<div key={d} onClick={()=>setSelectedDate(dateStr)} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
+            <div className="flex justify-between"><span className="text-sm font-bold text-gray-700 ml-1">{d}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent"></div>}</div>
+            {data.isClosed ? <div className="h-full flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded flex items-center gap-1 font-bold shadow"><Store size={14} /> 店休</div></div> : 
+              <div className="mt-1 space-y-1 overflow-y-auto max-h-[120px]">
+                {data.assignments?.map((a,ix)=>{ 
+                    if (a.type !== 'LEAVE') return null; 
+                    const pColor = getUserColor(a.uid); 
+                    const subName = a.subUid ? allUsers[a.subUid]?.name : null;
+                    // 🔴 放大與顯示資訊：顯示代班人，字體變大 (text-xs)
+                    return (
+                        <div key={ix} className={`text-xs p-1.5 rounded border ${pColor} bg-opacity-20 mb-1`}>
+                            <div className="flex justify-between items-center font-bold">
+                                <span>{allUsers[a.uid]?.name}</span>
+                                <span className="bg-white/80 px-1 rounded text-[10px] border shadow-sm">{leaveTypes.find(t=>t.id===a.leaveType)?.label}</span>
+                            </div>
+                            {subName && <div className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1 bg-white/50 px-1 rounded"><ArrowRightLeft size={10}/> {subName} 代</div>}
+                        </div>
+                    )
+                })}
+              </div>}
           </div>)
         })}
        </div>
-       {/* 🔴 關鍵：這裡傳入的 users 已經是 array (來自 App 的 activeUsers) */}
        {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} users={users} currentUser={currentUser} leaveTypes={leaveTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} />}
     </div>
   );
 };
 
 const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, userColors, sortedUserIds, sendLineNotification }) => {
+  // 🔴 白屏修復：確保 assignments 永遠是陣列
   const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
   const [note, setNote] = useState(dayData.note || '');
   const [expanded, setExpanded] = useState(null);
   
-  // 🔴 終極防呆：強制將 users 轉為 Array，避免白屏
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
-
-  // 🔴 管理員判定：包含無敵通行證邏輯
-  const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === "randy22444289@gmail.com";
+  const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === ADMIN_EMAIL;
   const isClosed = dayData.isClosed === true;
-  const amIOnLeave = dayData.assignments?.some(a => a.uid === currentUser.uid && a.type === 'LEAVE');
-
   const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : userColors[idx % userColors.length]; };
   
   const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); if(newData.assignments) setExpanded(null); };
-  const toggleClosed = async () => { if (!isAdmin) return; const newStatus = !isClosed; if (newStatus && dayData.assignments?.length > 0) { if (!confirm("設定為店休將會清除當日所有排班紀錄，確定嗎？")) return; await update({ isClosed: true, assignments: [] }); } else { await update({ isClosed: newStatus }); } onClose(); };
+  
+  // 🔴 店休按鈕修復：確保管理員一定能看到切換按鈕
+  const toggleClosed = async () => { 
+      if (!isAdmin) return; 
+      const newStatus = !isClosed; 
+      if (newStatus && dayData.assignments?.length > 0) { 
+          if (!confirm("設定為店休將會清除當日所有排班紀錄，確定嗎？")) return; 
+          await update({ isClosed: true, assignments: [] }); 
+      } else { 
+          await update({ isClosed: newStatus }); 
+      } 
+      onClose(); 
+  };
+
   const cancelLeave = (uid) => { if (uid !== currentUser.uid && !isAdmin) return alert("無權限"); let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); if(idx>=0) { next.splice(idx, 1); update({ assignments: next }); } };
   
   const toggle = (uid, type, lType=null, subUid=null) => {
@@ -337,7 +363,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
     update({ assignments: next });
   };
 
-  // 🔴 修正過濾邏輯
   const availableSubs = safeUsers.filter(sub => sub.uid !== expanded && !sub.isResigned);
 
   return (
@@ -345,9 +370,16 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
       <div className="bg-white w-full max-w-md rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         <div className={`p-4 border-b flex justify-between font-bold items-center ${isClosed ? 'bg-gray-800 text-white' : 'bg-gray-50'}`}><span className="flex items-center gap-2">{dateStr} {isClosed && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded">本日店休</span>}</span><button onClick={onClose}>✕</button></div>
         <div className="p-4 overflow-y-auto space-y-3 flex-1 relative">
-          {isClosed && <div className="absolute inset-0 bg-white/90 z-10 flex flex-col items-center justify-center text-center p-4"><Store className="w-16 h-16 text-gray-400 mb-2"/><h3 className="text-xl font-bold text-gray-600">本日店休</h3>{isAdmin && <button onClick={toggleClosed} className="mt-2 bg-gray-800 text-white px-4 py-2 rounded shadow">🔓 恢復營業</button>}</div>}
+          {/* 🔴 店休覆蓋層：確保管理員有按鈕可以解除 */}
+          {isClosed && (
+              <div className="absolute inset-0 bg-white/95 z-10 flex flex-col items-center justify-center text-center p-4">
+                  <Store className="w-16 h-16 text-gray-400 mb-2"/>
+                  <h3 className="text-xl font-bold text-gray-600 mb-4">本日店休</h3>
+                  {isAdmin && <button onClick={toggleClosed} className="bg-gray-800 text-white px-6 py-2 rounded shadow hover:bg-gray-700 transition-colors">🔓 恢復營業 (解除店休)</button>}
+              </div>
+          )}
           {safeUsers.map(u => {
-            const assign = dayData.assignments?.find(a=>a.uid===u.uid); const isRostered = assign?.type === 'LEAVE' && assign?.leaveType === 'rostered'; const userColor = getUserColor(u.uid); const isMe = u.uid === currentUser.uid; const canEdit = isMe || isAdmin; const showSwapBtn = amIOnLeave && !isMe && assign?.type === 'WORK';
+            const assign = dayData.assignments?.find(a=>a.uid===u.uid); const isRostered = assign?.type === 'LEAVE' && assign?.leaveType === 'rostered'; const userColor = getUserColor(u.uid); const isMe = u.uid === currentUser.uid; const canEdit = isMe || isAdmin; const showSwapBtn = (dayData.assignments?.some(a=>a.uid===currentUser.uid && a.type==='LEAVE')) && !isMe && assign?.type === 'WORK';
             return (
               <div key={u.uid} className={`border rounded-lg p-3 ${!canEdit ? 'bg-gray-50 opacity-100' : 'bg-white'}`}>
                 <div className="flex justify-between items-center mb-2">
@@ -360,7 +392,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
                     <button disabled={!canEdit} onClick={()=>setExpanded(expanded===u.uid?null:u.uid)} className={`px-3 py-2 text-xs rounded border ${!canEdit ? 'bg-gray-100' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{assign?.type==='LEAVE' && !isRostered ? '變更' : '請假 ▼'}</button>
                   </div>
                 </div>
-                {assign?.type === 'LEAVE' && (<div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}><div><span className="font-medium text-gray-900">狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'} {(assign.leaveType==='comp' && assign.leaveHours) && ` (${assign.leaveHours}h)`}</span>{assign.subUid && <span className="ml-2 text-gray-600">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name}代班</span>}</div>{canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}</div>)}
+                {assign?.type === 'LEAVE' && (<div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}><div><span className="font-medium text-gray-900">狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'} {(assign.leaveType==='comp' && assign.leaveHours) && ` (${assign.leaveHours}h)`}</span>{assign.subUid && <span className="ml-2 text-gray-600 font-bold">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name} 代班</span>}</div>{canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}</div>)}
                 {expanded===u.uid && (
                   <div className="bg-gray-50 p-2 rounded animate-fade-in border-t space-y-2">
                     <div className="text-[10px] text-gray-400">請選擇假別 (可選代班人):</div>
@@ -372,6 +404,8 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
             )
           })}
           <div className="border-t pt-3 mt-2"><div className="flex gap-2 items-center mb-1"><StickyNote className="w-4 h-4 text-gray-500" /><span className="text-xs font-bold text-gray-600">當日備註 (顯示於右上角紅點)</span></div><div className="flex gap-2"><input value={note} onChange={e=>setNote(e.target.value)} className="border flex-1 rounded px-2 py-1 text-sm" placeholder="例如: 衛生局檢查..."/><button onClick={()=>setDoc(doc(db,'artifacts',appId,'public', 'data', 'shifts',dateStr),{...dayData,note},{merge:true})} className="bg-indigo-600 text-white px-3 rounded"><Save size={16}/></button></div></div>
+          {/* 🔴 底部也加一個店休按鈕，確保一定按得到 */}
+          {isAdmin && !isClosed && <div className="pt-2 border-t mt-2"><button onClick={toggleClosed} className="w-full bg-gray-100 text-gray-600 text-xs py-2 rounded hover:bg-gray-200 flex items-center justify-center gap-1"><Store className="w-3.5 h-3.5" /> 設為店休 (清空當日班表)</button></div>}
         </div>
       </div>
     </div>
@@ -381,9 +415,8 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
 // --- 2. Salary View ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
-  // 🟢 這裡也做防呆
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
-  const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === "teatop11312@gmail.com";
+  const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === ADMIN_EMAIL;
   const visibleUsers = useMemo(() => isAdmin ? safeUsers : safeUsers.filter(u => u.uid === currentUser.uid), [users, currentUser, isAdmin]);
 
   const calc = (uid) => {
@@ -426,7 +459,6 @@ const PayrollView = ({ users, currentDate }) => {
     const [payrollData, setPayrollData] = useState({});
     useEffect(() => { const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => { if (docSnap.exists()) setPayrollData(docSnap.data().records || {}); else setPayrollData({}); }); return () => unsub(); }, [targetMonth]);
     const updatePayroll = async (uid, field, value) => { const newData = { ...payrollData, [uid]: { ...(payrollData[uid] || {}), [field]: value } }; setPayrollData(newData); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true }); };
-    // 🟢 這裡已經是 Array，不用改
     const activeUsers = Object.values(users).filter(u => !u.isResigned);
 
     return (
@@ -443,7 +475,7 @@ const PayrollView = ({ users, currentDate }) => {
 const SettingsView = ({ users, currentUser, leaveTypes, appId }) => {
   const userList = Object.values(users);
   const currentUserInfo = users[currentUser.uid] || {};
-  const isCurrentUserAdmin = currentUserInfo.isAdmin || currentUser?.email === "teatop11312@gmail.com";
+  const isCurrentUserAdmin = currentUserInfo.isAdmin || currentUser?.email === ADMIN_EMAIL;
   const [newLeave, setNewLeave] = useState({ label: '', note: '', color: 'bg-gray-100 text-gray-700' });
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
