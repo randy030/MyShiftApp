@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v3.6 (Full Restore)"; 
+const CURRENT_VERSION = "v3.7 (Logic Fix)"; 
 
 const UPDATE_LOGS = [
-  { version: "v3.6", date: "2026-02-17", content: "完整修復：恢復所有遺失的子選單功能 (薪資、設定)，保持通知中心獨立頁面。" },
-  { version: "v3.5", date: "2026-02-17", content: "介面重構：將通知中心改為獨立頁面，解決手機版點擊問題。" }
+  { version: "v3.7", date: "2026-02-17", content: "核心修復：修正時數確認後未寫入統計頁面的問題 (現在確認時會同步寫入時數與事由)。" },
+  { version: "v3.6", date: "2026-02-17", content: "完整修復：恢復所有遺失的子選單功能。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -142,42 +142,87 @@ export default function App() {
   
   const handleLogout = () => { if(window.confirm("確定要登出系統嗎？")) { signOut(auth); } };
 
+  // 🔴 核心修復：處理請求邏輯
   const handleRequest = async (req, action) => {
     const targetUser = users[req.uid || req.fromUid]; 
     const targetLineId = targetUser?.lineUserId;
 
     if (action === 'reject') {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-        if(targetLineId) sendLineNotification([targetLineId], `❌ 您的申請 (${req.date}) 已被拒絕。`);
+        if(targetLineId) sendLineNotification([targetLineId], `❌ 您的申請 (${req.date}) 已被駁回。`);
         return;
     }
+
     if (req.type === 'ot_confirm') {
+        // 時數確認
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
-        if (shiftSnap.exists()) {
-            const data = shiftSnap.data();
-            const newAssigns = data.assignments.map(a => { if (a.uid === req.uid) return { ...a, otConfirmed: true }; return a; });
-            await updateDoc(shiftRef, { assignments: newAssigns });
-            if(targetLineId) sendLineNotification([targetLineId], `✅ 您的加班時數 (${req.date} / ${req.hours}hr) 已確認生效！`);
+        
+        // 🔴 關鍵邏輯：無論班表存不存在，都要把時數寫進去
+        const data = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+        let assignments = data.assignments || [];
+        let userFound = false;
+
+        // 更新現有紀錄
+        const newAssigns = assignments.map(a => {
+            if (a.uid === req.uid) {
+                userFound = true;
+                // 📝 這裡就是修復點：強制寫入 req.hours 和 req.reason
+                return { ...a, otHours: req.hours, otReason: req.reason, otConfirmed: true }; 
+            }
+            return a;
+        });
+
+        // 如果該員工當天沒有班表，新增一筆 WORK 紀錄來存放時數
+        if (!userFound) {
+            newAssigns.push({
+                uid: req.uid,
+                type: 'WORK', // 預設為工作日，才能掛載 OT
+                otHours: req.hours,
+                otReason: req.reason,
+                otConfirmed: true
+            });
         }
+
+        // 寫入資料庫
+        await setDoc(shiftRef, { ...data, assignments: newAssigns }, { merge: true });
+        
+        // 刪除請求並發通知
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-        alert("時數已確認！");
-    } else if (req.type === 'swap') {
+        if(targetLineId) sendLineNotification([targetLineId], `✅ 您的時數 (${req.date} / ${req.hours}hr) 已確認並生效！`);
+        
+        alert("時數已確認並寫入統計！");
+    } 
+    else if (req.type === 'swap') {
+        // 換假邏輯
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
         if (shiftSnap.exists()) {
             const data = shiftSnap.data();
             const assigns = [...(data.assignments || [])];
-            const idxA = assigns.findIndex(a => a.uid === req.fromUid); const idxB = assigns.findIndex(a => a.uid === req.toUid);
+            const idxA = assigns.findIndex(a => a.uid === req.fromUid);
+            const idxB = assigns.findIndex(a => a.uid === req.toUid);
+
             if (idxA >= 0 && idxB >= 0) {
-                const temp = { ...assigns[idxA], uid: req.toUid }; assigns[idxA] = { ...assigns[idxB], uid: req.fromUid }; assigns[idxB] = temp;
-                await updateDoc(shiftRef, { assignments: assigns }); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-                const fromUserLine = users[req.fromUid]?.lineUserId; const toUserLine = users[req.toUid]?.lineUserId;
+                const temp = { ...assigns[idxA], uid: req.toUid };
+                assigns[idxA] = { ...assigns[idxB], uid: req.fromUid };
+                assigns[idxB] = temp;
+                await updateDoc(shiftRef, { assignments: assigns });
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+                
+                const fromUserLine = users[req.fromUid]?.lineUserId;
+                const toUserLine = users[req.toUid]?.lineUserId;
                 const msg = `🔄 換假成功！\n日期: ${req.date}\n申請人: ${users[req.fromUid]?.name}\n對象: ${users[req.toUid]?.name}`;
-                const targets = []; if(fromUserLine) targets.push(fromUserLine); if(toUserLine) targets.push(toUserLine);
+                const targets = [];
+                if(fromUserLine) targets.push(fromUserLine);
+                if(toUserLine) targets.push(toUserLine);
                 if(targets.length > 0) sendLineNotification(targets, msg);
+
                 alert("換假成功！");
-            } else { alert("班表狀態已變更，無法換假"); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id)); }
+            } else {
+                alert("班表狀態已變更，無法換假");
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+            }
         }
     }
   };
@@ -440,7 +485,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   );
 };
 
-// --- 2. Salary View ---
+// --- 2. Salary View (完整版) ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
@@ -481,7 +526,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
   );
 };
 
-// --- 3. Payroll View ---
+// --- 3. Payroll View (完整版) ---
 const PayrollView = ({ users, currentDate }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
@@ -499,7 +544,7 @@ const PayrollView = ({ users, currentDate }) => {
     );
 };
 
-// --- Settings View ---
+// --- Settings View (完整版) ---
 const SettingsView = ({ users, currentUser, leaveTypes, appId }) => {
   const userList = Object.values(users);
   const currentUserInfo = users[currentUser.uid] || {};
