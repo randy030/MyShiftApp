@@ -2,25 +2,23 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
-import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Trash2, BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, Megaphone, Send, Smartphone } from 'lucide-react';
+import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Trash2, BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, Megaphone, Send, Smartphone, X } from 'lucide-react';
 
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v3.3 (UI & Bug Fix)"; 
+const CURRENT_VERSION = "v3.4 (Pro UI)"; 
 
 const UPDATE_LOGS = [
-  { version: "v3.3", date: "2026-02-17", content: "介面優化：放大月曆格子與字體，顯示代班人資訊；修復點擊店休白屏問題。" },
-  { version: "v3.2", date: "2026-02-17", content: "緊急修復：解決點擊日期白屏問題 (資料格式防呆處理)，並整合管理員權限。" }
+  { version: "v3.4", date: "2026-02-17", content: "介面大升級：新增專業加班管理視窗 (取代舊版彈窗)、登出防呆確認、修復通知鈴鐺無法點擊問題。" },
+  { version: "v3.3", date: "2026-02-17", content: "介面優化：放大月曆格子與字體，顯示代班人資訊。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
-
-// 🔴 請確認這是您的管理員 Email (已更新)
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
 // ==========================================
-// 🟢 您的 Firebase 設定
+// 🟢 Firebase 設定
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
@@ -66,6 +64,74 @@ const getMonthData = (year, month) => {
   const firstDay = new Date(year, month, 1).getDay();
   const days = daysInMonth(year, month);
   return { firstDay, days };
+};
+
+// --- 專業版加班管理 Modal ---
+const OTModal = ({ isOpen, onClose, onConfirm, targetUser, dateStr }) => {
+    const [hours, setHours] = useState('');
+    const [reason, setReason] = useState('');
+    
+    // 每次打開時清空
+    useEffect(() => {
+        if(isOpen) { setHours(''); setReason(''); }
+    }, [isOpen]);
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
+                <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
+                    <h3 className="font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> 時數管理</h3>
+                    <button onClick={onClose} className="hover:bg-indigo-700 p-1 rounded"><X size={20}/></button>
+                </div>
+                <div className="p-6 space-y-4">
+                    <div className="text-sm text-gray-500 mb-2">
+                        正在編輯 <span className="font-bold text-gray-800">{targetUser?.name}</span> 於 <span className="font-bold text-gray-800">{dateStr}</span> 的時數
+                    </div>
+                    
+                    <div>
+                        <label className="block text-xs font-bold text-gray-700 mb-1">增減時數 (小時)</label>
+                        <div className="flex gap-2">
+                            <input 
+                                type="number" 
+                                autoFocus
+                                value={hours} 
+                                onChange={e=>setHours(e.target.value)} 
+                                placeholder="例如: 4 或 -2" 
+                                className="w-full border-2 border-indigo-100 rounded-lg px-3 py-2 focus:border-indigo-500 focus:outline-none text-lg font-bold text-gray-700"
+                            />
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-1">💡 輸入正數為加班(增加)，負數為補休/扣除。</p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-700 mb-1">事由 / 備註</label>
+                        <input 
+                            type="text" 
+                            value={reason} 
+                            onChange={e=>setReason(e.target.value)} 
+                            placeholder="例如: 支援活動、補休抵扣..." 
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                        />
+                    </div>
+
+                    <div className="flex gap-3 pt-2">
+                        <button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold text-sm hover:bg-gray-200">取消</button>
+                        <button 
+                            onClick={() => {
+                                if(!hours) return alert("請輸入時數");
+                                onConfirm(parseFloat(hours), reason);
+                            }} 
+                            className="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-bold text-sm hover:bg-indigo-700 shadow-lg"
+                        >
+                            確認送出
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 // --- 主程式 ---
@@ -121,6 +187,13 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async () => { try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (e) { alert("登入失敗: " + e.message); } };
+  
+  // 🟢 登出防呆
+  const handleLogout = () => {
+      if(window.confirm("確定要登出系統嗎？")) {
+          signOut(auth);
+      }
+  };
 
   const handleRequest = async (req, action) => {
     const targetUser = users[req.uid || req.fromUid]; 
@@ -177,7 +250,6 @@ export default function App() {
   const myNotifications = requests.filter(r => r.toUid === user.uid || (r.type === 'ot_confirm' && r.uid === user.uid));
   const activeUsers = Object.values(users).filter(u => !u.isResigned);
   const currentUserInfo = users[user.uid] || {};
-  // 🟢 管理員權限鎖定 (修正)
   const isAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
 
   return (
@@ -193,14 +265,19 @@ export default function App() {
             <NavBtn active={view==='salary'} onClick={()=>setView('salary')} icon={FileBarChart} label="統計" />
             {isAdmin && <NavBtn active={view==='payroll'} onClick={()=>setView('payroll')} icon={DollarSign} label="薪資" />}
             <NavBtn active={view==='settings'} onClick={()=>setView('settings')} icon={Users} label="設定" />
-            <div className="relative">
+            
+            {/* 🔔 小鈴鐺區域 (修復 z-index 與點擊問題) */}
+            <div className="relative z-50">
                 <button onClick={() => setShowNotifications(!showNotifications)} className="p-2 text-gray-500 hover:text-indigo-600 relative">
                     <Bell className="w-5 h-5" />
                     {myNotifications.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white"></span>}
                 </button>
                 {showNotifications && (
-                    <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border z-50 overflow-hidden animate-fade-in">
-                        <div className="p-3 border-b bg-gray-50 font-bold text-sm">通知中心</div>
+                    <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden animate-fade-in">
+                        <div className="p-3 border-b bg-gray-50 font-bold text-sm flex justify-between items-center">
+                            <span>通知中心</span>
+                            <button onClick={()=>setShowNotifications(false)}><X size={14}/></button>
+                        </div>
                         <div className="max-h-64 overflow-y-auto">
                             {myNotifications.length === 0 ? <div className="p-4 text-center text-gray-400 text-xs">沒有新通知</div> : myNotifications.map(req => (
                                 <div key={req.id} className="p-3 border-b last:border-0 hover:bg-gray-50">
@@ -208,13 +285,19 @@ export default function App() {
                                         <>
                                             <div className="text-sm font-bold text-gray-800 mb-1">加班時數確認</div>
                                             <p className="text-xs text-gray-600 mb-2">{req.date}: {req.hours}hr ({req.reason})</p>
-                                            <div className="flex gap-2"><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">確認</button><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">駁回</button></div>
+                                            <div className="flex gap-2">
+                                                <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">確認</button>
+                                                <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">駁回</button>
+                                            </div>
                                         </>
                                     ) : (
                                         <>
                                             <div className="text-sm font-bold text-gray-800 mb-1">換假申請</div>
                                             <p className="text-xs text-gray-600 mb-2">{users[req.fromUid]?.name} 想跟您交換 {req.date} 的班表</p>
-                                            <div className="flex gap-2"><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">同意</button><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">拒絕</button></div>
+                                            <div className="flex gap-2">
+                                                <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">同意</button>
+                                                <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">拒絕</button>
+                                            </div>
                                         </>
                                     )}
                                 </div>
@@ -223,7 +306,9 @@ export default function App() {
                     </div>
                 )}
             </div>
-            <button onClick={()=>signOut(auth)} className="p-2 text-gray-400 hover:text-red-500"><LogOut className="w-5 h-5"/></button>
+            
+            {/* 🚪 登出按鈕 (防呆確認) */}
+            <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-500" title="登出"><LogOut className="w-5 h-5"/></button>
           </div>
         </div>
       </nav>
@@ -251,7 +336,7 @@ const NavBtn = ({ active, onClick, icon: Icon, label }) => (
   <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
 );
 
-// --- 1. Calendar View (UI 放大 & 顯示代班人) ---
+// --- Calendar View ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, currentUser, leaveTypes, sendLineNotification }) => {
   const [selectedDate, setSelectedDate] = useState(null);
   const year = currentDate.getFullYear();
@@ -273,7 +358,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
         {Array.from({length:days}).map((_,i)=>{
           const d=i+1, dateStr=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
           const data = shifts[dateStr] || {};
-          // 🔴 放大：高度 120px -> 150px
           return (<div key={d} onClick={()=>setSelectedDate(dateStr)} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
             <div className="flex justify-between"><span className="text-sm font-bold text-gray-700 ml-1">{d}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent"></div>}</div>
             {data.isClosed ? <div className="h-full flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded flex items-center gap-1 font-bold shadow"><Store size={14} /> 店休</div></div> : 
@@ -282,7 +366,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
                     if (a.type !== 'LEAVE') return null; 
                     const pColor = getUserColor(a.uid); 
                     const subName = a.subUid ? allUsers[a.subUid]?.name : null;
-                    // 🔴 放大與顯示資訊：顯示代班人，字體變大 (text-xs)
                     return (
                         <div key={ix} className={`text-xs p-1.5 rounded border ${pColor} bg-opacity-20 mb-1`}>
                             <div className="flex justify-between items-center font-bold">
@@ -303,11 +386,13 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
 };
 
 const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, userColors, sortedUserIds, sendLineNotification }) => {
-  // 🔴 白屏修復：確保 assignments 永遠是陣列
   const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
   const [note, setNote] = useState(dayData.note || '');
   const [expanded, setExpanded] = useState(null);
   
+  // 🟢 控制專業版 OT Modal 的開關與資料
+  const [otModalData, setOtModalData] = useState(null); // 存放當前要編輯 OT 的 user 物件
+
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
   const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === ADMIN_EMAIL;
   const isClosed = dayData.isClosed === true;
@@ -315,7 +400,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   
   const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); if(newData.assignments) setExpanded(null); };
   
-  // 🔴 店休按鈕修復：確保管理員一定能看到切換按鈕
   const toggleClosed = async () => { 
       if (!isAdmin) return; 
       const newStatus = !isClosed; 
@@ -348,29 +432,38 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
       alert("換假申請已送出！");
   };
 
-  const updateOT = async (uid) => {
-    if(uid !== currentUser.uid && !isAdmin) return alert("無權限"); if(isClosed) return alert("本日店休");
-    const hours = prompt("請輸入加班/補休時數:"); if(hours === null) return; const numHours = parseFloat(hours); if(isNaN(numHours)) return alert("請輸入有效數字");
-    const remark = prompt("請輸入原因:", ""); if(remark === null) return;
-    if (isAdmin && uid !== currentUser.uid) {
+  // 🟢 處理新版 OT Modal 的送出
+  const handleOTSave = async (numHours, remark) => {
+      const uid = otModalData.uid;
+      if (isAdmin && uid !== currentUser.uid) {
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'ot_confirm', uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
         const targetUser = safeUsers.find(u => u.uid === uid);
         if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `🕒 管理員已登錄您的加班時數\n日期: ${dateStr}\n時數: ${numHours}hr\n請至系統確認。`);
-        alert("已送出加班確認請求給員工"); return;
-    }
-    let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: isAdmin };
-    if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
-    update({ assignments: next });
+        alert("已送出加班確認請求給員工"); 
+      } else {
+        let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); 
+        const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: isAdmin };
+        if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
+        update({ assignments: next });
+      }
+      setOtModalData(null); // 關閉 Modal
   };
+
+  // 🟢 檢查權限並打開 Modal
+  const openOTModal = (user) => {
+      if(user.uid !== currentUser.uid && !isAdmin) return alert("無權限"); 
+      if(isClosed) return alert("本日店休");
+      setOtModalData(user);
+  }
 
   const availableSubs = safeUsers.filter(sub => sub.uid !== expanded && !sub.isResigned);
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div className="bg-white w-full max-w-md rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         <div className={`p-4 border-b flex justify-between font-bold items-center ${isClosed ? 'bg-gray-800 text-white' : 'bg-gray-50'}`}><span className="flex items-center gap-2">{dateStr} {isClosed && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded">本日店休</span>}</span><button onClick={onClose}>✕</button></div>
         <div className="p-4 overflow-y-auto space-y-3 flex-1 relative">
-          {/* 🔴 店休覆蓋層：確保管理員有按鈕可以解除 */}
           {isClosed && (
               <div className="absolute inset-0 bg-white/95 z-10 flex flex-col items-center justify-center text-center p-4">
                   <Store className="w-16 h-16 text-gray-400 mb-2"/>
@@ -386,7 +479,10 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
                   <div className="flex items-center gap-2"><div className={`w-3 h-3 rounded-full border ${userColor.split(' ')[0]} border-gray-400`}></div><span className="font-bold">{u.name}</span>{assign?.otHours > 0 && <span className={`text-xs px-1.5 py-0.5 rounded border font-bold flex items-center gap-1 ${assign.otConfirmed ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>OT: {assign.otHours}hr ({assign.otReason})</span>}</div>
                   <div className="flex gap-2">
                     {showSwapBtn && <button onClick={() => requestSwap(currentUser.uid, u.uid)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-[10px] flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft className="w-3 h-3"/> 換假</button>}
-                    <button onClick={() => updateOT(u.uid)} disabled={!canEdit} className={`px-3 py-1.5 text-xs rounded border ${!canEdit ? 'bg-gray-100' : (assign?.otHours > 0 ? 'bg-orange-100 text-orange-700 font-bold' : 'bg-white text-gray-500')}`}><Clock className="w-3.5 h-3.5" /> {assign?.otHours > 0 ? `${assign.otHours}h` : '時數'}</button>
+                    
+                    {/* 🟢 這裡改成呼叫 openOTModal */}
+                    <button onClick={() => openOTModal(u)} disabled={!canEdit} className={`px-3 py-1.5 text-xs rounded border ${!canEdit ? 'bg-gray-100' : (assign?.otHours > 0 ? 'bg-orange-100 text-orange-700 font-bold' : 'bg-white text-gray-500')}`}><Clock className="w-3.5 h-3.5" /> {assign?.otHours > 0 ? `${assign.otHours}h` : '時數'}</button>
+                    
                     {isAdmin && <button onClick={() => toggle(u.uid, 'LEAVE', 'official')} className="px-3 py-1.5 text-xs rounded border bg-gray-100 text-gray-600 hover:bg-gray-200">排休</button>}
                     <button disabled={!canEdit} onClick={() => toggle(u.uid, 'LEAVE', 'rostered')} className={`px-4 py-2 text-xs rounded font-bold ${!canEdit ? 'bg-gray-200 text-gray-400' : (isRostered ? 'bg-red-600 text-white ring-2 ring-red-200' : 'bg-red-500 text-white hover:bg-red-600')}`}>{isRostered ? '已排休' : '自畫假'}</button>
                     <button disabled={!canEdit} onClick={()=>setExpanded(expanded===u.uid?null:u.uid)} className={`px-3 py-2 text-xs rounded border ${!canEdit ? 'bg-gray-100' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{assign?.type==='LEAVE' && !isRostered ? '變更' : '請假 ▼'}</button>
@@ -404,11 +500,20 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
             )
           })}
           <div className="border-t pt-3 mt-2"><div className="flex gap-2 items-center mb-1"><StickyNote className="w-4 h-4 text-gray-500" /><span className="text-xs font-bold text-gray-600">當日備註 (顯示於右上角紅點)</span></div><div className="flex gap-2"><input value={note} onChange={e=>setNote(e.target.value)} className="border flex-1 rounded px-2 py-1 text-sm" placeholder="例如: 衛生局檢查..."/><button onClick={()=>setDoc(doc(db,'artifacts',appId,'public', 'data', 'shifts',dateStr),{...dayData,note},{merge:true})} className="bg-indigo-600 text-white px-3 rounded"><Save size={16}/></button></div></div>
-          {/* 🔴 底部也加一個店休按鈕，確保一定按得到 */}
           {isAdmin && !isClosed && <div className="pt-2 border-t mt-2"><button onClick={toggleClosed} className="w-full bg-gray-100 text-gray-600 text-xs py-2 rounded hover:bg-gray-200 flex items-center justify-center gap-1"><Store className="w-3.5 h-3.5" /> 設為店休 (清空當日班表)</button></div>}
         </div>
       </div>
     </div>
+    
+    {/* 🟢 渲染專業版 Modal */}
+    <OTModal 
+        isOpen={!!otModalData} 
+        onClose={()=>setOtModalData(null)} 
+        onConfirm={handleOTSave} 
+        targetUser={otModalData} 
+        dateStr={dateStr} 
+    />
+    </>
   );
 };
 
@@ -471,7 +576,7 @@ const PayrollView = ({ users, currentDate }) => {
     );
 };
 
-// --- Settings View (含 LINE 綁定) ---
+// --- Settings View ---
 const SettingsView = ({ users, currentUser, leaveTypes, appId }) => {
   const userList = Object.values(users);
   const currentUserInfo = users[currentUser.uid] || {};
