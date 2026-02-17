@@ -7,14 +7,14 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v3.1 (Ready)"; 
+const CURRENT_VERSION = "v3.2 (Stable Fix)"; 
 
 const UPDATE_LOGS = [
-  { version: "v3.1", date: "2026-02-17", content: "設定完成：已填入專屬 Firebase 設定，並整合 Vercel API。" },
-  { version: "v3.0", date: "2026-02-17", content: "架構升級：改用 Vercel Serverless Function 發送 LINE 通知。" }
+  { version: "v3.2", date: "2026-02-17", content: "緊急修復：解決點擊日期白屏問題 (資料格式防呆處理)，並整合管理員權限。" },
+  { version: "v3.1", date: "2026-02-17", content: "設定完成：已填入專屬 Firebase 設定，並整合 Vercel API。" }
 ];
 
-// 🔴 關鍵修改：使用 Vercel 內部的 API 路徑
+// Vercel 內部 API 路徑
 const LINE_API_URL = "/api/webhook"; 
 
 // ==========================================
@@ -35,27 +35,18 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'team-shift-pc-v1'; 
 
-// --- 輔助函式：發送 LINE 通知 (Vercel 版) ---
+// --- 輔助函式 ---
 const sendLineNotification = async (targetLineIds, messageText) => {
-    // 檢查有沒有綁定 ID，沒有就不發
     if (!targetLineIds || targetLineIds.length === 0) return;
-
     try {
         await fetch(LINE_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                to: targetLineIds,
-                messages: [{ type: 'text', text: messageText }]
-            })
+            body: JSON.stringify({ to: targetLineIds, messages: [{ type: 'text', text: messageText }] })
         });
-        console.log("LINE 通知請求已發送");
-    } catch (e) {
-        console.error("LINE 通知發送失敗", e);
-    }
+    } catch (e) { console.error("LINE 通知失敗", e); }
 };
 
-// --- 假別設定 ---
 const DEFAULT_LEAVE_TYPES = [
   { id: 'rostered', label: '自畫假', note: '自選畫休 (不扣薪)', deduct: false },
   { id: 'official', label: '排休', note: '排定休假 (管理員排)', deduct: false }, 
@@ -93,11 +84,8 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 瀏覽器通知初始化
   useEffect(() => {
-      if ('Notification' in window && Notification.permission !== 'granted') {
-          Notification.requestPermission();
-      }
+      if ('Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
   }, []);
 
   useEffect(() => {
@@ -116,19 +104,13 @@ export default function App() {
       setShifts(d);
     });
     const unsubRequests = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => {
-      const list = []; 
-      let newCount = 0;
+      const list = []; let newCount = 0;
       snap.forEach(doc => {
-          const data = doc.data();
-          list.push({ id: doc.id, ...data });
-          const isRecent = data.timestamp && (new Date() - data.timestamp.toDate()) < 10000;
-          if (isRecent) newCount++;
+          const data = doc.data(); list.push({ id: doc.id, ...data });
+          if (data.timestamp && (new Date() - data.timestamp.toDate()) < 10000) newCount++;
       });
       setRequests(list);
-      // 瀏覽器通知
-      if (newCount > 0 && Notification.permission === 'granted' && document.hidden) {
-          new Notification("TeamShift 通知", { body: `您有 ${newCount} 筆新的申請待處理！` });
-      }
+      if (newCount > 0 && Notification.permission === 'granted' && document.hidden) new Notification("TeamShift 通知", { body: `您有 ${newCount} 筆新的申請待處理！` });
     });
     const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), (snap) => {
       if (snap.exists()) setLeaveTypes(snap.data().types || DEFAULT_LEAVE_TYPES);
@@ -147,52 +129,34 @@ export default function App() {
         if(targetLineId) sendLineNotification([targetLineId], `❌ 您的申請 (${req.date}) 已被拒絕。`);
         return;
     }
-
+    // ... (ot_confirm & swap logic same as previous) ...
     if (req.type === 'ot_confirm') {
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
         if (shiftSnap.exists()) {
             const data = shiftSnap.data();
-            const newAssigns = data.assignments.map(a => {
-                if (a.uid === req.uid) return { ...a, otConfirmed: true };
-                return a;
-            });
+            const newAssigns = data.assignments.map(a => { if (a.uid === req.uid) return { ...a, otConfirmed: true }; return a; });
             await updateDoc(shiftRef, { assignments: newAssigns });
             if(targetLineId) sendLineNotification([targetLineId], `✅ 您的加班時數 (${req.date} / ${req.hours}hr) 已確認生效！`);
         }
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
         alert("加班時數已確認！");
-    } 
-    else if (req.type === 'swap') {
+    } else if (req.type === 'swap') {
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
         if (shiftSnap.exists()) {
             const data = shiftSnap.data();
             const assigns = [...(data.assignments || [])];
-            const idxA = assigns.findIndex(a => a.uid === req.fromUid);
-            const idxB = assigns.findIndex(a => a.uid === req.toUid);
-
+            const idxA = assigns.findIndex(a => a.uid === req.fromUid); const idxB = assigns.findIndex(a => a.uid === req.toUid);
             if (idxA >= 0 && idxB >= 0) {
-                const temp = { ...assigns[idxA], uid: req.toUid };
-                assigns[idxA] = { ...assigns[idxB], uid: req.fromUid };
-                assigns[idxB] = temp;
-                await updateDoc(shiftRef, { assignments: assigns });
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-                
-                // 通知雙方
-                const fromUserLine = users[req.fromUid]?.lineUserId;
-                const toUserLine = users[req.toUid]?.lineUserId;
+                const temp = { ...assigns[idxA], uid: req.toUid }; assigns[idxA] = { ...assigns[idxB], uid: req.fromUid }; assigns[idxB] = temp;
+                await updateDoc(shiftRef, { assignments: assigns }); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+                const fromUserLine = users[req.fromUid]?.lineUserId; const toUserLine = users[req.toUid]?.lineUserId;
                 const msg = `🔄 換假成功！\n日期: ${req.date}\n申請人: ${users[req.fromUid]?.name}\n對象: ${users[req.toUid]?.name}`;
-                const targets = [];
-                if(fromUserLine) targets.push(fromUserLine);
-                if(toUserLine) targets.push(toUserLine);
+                const targets = []; if(fromUserLine) targets.push(fromUserLine); if(toUserLine) targets.push(toUserLine);
                 if(targets.length > 0) sendLineNotification(targets, msg);
-
                 alert("換假成功！");
-            } else {
-                alert("班表狀態已變更，無法換假");
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            }
+            } else { alert("班表狀態已變更，無法換假"); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id)); }
         }
     }
   };
@@ -201,23 +165,20 @@ export default function App() {
       const msg = prompt("請輸入要發送給所有員工的通知內容：");
       if(!msg) return;
       if(!confirm("確定要發送 LINE 通知給所有已綁定的員工嗎？")) return;
-
       const allLineIds = Object.values(users).map(u => u.lineUserId).filter(id => id);
       if(allLineIds.length === 0) return alert("目前沒有員工綁定 LINE ID");
-
-      sendLineNotification(allLineIds, `📢【公司公告】\n${msg}`);
-      alert("已發送通知");
+      sendLineNotification(allLineIds, `📢【公司公告】\n${msg}`); alert("已發送通知");
   };
 
   if (loading) return <div className="flex h-screen items-center justify-center">載入中...</div>;
-  if (!user) return (
-    <div className="flex h-screen items-center justify-center p-4 bg-gray-50"><div className="bg-white p-8 rounded-xl shadow-lg text-center"><h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 排班系統</h1><button onClick={handleLogin} className="bg-white border px-6 py-2 rounded shadow hover:bg-gray-50 flex items-center gap-2 mx-auto"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5"/> Google 登入</button></div></div>
-  );
+  if (!user) return <div className="flex h-screen items-center justify-center p-4 bg-gray-50"><div className="bg-white p-8 rounded-xl shadow-lg text-center"><h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 排班系統</h1><button onClick={handleLogin} className="bg-white border px-6 py-2 rounded shadow hover:bg-gray-50 flex items-center gap-2 mx-auto"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5"/> Google 登入</button></div></div>;
 
   const myNotifications = requests.filter(r => r.toUid === user.uid || (r.type === 'ot_confirm' && r.uid === user.uid));
+  // 🟢 確保資料格式正確
   const activeUsers = Object.values(users).filter(u => !u.isResigned);
   const currentUserInfo = users[user.uid] || {};
-  const isAdmin = currentUserInfo.isAdmin;
+  // 🟢 管理員無敵通行證 (強制賦予權限)
+  const isAdmin = currentUserInfo.isAdmin || user?.email === "teatop11312@gmail.com";
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-slate-800 pb-20 sm:pb-0 relative">
@@ -232,7 +193,6 @@ export default function App() {
             <NavBtn active={view==='salary'} onClick={()=>setView('salary')} icon={FileBarChart} label="統計" />
             {isAdmin && <NavBtn active={view==='payroll'} onClick={()=>setView('payroll')} icon={DollarSign} label="薪資" />}
             <NavBtn active={view==='settings'} onClick={()=>setView('settings')} icon={Users} label="設定" />
-            
             <div className="relative">
                 <button onClick={() => setShowNotifications(!showNotifications)} className="p-2 text-gray-500 hover:text-indigo-600 relative">
                     <Bell className="w-5 h-5" />
@@ -248,19 +208,13 @@ export default function App() {
                                         <>
                                             <div className="text-sm font-bold text-gray-800 mb-1">加班時數確認</div>
                                             <p className="text-xs text-gray-600 mb-2">{req.date}: {req.hours}hr ({req.reason})</p>
-                                            <div className="flex gap-2">
-                                                <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">確認</button>
-                                                <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">駁回</button>
-                                            </div>
+                                            <div className="flex gap-2"><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">確認</button><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">駁回</button></div>
                                         </>
                                     ) : (
                                         <>
                                             <div className="text-sm font-bold text-gray-800 mb-1">換假申請</div>
                                             <p className="text-xs text-gray-600 mb-2">{users[req.fromUid]?.name} 想跟您交換 {req.date} 的班表</p>
-                                            <div className="flex gap-2">
-                                                <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">同意</button>
-                                                <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">拒絕</button>
-                                            </div>
+                                            <div className="flex gap-2"><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white text-xs py-1 rounded">同意</button><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-200 text-gray-700 text-xs py-1 rounded">拒絕</button></div>
                                         </>
                                     )}
                                 </div>
@@ -277,12 +231,11 @@ export default function App() {
       <main className="max-w-6xl mx-auto p-3 sm:p-4">
         {view === 'calendar' && (
             <>
+                {/* 🔴 關鍵修正：確保傳入的是 Array */}
                 <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} shifts={shifts} users={activeUsers} allUsers={users} currentUser={user} leaveTypes={leaveTypes} sendLineNotification={sendLineNotification} />
                 {isAdmin && (
                     <div className="fixed bottom-4 right-4 z-10">
-                        <button onClick={handleGlobalAnnounce} className="bg-green-600 text-white p-3 rounded-full shadow-lg hover:bg-green-700 flex items-center gap-2">
-                            <Send size={20}/> <span className="text-xs font-bold">群發通知</span>
-                        </button>
+                        <button onClick={handleGlobalAnnounce} className="bg-green-600 text-white p-3 rounded-full shadow-lg hover:bg-green-700 flex items-center gap-2"><Send size={20}/> <span className="text-xs font-bold">群發通知</span></button>
                     </div>
                 )}
             </>
@@ -326,6 +279,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, users, allUsers, cu
           </div>)
         })}
        </div>
+       {/* 🔴 關鍵：這裡傳入的 users 已經是 array (來自 App 的 activeUsers) */}
        {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} users={users} currentUser={currentUser} leaveTypes={leaveTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} />}
     </div>
   );
@@ -335,9 +289,15 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
   const [note, setNote] = useState(dayData.note || '');
   const [expanded, setExpanded] = useState(null);
-  // 👇 修改後 (加入您的 Email 當作超級管理員)
-const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.com";
+  
+  // 🔴 終極防呆：強制將 users 轉為 Array，避免白屏
+  const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
+
+  // 🔴 管理員判定：包含無敵通行證邏輯
+  const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === "randy22444289@gmail.com";
   const isClosed = dayData.isClosed === true;
+  const amIOnLeave = dayData.assignments?.some(a => a.uid === currentUser.uid && a.type === 'LEAVE');
+
   const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : userColors[idx % userColors.length]; };
   
   const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); if(newData.assignments) setExpanded(null); };
@@ -355,10 +315,10 @@ const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.
   };
 
   const requestSwap = async (fromUid, toUid) => {
-      const targetUser = (users || []).find(u=>u.uid===toUid);
+      const targetUser = safeUsers.find(u=>u.uid===toUid);
       if (!confirm(`確定要向 ${targetUser?.name || '對方'} 申請換假嗎？`)) return;
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'swap', fromUid, toUid, date: dateStr, timestamp: new Date() });
-      if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `📩 新的換假邀請！\n${users.find(u=>u.uid===fromUid)?.name} 想要跟您交換 ${dateStr} 的班表。`);
+      if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `📩 新的換假邀請！\n${safeUsers.find(u=>u.uid===fromUid)?.name} 想要跟您交換 ${dateStr} 的班表。`);
       alert("換假申請已送出！");
   };
 
@@ -368,7 +328,7 @@ const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.
     const remark = prompt("請輸入原因:", ""); if(remark === null) return;
     if (isAdmin && uid !== currentUser.uid) {
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'ot_confirm', uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
-        const targetUser = (users || []).find(u => u.uid === uid);
+        const targetUser = safeUsers.find(u => u.uid === uid);
         if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `🕒 管理員已登錄您的加班時數\n日期: ${dateStr}\n時數: ${numHours}hr\n請至系統確認。`);
         alert("已送出加班確認請求給員工"); return;
     }
@@ -377,7 +337,8 @@ const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.
     update({ assignments: next });
   };
 
-  const availableSubs = users.filter(sub => sub.uid !== (users.find(u=>u.name===expanded)?.uid) && !sub.isResigned);
+  // 🔴 修正過濾邏輯
+  const availableSubs = safeUsers.filter(sub => sub.uid !== expanded && !sub.isResigned);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
@@ -385,7 +346,7 @@ const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.
         <div className={`p-4 border-b flex justify-between font-bold items-center ${isClosed ? 'bg-gray-800 text-white' : 'bg-gray-50'}`}><span className="flex items-center gap-2">{dateStr} {isClosed && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded">本日店休</span>}</span><button onClick={onClose}>✕</button></div>
         <div className="p-4 overflow-y-auto space-y-3 flex-1 relative">
           {isClosed && <div className="absolute inset-0 bg-white/90 z-10 flex flex-col items-center justify-center text-center p-4"><Store className="w-16 h-16 text-gray-400 mb-2"/><h3 className="text-xl font-bold text-gray-600">本日店休</h3>{isAdmin && <button onClick={toggleClosed} className="mt-2 bg-gray-800 text-white px-4 py-2 rounded shadow">🔓 恢復營業</button>}</div>}
-          {(users || []).map(u => {
+          {safeUsers.map(u => {
             const assign = dayData.assignments?.find(a=>a.uid===u.uid); const isRostered = assign?.type === 'LEAVE' && assign?.leaveType === 'rostered'; const userColor = getUserColor(u.uid); const isMe = u.uid === currentUser.uid; const canEdit = isMe || isAdmin; const showSwapBtn = amIOnLeave && !isMe && assign?.type === 'WORK';
             return (
               <div key={u.uid} className={`border rounded-lg p-3 ${!canEdit ? 'bg-gray-50 opacity-100' : 'bg-white'}`}>
@@ -399,11 +360,11 @@ const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.
                     <button disabled={!canEdit} onClick={()=>setExpanded(expanded===u.uid?null:u.uid)} className={`px-3 py-2 text-xs rounded border ${!canEdit ? 'bg-gray-100' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{assign?.type==='LEAVE' && !isRostered ? '變更' : '請假 ▼'}</button>
                   </div>
                 </div>
-                {assign?.type === 'LEAVE' && (<div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}><div><span className="font-medium text-gray-900">狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'} {(assign.leaveType==='comp' && assign.leaveHours) && ` (${assign.leaveHours}h)`}</span>{assign.subUid && <span className="ml-2 text-gray-600">➤ {users.find(sub=>sub.uid===assign.subUid)?.name}代班</span>}</div>{canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}</div>)}
+                {assign?.type === 'LEAVE' && (<div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}><div><span className="font-medium text-gray-900">狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'} {(assign.leaveType==='comp' && assign.leaveHours) && ` (${assign.leaveHours}h)`}</span>{assign.subUid && <span className="ml-2 text-gray-600">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name}代班</span>}</div>{canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}</div>)}
                 {expanded===u.uid && (
                   <div className="bg-gray-50 p-2 rounded animate-fade-in border-t space-y-2">
                     <div className="text-[10px] text-gray-400">請選擇假別 (可選代班人):</div>
-                    <div className="flex gap-2 items-center mb-2"><span className="text-xs text-gray-600">代班:</span><select id={`sub-select-${u.uid}`} className="text-xs border rounded p-1 flex-1"><option value="">-- 無代班人 --</option>{users.filter(s=>s.uid!==u.uid&&!s.isResigned).map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}</select></div>
+                    <div className="flex gap-2 items-center mb-2"><span className="text-xs text-gray-600">代班:</span><select id={`sub-select-${u.uid}`} className="text-xs border rounded p-1 flex-1"><option value="">-- 無代班人 --</option>{availableSubs.map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}</select></div>
                     <div className="grid grid-cols-3 gap-2">{leaveTypes.filter(lt=>lt.id!=='rostered' && lt.id!=='official').map(lt=>(<button key={lt.id} onClick={()=>{const subVal = document.getElementById(`sub-select-${u.uid}`).value; toggle(u.uid,'LEAVE',lt.id, subVal || null);}} className={`text-xs p-2 border rounded bg-white hover:bg-gray-100`}>{lt.label}</button>))}</div>
                   </div>
                 )}
@@ -420,8 +381,10 @@ const isAdmin = currentUserInfo.isAdmin || user?.email === "randy22444289@gmail.
 // --- 2. Salary View ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
-  const isAdmin = users.find(u => u.uid === currentUser.uid)?.isAdmin;
-  const visibleUsers = useMemo(() => isAdmin ? users : users.filter(u => u.uid === currentUser.uid), [users, currentUser, isAdmin]);
+  // 🟢 這裡也做防呆
+  const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
+  const isAdmin = safeUsers.find(u => u.uid === currentUser.uid)?.isAdmin || currentUser?.email === "teatop11312@gmail.com";
+  const visibleUsers = useMemo(() => isAdmin ? safeUsers : safeUsers.filter(u => u.uid === currentUser.uid), [users, currentUser, isAdmin]);
 
   const calc = (uid) => {
     let monthStats = { ot: 0, leaves: {} };
@@ -463,6 +426,7 @@ const PayrollView = ({ users, currentDate }) => {
     const [payrollData, setPayrollData] = useState({});
     useEffect(() => { const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => { if (docSnap.exists()) setPayrollData(docSnap.data().records || {}); else setPayrollData({}); }); return () => unsub(); }, [targetMonth]);
     const updatePayroll = async (uid, field, value) => { const newData = { ...payrollData, [uid]: { ...(payrollData[uid] || {}), [field]: value } }; setPayrollData(newData); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true }); };
+    // 🟢 這裡已經是 Array，不用改
     const activeUsers = Object.values(users).filter(u => !u.isResigned);
 
     return (
@@ -479,7 +443,7 @@ const PayrollView = ({ users, currentDate }) => {
 const SettingsView = ({ users, currentUser, leaveTypes, appId }) => {
   const userList = Object.values(users);
   const currentUserInfo = users[currentUser.uid] || {};
-  const isCurrentUserAdmin = currentUserInfo.isAdmin;
+  const isCurrentUserAdmin = currentUserInfo.isAdmin || currentUser?.email === "teatop11312@gmail.com";
   const [newLeave, setNewLeave] = useState({ label: '', note: '', color: 'bg-gray-100 text-gray-700' });
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
