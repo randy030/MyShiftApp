@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v3.5 (Inbox Page)"; 
+const CURRENT_VERSION = "v3.6 (Full Restore)"; 
 
 const UPDATE_LOGS = [
-  { version: "v3.5", date: "2026-02-17", content: "介面重構：將通知中心改為獨立頁面，徹底解決手機版無法點擊確認的問題。" },
-  { version: "v3.4", date: "2026-02-17", content: "介面大升級：新增專業加班管理視窗。" }
+  { version: "v3.6", date: "2026-02-17", content: "完整修復：恢復所有遺失的子選單功能 (薪資、設定)，保持通知中心獨立頁面。" },
+  { version: "v3.5", date: "2026-02-17", content: "介面重構：將通知中心改為獨立頁面，解決手機版點擊問題。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -66,7 +66,7 @@ const getMonthData = (year, month) => {
   return { firstDay, days };
 };
 
-// --- OT Modal ---
+// --- OT Modal (加班管理視窗) ---
 const OTModal = ({ isOpen, onClose, onConfirm, targetUser, dateStr }) => {
     const [hours, setHours] = useState('');
     const [reason, setReason] = useState('');
@@ -204,7 +204,6 @@ export default function App() {
             {isAdmin && <NavBtn active={view==='payroll'} onClick={()=>setView('payroll')} icon={DollarSign} label="薪資" />}
             <NavBtn active={view==='settings'} onClick={()=>setView('settings')} icon={Users} label="設定" />
             
-            {/* 🔴 通知按鈕：改為切換到獨立頁面 */}
             <button 
                 onClick={() => setView('inbox')} 
                 className={`p-2 relative ${view === 'inbox' ? 'text-indigo-600 bg-indigo-50 rounded-lg' : 'text-gray-500 hover:text-indigo-600'}`}
@@ -231,7 +230,6 @@ export default function App() {
         {view === 'payroll' && isAdmin && <PayrollView users={users} currentDate={currentDate} />}
         {view === 'settings' && <SettingsView users={users} currentUser={user} leaveTypes={leaveTypes} appId={appId} />}
         
-        {/* 🔴 獨立通知頁面 (Inbox View) */}
         {view === 'inbox' && (
             <div className="max-w-md mx-auto space-y-4 pb-20">
                 <div className="bg-white p-4 rounded-xl border flex items-center gap-2">
@@ -442,13 +440,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, users, currentUser, leaveTypes, 
   );
 };
 
-const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
-  // ... (SalaryView code remains same, omitted for brevity but preserved in full copy) ...
-  // Please assume standard SalaryView code here
-  return <div>統計功能 (請見完整代碼)</div>;
-};
-const PayrollView = ({ users, currentDate }) => { return <div>薪資功能 (請見完整代碼)</div>; };
-const SettingsView = ({ users, currentUser, leaveTypes, appId }) => { return <div>設定功能 (請見完整代碼)</div>; };
 // --- 2. Salary View ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
