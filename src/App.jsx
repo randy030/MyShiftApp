@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v4.2 (Leave Limits)"; 
+const CURRENT_VERSION = "v4.3 (Admin Override)"; 
 
 const UPDATE_LOGS = [
-  { version: "v4.2", date: "2026-02-22", content: "HR防呆：新增請假額度限制 (生理假年3日月1日、病假年30日、事假年14日)，超額自動鎖定按鍵並提示。" },
-  { version: "v4.1", date: "2026-02-22", content: "邏輯優化：整合加/補休按鈕，新增時數沖抵明細。" }
+  { version: "v4.3", date: "2026-02-22", content: "HR權限升級：限制請假天數時，給予管理員「強制核准」的權限(黃色警告按鈕)，一般員工則嚴格鎖定(灰色按鈕)。" },
+  { version: "v4.2", date: "2026-02-22", content: "防呆：新增請假額度限制 (生理假年3月1、病假年30、事假年14)。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -414,7 +414,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
   const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : userColors[idx % userColors.length]; };
   const todaysEvents = companyEvents.filter(e => checkEventOnDate(e, dateStr));
 
-  // 取得年份與月份前綴，用於計算請假天數
   const yearStr = dateStr.substring(0, 4);
   const monthStr = dateStr.substring(0, 7);
 
@@ -491,7 +490,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
             const otValue = Number(assign?.otHours);
             const isOT = otValue > 0;
 
-            // 🔴 輔助函式：計算指定假別的已使用天數 (排除目前正在編輯的這天)
+            // 計算已使用請假天數 (排除目前編輯的這天)
             const getLeaveCount = (leaveId, prefix) => {
                 let count = 0;
                 Object.keys(shifts).forEach(d => {
@@ -526,29 +525,43 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
                     
                     <div className="grid grid-cols-3 gap-2">
                         {leaveTypes.filter(lt=>lt.id!=='rostered' && lt.id!=='official' && lt.id!=='comp').map(lt => {
-                            // 🔴 進行防呆檢查計算
+                            // 🔴 防呆邏輯計算
                             let limitReached = false;
                             let limitMsg = "";
 
                             if (lt.id === 'menstrual') {
                                 if (getLeaveCount('menstrual', yearStr) >= 3) { limitReached = true; limitMsg = "生理假一年最多請 3 天，已達上限！"; }
-                                else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "生理假一個月最多請 1 天，已達上限！"; }
+                                else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天，已達上限！"; }
                             } else if (lt.id === 'sick') {
                                 if (getLeaveCount('sick', yearStr) >= 30) { limitReached = true; limitMsg = "病假一年最多請 30 天，已達上限！"; }
                             } else if (lt.id === 'personal') {
                                 if (getLeaveCount('personal', yearStr) >= 14) { limitReached = true; limitMsg = "事假一年最多請 14 天，已達上限！"; }
                             }
 
+                            // 🔴 按鈕樣式：如果是管理員，即使超額也顯示為黃色警告(可點擊)；若是員工則為灰色鎖定(不可點擊)
+                            const btnClass = limitReached 
+                                ? (isAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed')
+                                : 'bg-white hover:bg-gray-100 shadow-sm';
+
                             return (
                                 <button 
                                     key={lt.id} 
                                     onClick={() => {
-                                        if (limitReached) { alert(limitMsg); return; }
+                                        if (limitReached) { 
+                                            // 🔴 管理員強制放行機制
+                                            if (isAdmin) {
+                                                if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return;
+                                            } else {
+                                                alert(`🚫 拒絕：${limitMsg}`); 
+                                                return; 
+                                            }
+                                        }
                                         const subVal = document.getElementById(`sub-select-${u.uid}`).value; 
                                         toggle(u.uid,'LEAVE',lt.id, subVal || null);
                                     }} 
-                                    className={`text-xs p-2 border rounded ${limitReached ? 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed' : 'bg-white hover:bg-gray-100'}`}
+                                    className={`text-xs p-2 border rounded font-bold ${btnClass}`}
                                 >
+                                    {limitReached && isAdmin && <span className="mr-1">⚠️</span>}
                                     {lt.label}
                                 </button>
                             )
@@ -691,7 +704,6 @@ const SettingsView = ({ users, currentUser, leaveTypes, appId }) => {
     <div className="space-y-6 pb-20">
       <div className="bg-white p-6 rounded-xl border shadow-sm text-center">
         <h2 className="font-bold text-xl">{currentUserInfo.name}</h2>
-        {/* LINE 綁定區塊 */}
         <div className="mt-4 bg-green-50 p-3 rounded-lg border border-green-100 text-left">
             <h4 className="text-sm font-bold text-green-800 flex items-center gap-2"><Smartphone size={16}/> LINE 通知綁定</h4>
             <p className="text-xs text-gray-600 mb-2">請在公司 LINE 官方帳號輸入 <span className="font-bold text-red-500">查ID</span>，並將回傳的代碼貼在下方：</p>
