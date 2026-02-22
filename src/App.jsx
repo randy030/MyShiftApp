@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v4.10 (Strict Locking)"; 
+const CURRENT_VERSION = "v4.11 (Bug Fix)"; 
 
 const UPDATE_LOGS = [
-  { version: "v4.10", date: "2026-02-22", content: "HR權限強化：員工送出「請假」與「時數申請」後即嚴格鎖定，無法再自行更改或刪除，需由管理員操作。" },
-  { version: "v4.9", date: "2026-02-22", content: "邏輯修正：特休強制扣時數(不扣薪)；生理假不扣時數不扣薪。修復員工申請後視窗未關閉問題。" }
+  { version: "v4.11", date: "2026-02-22", content: "Bug修復：解決員工送出時數申請時，因讀取姓名錯誤導致視窗卡住未關閉的問題。" },
+  { version: "v4.10", date: "2026-02-22", content: "HR權限強化：員工送出「請假」與「時數申請」後即嚴格鎖定。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -116,7 +116,10 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
                         )}
                     </div>
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">事由 / 備註</label><input type="text" value={reason} onChange={e=>setReason(e.target.value)} placeholder="例如: 支援活動、扣抵..." className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"/></div>
-                    <div className="flex gap-3 pt-2"><button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold text-sm hover:bg-gray-200">取消</button><button onClick={() => { if(hours === '') return alert("請輸入時數，若要清除請輸入 0"); onConfirm(parseFloat(hours), reason); }} className="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-bold text-sm hover:bg-indigo-700 shadow-lg">確認送出</button></div>
+                    <div className="flex gap-3 pt-2">
+                        <button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold text-sm hover:bg-gray-200">取消</button>
+                        <button onClick={() => { if(hours === '') return alert("請輸入時數，若要清除請輸入 0"); onConfirm(parseFloat(hours), reason); }} className="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-bold text-sm hover:bg-indigo-700 shadow-lg">確認送出</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -534,7 +537,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
     let next = [...(dayData.assignments||[])]; 
     const idx = next.findIndex(a=>a.uid===uid);
     
-    // 🔴 防呆：若員工已有請假紀錄，鎖定不給改
     if (!isAdmin && next[idx]?.type === 'LEAVE') {
         return alert("請假已鎖定。如需修改請聯繫管理員。");
     }
@@ -583,12 +585,13 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
       alert("換假申請已送出！");
   };
 
+  // 🔴 修復：確保執行流程後絕對關閉視窗 (移除 try-catch，因為 Firebase 沒有報錯，單純是前面 currentUserName 變數缺失的問題)
   const handleOTSave = async (numHours, remark) => {
       const uid = otModalData.user.uid;
       const actionType = numHours > 0 ? '加班' : '補休';
 
       if (isAdmin && uid !== currentUser.uid) {
-        const existingReq = requests.find(r => r.date === dateStr && r.uid === uid && r.type === 'ot_confirm');
+        const existingReq = requests?.find(r => r.date === dateStr && r.uid === uid && r.type === 'ot_confirm');
         if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
 
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'ot_confirm', uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
@@ -600,12 +603,16 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         setTimeout(() => alert("已送出時數確認單給員工"), 100);
       } 
       else if (!isAdmin && uid === currentUser.uid) {
-        const existingReq = requests.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
+        const existingReq = requests?.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
         if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
 
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUser.uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
         const adminLineIds = safeUsers.filter(u => u.isAdmin || u.email === ADMIN_EMAIL).map(u => u.lineUserId).filter(id => id);
-        if(adminLineIds.length > 0) sendLineNotification(adminLineIds, `🔔【審核通知】\n員工 ${currentUserInfo.name || '某員工'} 申請了 ${dateStr} 的 ${actionType} (${Math.abs(numHours)}hr)\n請至系統通知中心核准。`);
+        
+        // 🔴 修正這行：獲取當前使用者的正確姓名
+        const currentUserName = safeUsers.find(u => u.uid === currentUser.uid)?.name || '某員工';
+        
+        if(adminLineIds.length > 0) sendLineNotification(adminLineIds, `🔔【審核通知】\n員工 ${currentUserName} 申請了 ${dateStr} 的 ${actionType} (${Math.abs(numHours)}hr)\n請至系統通知中心核准。`);
         
         setOtModalData(null);
         onClose(); 
@@ -615,7 +622,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); 
         const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
         if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
-        update({ assignments: next });
+        await update({ assignments: next });
         setOtModalData(null); 
         onClose(); 
       }
@@ -627,10 +634,9 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
 
       const assign = dayData.assignments?.find(a=>a.uid===user.uid);
       const hasOT = assign?.otHours !== undefined && assign?.otHours !== null && assign?.otHours !== "" && Number(assign?.otHours) !== 0;
-      const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === user.uid && r.type === 'admin_ot_approve');
-      const pendingConfirmReq = requests.find(r => r.date === dateStr && r.uid === user.uid && r.type === 'ot_confirm');
+      const pendingApproveReq = (requests || []).find(r => r.date === dateStr && r.fromUid === user.uid && r.type === 'admin_ot_approve');
+      const pendingConfirmReq = (requests || []).find(r => r.date === dateStr && r.uid === user.uid && r.type === 'ot_confirm');
 
-      // 🔴 防呆：若時數已在流程中且為員工，鎖定不給開啟
       if (!isAdmin && (hasOT || pendingApproveReq || pendingConfirmReq)) {
           return alert("時數已鎖定或審核中，無法修改。請聯繫管理員。");
       }
@@ -675,10 +681,9 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
             const isOT = otValue > 0;
             const hasLeave = assign?.type === 'LEAVE';
 
-            const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === u.uid && r.type === 'admin_ot_approve');
-            const pendingConfirmReq = requests.find(r => r.date === dateStr && r.uid === u.uid && r.type === 'ot_confirm');
+            const pendingApproveReq = (requests || []).find(r => r.date === dateStr && r.fromUid === u.uid && r.type === 'admin_ot_approve');
+            const pendingConfirmReq = (requests || []).find(r => r.date === dateStr && r.uid === u.uid && r.type === 'ot_confirm');
 
-            // 🔴 員工權限精細控管：送出即鎖死
             const canEditLeave = isAdmin || (isMe && !hasLeave);
             const canEditOT = isAdmin || (isMe && !hasOT && !pendingApproveReq && !pendingConfirmReq);
 
@@ -714,11 +719,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                     {otButtonUi}
                     
                     {isAdmin && <button onClick={() => toggle(u.uid, 'LEAVE', 'official')} className="px-3 py-1.5 text-xs rounded border bg-gray-100 text-gray-600 hover:bg-gray-200">排休</button>}
-                    
-                    {/* 🔴 鎖定自畫假 */}
                     <button onClick={() => canEditLeave ? toggle(u.uid, 'LEAVE', 'rostered') : alert("請假已鎖定。如需修改請聯繫管理員。")} className={`px-4 py-2 text-xs rounded font-bold ${!canEditLeave ? (isRostered ? 'bg-red-400 text-white cursor-not-allowed' : 'bg-gray-100 text-gray-400 cursor-not-allowed') : (isRostered ? 'bg-red-600 text-white ring-2 ring-red-200' : 'bg-red-500 text-white hover:bg-red-600')}`}>{isRostered ? '已排休' : '自畫假'}</button>
-                    
-                    {/* 🔴 鎖定請假選單 */}
                     <button onClick={() => canEditLeave ? setExpanded(expanded===u.uid?null:u.uid) : alert("請假已鎖定。如需修改請聯繫管理員。")} className={`px-3 py-2 text-xs rounded border ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{hasLeave && !isRostered ? '已請假' : '請假 ▼'}</button>
                   </div>
                 </div>
@@ -735,7 +736,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                             </span>
                             {assign.subUid && <span className="ml-2 text-gray-600 font-bold">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name} 代班</span>}
                         </div>
-                        {/* 🔴 只有管理員可以按取消 */}
                         {isAdmin && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}
                     </div>
                 )}
