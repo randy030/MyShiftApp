@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v4.5 (OT Balance & Retry)"; 
+const CURRENT_VERSION = "v4.6 (Leave Hours & UX)"; 
 
 const UPDATE_LOGS = [
-  { version: "v4.5", date: "2026-02-22", content: "體驗升級：申請補休時自動帶入該年度剩餘時數，超過跳出扣薪警告；支援審核中修改與駁回後重填功能。" },
-  { version: "v4.4", date: "2026-02-22", content: "流程優化：補休/加班需管理員簽核；時數統計改為曆年制。" }
+  { version: "v4.6", date: "2026-02-22", content: "體驗升級：員工送出申請後自動關閉視窗退回月曆；特休/病假/生理假/事假新增時數輸入，並強制轉換為扣除統計。" },
+  { version: "v4.5", date: "2026-02-22", content: "體驗升級：申請補休自動帶入剩餘時數與扣薪警告。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -101,7 +101,6 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
                 <div className="p-6 space-y-4">
                     <div className="text-sm text-gray-500">正在編輯 <span className="font-bold text-gray-800">{user?.name}</span> 於 <span className="font-bold text-gray-800">{dateStr}</span> 的時數</div>
                     
-                    {/* 🔴 顯示剩餘時數 */}
                     <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center">
                         <span className="text-sm font-bold text-indigo-900">本年度剩餘可休：</span>
                         <span className={`text-lg font-bold ${balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{balance} hr</span>
@@ -110,8 +109,6 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
                     <div>
                         <label className="block text-xs font-bold text-gray-700 mb-1">增減時數 (小時)</label>
                         <input type="number" autoFocus value={hours} onChange={e=>setHours(e.target.value)} placeholder="加班請輸入正數，補休請輸入負數" className={`w-full border-2 rounded-lg px-3 py-2 focus:outline-none text-lg font-bold ${isExceeding ? 'border-red-300 text-red-600 bg-red-50 focus:border-red-500' : 'border-indigo-100 text-gray-700 focus:border-indigo-500'}`}/>
-                        
-                        {/* 🔴 扣薪警告 */}
                         {isExceeding ? (
                             <p className="text-[11px] font-bold text-red-600 mt-1 flex items-center gap-1">⚠️ 注意：申請補休大於剩餘時數，超出部分將扣薪！</p>
                         ) : (
@@ -332,7 +329,6 @@ export default function App() {
 
       <main className="max-w-6xl mx-auto p-3 sm:p-4">
         {view === 'calendar' && (
-            // 🔴 傳遞 requests 給 CalendarView
             <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} shifts={shifts} requests={requests} companyEvents={companyEvents} users={activeUsers} allUsers={users} currentUser={user} leaveTypes={leaveTypes} sendLineNotification={sendLineNotification} appId={appId} db={db} />
         )}
         {view === 'salary' && <SalaryView users={activeUsers} shifts={shifts} currentDate={currentDate} leaveTypes={leaveTypes} currentUser={user} />}
@@ -450,7 +446,14 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
                     const subName = a.subUid ? allUsers[a.subUid]?.name : null;
                     return (
                         <div key={ix} className={`text-xs p-1.5 rounded border ${pColor} bg-opacity-20 mb-1`}>
-                            <div className="flex justify-between items-center font-bold"><span>{allUsers[a.uid]?.name}</span><span className="bg-white/80 px-1 rounded text-[10px] border shadow-sm">{leaveTypes.find(t=>t.id===a.leaveType)?.label}</span></div>
+                            <div className="flex justify-between items-center font-bold">
+                                <span>{allUsers[a.uid]?.name}</span>
+                                <span className="bg-white/80 px-1 rounded text-[10px] border shadow-sm flex items-center gap-1">
+                                    {leaveTypes.find(t=>t.id===a.leaveType)?.label} 
+                                    {/* 🔴 在月曆上顯示被扣除的時數 */}
+                                    {a.leaveHours && <span className="text-red-500 font-mono">-{a.leaveHours}h</span>}
+                                </span>
+                            </div>
                             {subName && <div className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1 bg-white/50 px-1 rounded"><ArrowRightLeft size={10}/> {subName} 代</div>}
                         </div>
                     )
@@ -459,7 +462,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
           </div>)
         })}
        </div>
-       {/* 🔴 傳遞 requests 給 ShiftModal */}
        {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} requests={requests} companyEvents={companyEvents} setEditingEvent={setEditingEvent} users={users} currentUser={currentUser} leaveTypes={leaveTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} />}
     </div>
     <CompanyEventModal isOpen={!!editingEvent} onClose={()=>setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
@@ -483,7 +485,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
   const yearStr = dateStr.substring(0, 4);
   const monthStr = dateStr.substring(0, 7);
 
-  // 🔴 輔助函式：計算年度剩餘時數
   const getYearlyBalance = (uid, yearToFind) => {
       let earned = 0; let used = 0;
       Object.keys(shifts).forEach(d => {
@@ -512,11 +513,27 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
 
   const cancelLeave = (uid) => { if (uid !== currentUser.uid && !isAdmin) return alert("無權限"); let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); if(idx>=0) { next.splice(idx, 1); update({ assignments: next }); } };
   
+  // 🔴 特休、病假、生理假、事假 強制要求輸入扣除時數
   const toggle = (uid, type, lType=null, subUid=null) => {
     if(uid!==currentUser.uid && !isAdmin) return alert("無權限"); if(isClosed) return alert("本日店休");
     let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid);
     if (lType === 'rostered') { const getRosteredCount = () => { const prefix = dateStr.substring(0, 7); let count = 0; Object.keys(shifts).forEach(d => { if (d.startsWith(prefix) && shifts[d].assignments?.some(a=>a.uid===uid && a.type==='LEAVE' && a.leaveType==='rostered')) count++; }); return count; }; if (!isAdmin && (!next[idx] || next[idx].leaveType !== 'rostered') && getRosteredCount() >= 3) return alert("本月自選畫休 (排休) 已達 3 天上限"); }
-    const newEntry = { uid, type, leaveType: lType }; if (subUid) newEntry.subUid = subUid;
+    
+    let leaveHours = 0;
+    // 判斷是否為需要輸入時數的假別
+    if (['annual', 'sick', 'menstrual', 'personal'].includes(lType)) {
+        const leaveName = leaveTypes.find(t=>t.id===lType)?.label || '該假別';
+        const p = prompt(`請輸入「${leaveName}」的請假時數 (系統將自動以扣除計算):`, "8");
+        if (p === null) return;
+        // 強制轉換為正數保存，在統計顯示時加上負號
+        leaveHours = Math.abs(parseFloat(p));
+        if (isNaN(leaveHours) || leaveHours <= 0) return alert("請輸入大於0的有效數字！");
+    }
+
+    const newEntry = { uid, type, leaveType: lType }; 
+    if (leaveHours > 0) newEntry.leaveHours = leaveHours; // 存入資料庫
+    if (subUid) newEntry.subUid = subUid;
+
     if(idx>=0) next[idx] = newEntry; else next.push(newEntry);
     update({ assignments: next }); if (lType === 'rostered' || lType === 'official') onClose();
   };
@@ -529,13 +546,11 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
       alert("換假申請已送出！");
   };
 
-  // 🔴 核心邏輯：防呆覆寫與簽核發送
   const handleOTSave = async (numHours, remark) => {
       const uid = otModalData.user.uid;
       const actionType = numHours > 0 ? '加班' : '補休';
 
       if (isAdmin && uid !== currentUser.uid) {
-        // 如果有正在等待確認的舊單，先刪除，實現「覆寫更新」
         const existingReq = requests.find(r => r.date === dateStr && r.uid === uid && r.type === 'ot_confirm');
         if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
 
@@ -545,17 +560,20 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         alert("已送出時數確認單給員工"); 
       } 
       else if (!isAdmin && uid === currentUser.uid) {
-        // 員工自己申請：如果有正在「審核中」的舊單，直接覆蓋！
         const existingReq = requests.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
         if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
 
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUser.uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
         const adminLineIds = safeUsers.filter(u => u.isAdmin || u.email === ADMIN_EMAIL).map(u => u.lineUserId).filter(id => id);
         if(adminLineIds.length > 0) sendLineNotification(adminLineIds, `🔔【審核通知】\n員工 ${currentUserInfo.name || '某員工'} 申請了 ${dateStr} 的 ${actionType} (${Math.abs(numHours)}hr)\n請至系統通知中心核准。`);
-        alert("已送出申請，請等候管理員核准！");
+        
+        // 🔴 員工自己申請後，提示並直接關閉所有視窗退回月曆
+        alert("已送出審核明細！");
+        setOtModalData(null);
+        onClose(); // 關閉外層 Modal
+        return; 
       } 
       else {
-        // 管理員幫自己改 -> 直接生效
         let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); 
         const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
         if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
@@ -564,7 +582,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
       setOtModalData(null); 
   };
 
-  // 🔴 開啟 Modal 時帶入資訊
   const openOTModal = (user) => { 
       if(user.uid !== currentUser.uid && !isAdmin) return alert("無權限"); 
       if(isClosed) return alert("本日店休"); 
@@ -572,7 +589,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
       const balance = getYearlyBalance(user.uid, yearStr);
       const assign = dayData.assignments?.find(a=>a.uid===user.uid);
       
-      // 尋找是否已有「審核中」或「待確認」的單子，有就把數字帶進去讓他們修改
       const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === user.uid && r.type === 'admin_ot_approve');
       const pendingConfirmReq = requests.find(r => r.date === dateStr && r.uid === user.uid && r.type === 'ot_confirm');
       
@@ -614,7 +630,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
             const otValue = Number(assign?.otHours);
             const isOT = otValue > 0;
 
-            // 🔴 判斷是否有正在審核的單子，改變按鈕外觀
             const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === u.uid && r.type === 'admin_ot_approve');
             const pendingConfirmReq = requests.find(r => r.date === dateStr && r.uid === u.uid && r.type === 'ot_confirm');
 
@@ -647,7 +662,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                   <div className="flex gap-2">
                     {showSwapBtn && <button onClick={() => requestSwap(currentUser.uid, u.uid)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-[10px] flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft className="w-3 h-3"/> 換假</button>}
                     
-                    {/* 🔴 顯示 OT 按鈕 */}
                     {otButtonUi}
                     
                     {isAdmin && <button onClick={() => toggle(u.uid, 'LEAVE', 'official')} className="px-3 py-1.5 text-xs rounded border bg-gray-100 text-gray-600 hover:bg-gray-200">排休</button>}
@@ -655,7 +669,19 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                     <button disabled={!canEdit} onClick={()=>setExpanded(expanded===u.uid?null:u.uid)} className={`px-3 py-2 text-xs rounded border ${!canEdit ? 'bg-gray-100' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{assign?.type==='LEAVE' && !isRostered ? '變更' : '請假 ▼'}</button>
                   </div>
                 </div>
-                {assign?.type === 'LEAVE' && (<div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}><div><span className="font-medium text-gray-900">狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'}</span>{assign.subUid && <span className="ml-2 text-gray-600 font-bold">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name} 代班</span>}</div>{canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}</div>)}
+                {assign?.type === 'LEAVE' && (
+                    <div className={`flex items-center justify-between text-xs px-2 py-1 rounded mb-2 ${userColor} bg-opacity-30 border`}>
+                        <div>
+                            <span className="font-medium text-gray-900 flex items-center gap-1">
+                                狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'}
+                                {/* 🔴 顯示假別的扣除時數 */}
+                                {assign.leaveHours && <span className="text-red-600 font-mono font-bold bg-white/60 px-1 rounded">-{assign.leaveHours}h</span>}
+                            </span>
+                            {assign.subUid && <span className="ml-2 text-gray-600 font-bold">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name} 代班</span>}
+                        </div>
+                        {canEdit && <button onClick={()=>cancelLeave(u.uid)} className="text-red-600 hover:underline ml-2 font-bold flex items-center gap-1"><Trash2 className="w-3 h-3"/> 取消</button>}
+                    </div>
+                )}
                 
                 {expanded===u.uid && (
                   <div className="bg-gray-50 p-2 rounded animate-fade-in border-t space-y-2">
@@ -713,13 +739,12 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         </div>
       </div>
     </div>
-    {/* 🔴 呼叫更新後的 OTModal */}
     <OTModal isOpen={!!otModalData} onClose={()=>setOtModalData(null)} onConfirm={handleOTSave} modalData={otModalData} dateStr={dateStr} />
     </>
   );
 };
 
-// --- 2. Salary View (時數統計與明細) ---
+// --- 2. Salary View (統計：呈現假別扣除時數) ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
@@ -757,7 +782,10 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
         if(date.startsWith(targetMonth)) {
              if(assign.type === 'LEAVE' && assign.leaveType !== 'comp') { 
                  const lType = assign.leaveType || 'unknown'; 
-                 monthStats.leaves[lType] = (monthStats.leaves[lType] || 0) + 1; 
+                 // 🔴 修改：統計假別天數與時數
+                 if(!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0 };
+                 monthStats.leaves[lType].days += 1;
+                 if(assign.leaveHours) monthStats.leaves[lType].hours += assign.leaveHours;
              }
         }
     });
@@ -802,7 +830,22 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
                     </div>
                 )}
 
-                <div className="bg-gray-50 p-2 rounded border border-gray-100"><div className="text-xs font-bold text-gray-500 mb-1">本月 ({targetMonth}) 各類請假明細</div>{Object.keys(s.monthStats.leaves).length > 0 ? (<div className="grid grid-cols-2 gap-2 mt-1">{Object.entries(s.monthStats.leaves).map(([typeId, count]) => { const typeInfo = leaveTypes.find(t => t.id === typeId); return <span key={typeId} className={`text-xs px-2 py-1 rounded bg-white border ${typeInfo?.deduct ? 'text-red-500 border-red-200' : 'text-gray-600'}`}>{typeInfo?.label || '假'}: {count} 天</span>; })}</div>) : <span className="text-xs text-gray-400">無請假紀錄</span>}</div>
+                <div className="bg-gray-50 p-2 rounded border border-gray-100">
+                    <div className="text-xs font-bold text-gray-500 mb-1">本月 ({targetMonth}) 各類請假明細</div>
+                    {Object.keys(s.monthStats.leaves).length > 0 ? (
+                        <div className="grid grid-cols-2 gap-2 mt-1">
+                            {/* 🔴 顯示假別天數與扣除時數 */}
+                            {Object.entries(s.monthStats.leaves).map(([typeId, data]) => { 
+                                const typeInfo = leaveTypes.find(t => t.id === typeId); 
+                                return (
+                                    <span key={typeId} className={`text-xs px-2 py-1 rounded bg-white border ${typeInfo?.deduct ? 'text-red-500 border-red-200' : 'text-gray-600'}`}>
+                                        {typeInfo?.label || '假'}: {data.days}天 {data.hours > 0 ? <span className="font-mono ml-1 font-bold">(-{data.hours}h)</span> : ''}
+                                    </span>
+                                ); 
+                            })}
+                        </div>
+                    ) : <span className="text-xs text-gray-400">無請假紀錄</span>}
+                </div>
               </div>
             </div>
           )
