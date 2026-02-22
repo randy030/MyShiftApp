@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v4.3 (Admin Override)"; 
+const CURRENT_VERSION = "v4.4 (Approval Flow & Yearly Stats)"; 
 
 const UPDATE_LOGS = [
-  { version: "v4.3", date: "2026-02-22", content: "HR權限升級：限制請假天數時，給予管理員「強制核准」的權限(黃色警告按鈕)，一般員工則嚴格鎖定(灰色按鈕)。" },
-  { version: "v4.2", date: "2026-02-22", content: "防呆：新增請假額度限制 (生理假年3月1、病假年30、事假年14)。" }
+  { version: "v4.4", date: "2026-02-22", content: "流程優化：員工填寫加/補休將發送審核單給管理員；時數統計改為「曆年制 (1/1-12/31)」。" },
+  { version: "v4.3", date: "2026-02-22", content: "HR權限升級：限制請假天數時，給予管理員「強制核准」的權限。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -85,7 +85,7 @@ const OTModal = ({ isOpen, onClose, onConfirm, targetUser, dateStr }) => {
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
-                <div className="bg-indigo-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> 加班 / 補休管理</h3><button onClick={onClose} className="hover:bg-indigo-700 p-1 rounded"><X size={20}/></button></div>
+                <div className="bg-indigo-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> 加班 / 補休申請</h3><button onClick={onClose} className="hover:bg-indigo-700 p-1 rounded"><X size={20}/></button></div>
                 <div className="p-6 space-y-4">
                     <div className="text-sm text-gray-500 mb-2">正在編輯 <span className="font-bold text-gray-800">{targetUser?.name}</span> 於 <span className="font-bold text-gray-800">{dateStr}</span> 的時數</div>
                     <div>
@@ -200,6 +200,7 @@ export default function App() {
   const handleLogin = async () => { try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (e) { alert("登入失敗: " + e.message); } };
   const handleLogout = () => { if(window.confirm("確定要登出系統嗎？")) { signOut(auth); } };
 
+  // 🔴 核心邏輯：處理通知中心的核准與駁回
   const handleRequest = async (req, action) => {
     const targetUser = users[req.uid || req.fromUid]; 
     const targetLineId = targetUser?.lineUserId;
@@ -210,6 +211,7 @@ export default function App() {
         return;
     }
 
+    // 1. 管理員發給員工的確認單 (員工點擊確認)
     if (req.type === 'ot_confirm') {
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
@@ -231,6 +233,29 @@ export default function App() {
         if(targetLineId) sendLineNotification([targetLineId], `✅ 您的 ${actionType} 時數 (${req.date} / ${Math.abs(req.hours)}hr) 已確認並生效！`);
         alert("時數已確認並寫入統計！");
     } 
+    // 2. 員工發給管理員的申請單 (管理員點擊核准)
+    else if (req.type === 'admin_ot_approve') {
+        const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+        const shiftSnap = await getDoc(shiftRef);
+        const data = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+        let assignments = data.assignments || [];
+        let userFound = false;
+
+        const newAssigns = assignments.map(a => {
+            if (a.uid === req.fromUid) { userFound = true; return { ...a, otHours: req.hours, otReason: req.reason, otConfirmed: true }; }
+            return a;
+        });
+
+        if (!userFound) newAssigns.push({ uid: req.fromUid, type: 'WORK', otHours: req.hours, otReason: req.reason, otConfirmed: true });
+
+        await setDoc(shiftRef, { ...data, assignments: newAssigns }, { merge: true });
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+        
+        const actionType = req.hours > 0 ? '加班' : '補休';
+        if(targetLineId) sendLineNotification([targetLineId], `✅ 管理員已核准您的 ${actionType} 申請 (${req.date} / ${Math.abs(req.hours)}hr)！`);
+        alert("已核准該申請並寫入統計！");
+    }
+    // 3. 換假申請
     else if (req.type === 'swap') {
         const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
         const shiftSnap = await getDoc(shiftRef);
@@ -253,10 +278,17 @@ export default function App() {
   if (loading) return <div className="flex h-screen items-center justify-center">載入中...</div>;
   if (!user) return <div className="flex h-screen items-center justify-center p-4 bg-gray-50"><div className="bg-white p-8 rounded-xl shadow-lg text-center"><h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 排班系統</h1><button onClick={handleLogin} className="bg-white border px-6 py-2 rounded shadow hover:bg-gray-50 flex items-center gap-2 mx-auto"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5"/> Google 登入</button></div></div>;
 
-  const myNotifications = requests.filter(r => r.toUid === user.uid || (r.type === 'ot_confirm' && r.uid === user.uid));
-  const activeUsers = Object.values(users).filter(u => !u.isResigned);
   const currentUserInfo = users[user.uid] || {};
   const isAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
+  
+  // 🔴 根據權限過濾通知中心內容
+  const myNotifications = requests.filter(r => 
+      r.toUid === user.uid || 
+      (r.type === 'ot_confirm' && r.uid === user.uid) || 
+      (r.type === 'admin_ot_approve' && isAdmin) // 管理員會看到員工送來的申請單
+  );
+  
+  const activeUsers = Object.values(users).filter(u => !u.isResigned);
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-slate-800 pb-20 sm:pb-0 relative">
@@ -301,20 +333,38 @@ export default function App() {
                     <div className="space-y-3">
                         {myNotifications.map(req => (
                             <div key={req.id} className="bg-white p-4 rounded-xl border shadow-sm border-l-4 border-l-indigo-500">
-                                {req.type === 'ot_confirm' ? (
+                                {/* 管理員發給員工的確認單 */}
+                                {req.type === 'ot_confirm' && (
                                     <>
-                                        <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg text-gray-800">加/補休時數確認</h3><span className="text-xs bg-gray-100 px-2 py-1 rounded text-gray-500">{req.date}</span></div>
+                                        <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg text-gray-800">時數登錄確認</h3><span className="text-xs bg-gray-100 px-2 py-1 rounded text-gray-500">{req.date}</span></div>
+                                        <p className="text-xs text-gray-500 mb-2">管理員登錄了您的時數，請確認：</p>
                                         <div className={`p-3 rounded mb-3 text-sm ${req.hours > 0 ? 'bg-orange-50' : 'bg-green-50'}`}>
                                             <div className={`font-bold ${req.hours > 0 ? 'text-orange-800' : 'text-green-800'}`}>{req.hours > 0 ? '加班' : '補休'}時數: {Math.abs(req.hours)} 小時</div>
                                             <div className={req.hours > 0 ? 'text-orange-700' : 'text-green-700'}>事由: {req.reason}</div>
                                         </div>
-                                        <div className="flex gap-3"><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg font-bold">駁回有誤</button><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow">確認無誤</button></div>
+                                        <div className="flex gap-3"><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-50">駁回有誤</button><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow hover:bg-indigo-700">確認無誤</button></div>
                                     </>
-                                ) : (
+                                )}
+                                
+                                {/* 🔴 員工發給管理員的申請單 */}
+                                {req.type === 'admin_ot_approve' && (
+                                    <>
+                                        <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg text-purple-800">員工加/補休申請</h3><span className="text-xs bg-gray-100 px-2 py-1 rounded text-gray-500">{req.date}</span></div>
+                                        <p className="text-xs text-gray-600 mb-2"><span className="font-bold text-gray-900">{users[req.fromUid]?.name}</span> 提交了申請單：</p>
+                                        <div className={`p-3 rounded mb-3 text-sm border ${req.hours > 0 ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200'}`}>
+                                            <div className={`font-bold ${req.hours > 0 ? 'text-orange-800' : 'text-green-800'}`}>{req.hours > 0 ? '加班' : '補休'}時數: {Math.abs(req.hours)} 小時</div>
+                                            <div className={req.hours > 0 ? 'text-orange-700' : 'text-green-700'}>事由: {req.reason}</div>
+                                        </div>
+                                        <div className="flex gap-3"><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg font-bold hover:bg-red-50 hover:text-red-600 hover:border-red-200">駁回退件</button><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-purple-600 text-white py-2 rounded-lg font-bold shadow hover:bg-purple-700">核准生效</button></div>
+                                    </>
+                                )}
+
+                                {/* 換假邀請 */}
+                                {req.type === 'swap' && (
                                     <>
                                         <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg text-gray-800">收到換假邀請</h3><span className="text-xs bg-gray-100 px-2 py-1 rounded text-gray-500">{req.date}</span></div>
                                         <p className="text-gray-600 mb-3"><span className="font-bold text-gray-900">{users[req.fromUid]?.name}</span> 想要跟您交換當天的班表。</p>
-                                        <div className="flex gap-3"><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg font-bold">婉拒</button><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow">同意交換</button></div>
+                                        <div className="flex gap-3"><button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-50">婉拒</button><button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow hover:bg-indigo-700">同意交換</button></div>
                                     </>
                                 )}
                             </div>
@@ -443,19 +493,35 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
       alert("換假申請已送出！");
   };
 
+  // 🔴 核心邏輯：判斷是誰填寫時數
   const handleOTSave = async (numHours, remark) => {
       const uid = otModalData.uid;
+      const actionType = numHours > 0 ? '加班' : '補休';
+
       if (isAdmin && uid !== currentUser.uid) {
+        // 情況 A: 管理員幫員工填寫 -> 發送確認單給員工
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'ot_confirm', uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
         const targetUser = safeUsers.find(u => u.uid === uid);
-        const actionType = numHours > 0 ? '加班' : '補休';
         if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `🕒 管理員已登錄您的${actionType}時數\n日期: ${dateStr}\n時數: ${Math.abs(numHours)}hr\n請至系統確認。`);
-        alert("已送出時數確認請求給員工"); 
-      } else {
+        alert("已送出時數確認單給員工"); 
+      } 
+      else if (!isAdmin && uid === currentUser.uid) {
+        // 情況 B: 員工自行填寫 -> 發送審核單給管理員
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUser.uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
+        
+        // 找出所有管理員發送 LINE 通知
+        const adminLineIds = safeUsers.filter(u => u.isAdmin || u.email === ADMIN_EMAIL).map(u => u.lineUserId).filter(id => id);
+        if(adminLineIds.length > 0) sendLineNotification(adminLineIds, `🔔【審核通知】\n員工 ${currentUserInfo.name || '某員工'} 申請了 ${dateStr} 的 ${actionType} (${Math.abs(numHours)}hr)\n請至系統通知中心核准。`);
+        
+        alert("已送出申請，請等候管理員核准！");
+      } 
+      else {
+        // 情況 C: 管理員幫自己填寫 -> 直接生效
         let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); 
-        const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: isAdmin };
+        const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
         if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
         update({ assignments: next });
+        alert("時數已直接生效！");
       }
       setOtModalData(null); 
   };
@@ -490,7 +556,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
             const otValue = Number(assign?.otHours);
             const isOT = otValue > 0;
 
-            // 計算已使用請假天數 (排除目前編輯的這天)
             const getLeaveCount = (leaveId, prefix) => {
                 let count = 0;
                 Object.keys(shifts).forEach(d => {
@@ -509,7 +574,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
                   <div className="flex gap-2">
                     {showSwapBtn && <button onClick={() => requestSwap(currentUser.uid, u.uid)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-[10px] flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft className="w-3 h-3"/> 換假</button>}
                     
-                    <button onClick={() => openOTModal(u)} disabled={!canEdit} className={`px-3 py-1.5 text-xs rounded border ${!canEdit ? 'bg-gray-100' : (hasOT ? (isOT ? 'bg-orange-100 text-orange-700 font-bold' : 'bg-green-100 text-green-700 font-bold') : 'bg-white text-gray-500')}`}><Clock className="w-3.5 h-3.5" /> {hasOT ? (isOT ? `+${otValue}h` : `${otValue}h`) : '加/補休'}</button>
+                    <button onClick={() => openOTModal(u)} disabled={!canEdit} className={`px-3 py-1.5 text-xs rounded border ${!canEdit ? 'bg-gray-100' : (hasOT ? (isOT ? 'bg-orange-100 text-orange-700 font-bold' : 'bg-green-100 text-green-700 font-bold') : 'bg-white text-gray-500 hover:bg-gray-50')}`}><Clock className="w-3.5 h-3.5" /> {hasOT ? (isOT ? `+${otValue}h` : `${otValue}h`) : '申請時數'}</button>
                     
                     {isAdmin && <button onClick={() => toggle(u.uid, 'LEAVE', 'official')} className="px-3 py-1.5 text-xs rounded border bg-gray-100 text-gray-600 hover:bg-gray-200">排休</button>}
                     <button disabled={!canEdit} onClick={() => toggle(u.uid, 'LEAVE', 'rostered')} className={`px-4 py-2 text-xs rounded font-bold ${!canEdit ? 'bg-gray-200 text-gray-400' : (isRostered ? 'bg-red-600 text-white ring-2 ring-red-200' : 'bg-red-500 text-white hover:bg-red-600')}`}>{isRostered ? '已排休' : '自畫假'}</button>
@@ -525,7 +590,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
                     
                     <div className="grid grid-cols-3 gap-2">
                         {leaveTypes.filter(lt=>lt.id!=='rostered' && lt.id!=='official' && lt.id!=='comp').map(lt => {
-                            // 🔴 防呆邏輯計算
                             let limitReached = false;
                             let limitMsg = "";
 
@@ -538,7 +602,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
                                 if (getLeaveCount('personal', yearStr) >= 14) { limitReached = true; limitMsg = "事假一年最多請 14 天，已達上限！"; }
                             }
 
-                            // 🔴 按鈕樣式：如果是管理員，即使超額也顯示為黃色警告(可點擊)；若是員工則為灰色鎖定(不可點擊)
                             const btnClass = limitReached 
                                 ? (isAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed')
                                 : 'bg-white hover:bg-gray-100 shadow-sm';
@@ -548,7 +611,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
                                     key={lt.id} 
                                     onClick={() => {
                                         if (limitReached) { 
-                                            // 🔴 管理員強制放行機制
                                             if (isAdmin) {
                                                 if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return;
                                             } else {
@@ -582,7 +644,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, companyEvents, setEditingEvent, 
   );
 };
 
-// --- 2. Salary View (時數統計與明細) ---
+// --- 2. Salary View (曆年制統計) ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
@@ -590,24 +652,30 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
   const visibleUsers = useMemo(() => isAdmin ? safeUsers : safeUsers.filter(u => u.uid === currentUser.uid), [users, currentUser, isAdmin]);
 
   const calc = (uid) => {
+    // 🔴 核心邏輯修改：取得選擇月份的「年份」(例如 "2026")
+    const targetYear = targetMonth.substring(0, 4);
+
     let monthStats = { ot: 0, leaves: {} };
-    let totalStats = { otEarned: 0, compHoursUsed: 0 }; 
+    let yearStats = { otEarned: 0, compHoursUsed: 0 }; 
     let otHistory = []; 
 
     Object.keys(shifts).forEach(date => {
+        // 🔴 核心邏輯修改：只計算「同年」的資料 (1/1 - 12/31)
+        if (!date.startsWith(targetYear)) return; 
+
         const data = shifts[date]; if(data.isClosed) return;
         const assign = data.assignments?.find(a => a.uid === uid); if(!assign) return;
         
         if(assign.type === 'LEAVE' && assign.leaveType === 'comp') { 
             const used = (assign.leaveHours !== undefined && assign.leaveHours !== null) ? assign.leaveHours : 8; 
-            totalStats.compHoursUsed += parseFloat(used); 
+            yearStats.compHoursUsed += parseFloat(used); 
             otHistory.push({ date, hours: -parseFloat(used), reason: '舊版補休單' });
         }
         
         if(assign.otHours && assign.otConfirmed) { 
             const hrs = parseFloat(assign.otHours);
-            if (hrs > 0) totalStats.otEarned += hrs;
-            if (hrs < 0) totalStats.compHoursUsed += Math.abs(hrs);
+            if (hrs > 0) yearStats.otEarned += hrs;
+            if (hrs < 0) yearStats.compHoursUsed += Math.abs(hrs);
 
             if(date.startsWith(targetMonth)) {
                  if (hrs > 0) monthStats.ot += hrs;
@@ -624,8 +692,8 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
     });
 
     otHistory.sort((a, b) => b.date.localeCompare(a.date));
-    const balance = totalStats.otEarned - totalStats.compHoursUsed;
-    return { monthStats, totalStats, balance, otHistory };
+    const balance = yearStats.otEarned - yearStats.compHoursUsed;
+    return { monthStats, yearStats, balance, otHistory, targetYear };
   };
 
   return (
@@ -635,10 +703,17 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
           const s = calc(u.uid);
           return (
             <div key={u.uid} className="bg-white p-4 rounded shadow-sm border">
-              <div className="flex justify-between items-start mb-2 border-b pb-2"><div className="font-bold text-lg">{u.name}</div><div className="text-right"><div className="text-xs text-gray-400">剩餘可休 (跨年累計)</div><div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{s.balance} <span className="text-xs">hr</span></div></div></div>
+              <div className="flex justify-between items-start mb-2 border-b pb-2">
+                  <div className="font-bold text-lg">{u.name}</div>
+                  <div className="text-right">
+                      {/* 🔴 顯示更改為「本年度累計」 */}
+                      <div className="text-xs text-gray-400">剩餘可休 (本年度 {s.targetYear} 累計)</div>
+                      <div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{s.balance} <span className="text-xs">hr</span></div>
+                  </div>
+              </div>
               
               <div className="space-y-3 text-sm">
-                <div className="bg-orange-50 p-2 rounded border border-orange-100 flex justify-between text-xs text-gray-600"><span>累積加班: {s.totalStats.otEarned} hr</span><span>已扣抵補休: {s.totalStats.compHoursUsed} hr</span></div>
+                <div className="bg-orange-50 p-2 rounded border border-orange-100 flex justify-between text-xs text-gray-600"><span>累積加班: {s.yearStats.otEarned} hr</span><span>已扣抵補休: {s.yearStats.compHoursUsed} hr</span></div>
                 
                 {s.otHistory.length > 0 && (
                     <div className="mt-3 bg-white p-2 rounded border border-gray-200">
