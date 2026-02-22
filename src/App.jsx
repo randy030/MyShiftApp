@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v4.6 (Leave Hours & UX)"; 
+const CURRENT_VERSION = "v4.8 (Payroll Deductions)"; 
 
 const UPDATE_LOGS = [
-  { version: "v4.6", date: "2026-02-22", content: "體驗升級：員工送出申請後自動關閉視窗退回月曆；特休/病假/生理假/事假新增時數輸入，並強制轉換為扣除統計。" },
-  { version: "v4.5", date: "2026-02-22", content: "體驗升級：申請補休自動帶入剩餘時數與扣薪警告。" }
+  { version: "v4.8", date: "2026-02-22", content: "HR優化：病假/事假支援「時數抵扣」或「月底扣薪」二選一；統計頁面新增月底作帳專用的「扣薪總計區塊」。" },
+  { version: "v4.7", date: "2026-02-22", content: "體驗與邏輯升級：送出申請後自動關閉視窗退回月曆。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -76,7 +76,7 @@ const checkEventOnDate = (event, checkDateStr) => {
     return false;
 };
 
-// --- OT Modal (加班/補休管理視窗) ---
+// --- OT Modal ---
 const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
     const [hours, setHours] = useState('');
     const [reason, setReason] = useState('');
@@ -450,8 +450,12 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
                                 <span>{allUsers[a.uid]?.name}</span>
                                 <span className="bg-white/80 px-1 rounded text-[10px] border shadow-sm flex items-center gap-1">
                                     {leaveTypes.find(t=>t.id===a.leaveType)?.label} 
-                                    {/* 🔴 在月曆上顯示被扣除的時數 */}
-                                    {a.leaveHours && <span className="text-red-500 font-mono">-{a.leaveHours}h</span>}
+                                    {/* 🔴 在月曆上明確標示是扣抵還是扣薪 */}
+                                    {a.leaveHours && (
+                                        <span className={`font-mono text-[9px] px-1 rounded ${a.useComp ? 'bg-indigo-100 text-indigo-700' : 'bg-red-100 text-red-700'}`}>
+                                            -{a.leaveHours}h{a.useComp ? '抵' : '扣'}
+                                        </span>
+                                    )}
                                 </span>
                             </div>
                             {subName && <div className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1 bg-white/50 px-1 rounded"><ArrowRightLeft size={10}/> {subName} 代</div>}
@@ -485,6 +489,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
   const yearStr = dateStr.substring(0, 4);
   const monthStr = dateStr.substring(0, 7);
 
+  // 🔴 輔助函式：計算年度剩餘時數 (僅扣除有選擇 useComp 的時數)
   const getYearlyBalance = (uid, yearToFind) => {
       let earned = 0; let used = 0;
       Object.keys(shifts).forEach(d => {
@@ -492,8 +497,11 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
           const data = shifts[d]; if(data.isClosed) return;
           const assign = data.assignments?.find(a => a.uid === uid);
           if (!assign) return;
-          if (assign.type === 'LEAVE' && assign.leaveType === 'comp') {
-              used += parseFloat((assign.leaveHours !== undefined && assign.leaveHours !== null) ? assign.leaveHours : 8);
+          
+          if (assign.type === 'LEAVE') {
+              if (assign.useComp && assign.leaveHours) {
+                  used += parseFloat(assign.leaveHours);
+              }
           }
           if (assign.otHours && assign.otConfirmed) {
               const hrs = parseFloat(assign.otHours);
@@ -513,25 +521,36 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
 
   const cancelLeave = (uid) => { if (uid !== currentUser.uid && !isAdmin) return alert("無權限"); let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); if(idx>=0) { next.splice(idx, 1); update({ assignments: next }); } };
   
-  // 🔴 特休、病假、生理假、事假 強制要求輸入扣除時數
+  // 🔴 核心請假邏輯：特休、病假、生理假、事假 二選一抵扣
   const toggle = (uid, type, lType=null, subUid=null) => {
     if(uid!==currentUser.uid && !isAdmin) return alert("無權限"); if(isClosed) return alert("本日店休");
     let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid);
     if (lType === 'rostered') { const getRosteredCount = () => { const prefix = dateStr.substring(0, 7); let count = 0; Object.keys(shifts).forEach(d => { if (d.startsWith(prefix) && shifts[d].assignments?.some(a=>a.uid===uid && a.type==='LEAVE' && a.leaveType==='rostered')) count++; }); return count; }; if (!isAdmin && (!next[idx] || next[idx].leaveType !== 'rostered') && getRosteredCount() >= 3) return alert("本月自選畫休 (排休) 已達 3 天上限"); }
     
     let leaveHours = 0;
+    let useComp = false; // 是否使用時數抵扣
+
     // 判斷是否為需要輸入時數的假別
     if (['annual', 'sick', 'menstrual', 'personal'].includes(lType)) {
-        const leaveName = leaveTypes.find(t=>t.id===lType)?.label || '該假別';
-        const p = prompt(`請輸入「${leaveName}」的請假時數 (系統將自動以扣除計算):`, "8");
+        const typeInfo = leaveTypes.find(t=>t.id===lType);
+        const leaveName = typeInfo?.label || '該假別';
+        
+        const p = prompt(`請輸入「${leaveName}」的請假時數 (純數字):`, "8");
         if (p === null) return;
-        // 強制轉換為正數保存，在統計顯示時加上負號
         leaveHours = Math.abs(parseFloat(p));
         if (isNaN(leaveHours) || leaveHours <= 0) return alert("請輸入大於0的有效數字！");
+
+        // 若是病假/事假，讓使用者選擇是否抵扣時數
+        if (['sick', 'personal'].includes(lType)) {
+            useComp = window.confirm(`【${leaveName} ${leaveHours}小時 扣抵方式】\n\n👉 按【確定】：使用「剩餘加/補休時數」扣抵\n👉 按【取消】：不扣時數，月底結算扣薪`);
+        }
     }
 
     const newEntry = { uid, type, leaveType: lType }; 
-    if (leaveHours > 0) newEntry.leaveHours = leaveHours; // 存入資料庫
+    if (leaveHours > 0) {
+        newEntry.leaveHours = leaveHours; 
+        newEntry.useComp = useComp; 
+    }
     if (subUid) newEntry.subUid = subUid;
 
     if(idx>=0) next[idx] = newEntry; else next.push(newEntry);
@@ -546,6 +565,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
       alert("換假申請已送出！");
   };
 
+  // 🔴 核心邏輯：防呆覆寫與自動關閉視窗
   const handleOTSave = async (numHours, remark) => {
       const uid = otModalData.user.uid;
       const actionType = numHours > 0 ? '加班' : '補休';
@@ -557,7 +577,10 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'ot_confirm', uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
         const targetUser = safeUsers.find(u => u.uid === uid);
         if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `🕒 管理員已登錄您的${actionType}時數\n日期: ${dateStr}\n時數: ${Math.abs(numHours)}hr\n請至系統確認。`);
-        alert("已送出時數確認單給員工"); 
+        
+        setOtModalData(null); 
+        onClose(); // 關閉主視窗退回月曆
+        setTimeout(() => alert("已送出時數確認單給員工"), 100);
       } 
       else if (!isAdmin && uid === currentUser.uid) {
         const existingReq = requests.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
@@ -567,19 +590,18 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         const adminLineIds = safeUsers.filter(u => u.isAdmin || u.email === ADMIN_EMAIL).map(u => u.lineUserId).filter(id => id);
         if(adminLineIds.length > 0) sendLineNotification(adminLineIds, `🔔【審核通知】\n員工 ${currentUserInfo.name || '某員工'} 申請了 ${dateStr} 的 ${actionType} (${Math.abs(numHours)}hr)\n請至系統通知中心核准。`);
         
-        // 🔴 員工自己申請後，提示並直接關閉所有視窗退回月曆
-        alert("已送出審核明細！");
         setOtModalData(null);
-        onClose(); // 關閉外層 Modal
-        return; 
+        onClose(); // 關閉主視窗退回月曆
+        setTimeout(() => alert("已送出審核明細！請等候管理員核准。"), 100);
       } 
       else {
         let next = [...(dayData.assignments||[])]; const idx = next.findIndex(a=>a.uid===uid); 
         const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
         if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
         update({ assignments: next });
+        setOtModalData(null); 
+        onClose(); // 直接生效也退回月曆
       }
-      setOtModalData(null); 
   };
 
   const openOTModal = (user) => { 
@@ -674,8 +696,12 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                         <div>
                             <span className="font-medium text-gray-900 flex items-center gap-1">
                                 狀態: {leaveTypes.find(t=>t.id===assign.leaveType)?.label || '休假'}
-                                {/* 🔴 顯示假別的扣除時數 */}
-                                {assign.leaveHours && <span className="text-red-600 font-mono font-bold bg-white/60 px-1 rounded">-{assign.leaveHours}h</span>}
+                                {/* 🔴 顯示假別的扣除時數狀態 */}
+                                {assign.leaveHours && (
+                                    <span className={`font-mono font-bold bg-white/60 px-1 rounded ${assign.useComp ? 'text-indigo-600' : 'text-red-600'}`}>
+                                        -{assign.leaveHours}h{assign.useComp ? '抵扣' : '扣薪'}
+                                    </span>
+                                )}
                             </span>
                             {assign.subUid && <span className="ml-2 text-gray-600 font-bold">➤ {safeUsers.find(sub=>sub.uid===assign.subUid)?.name} 代班</span>}
                         </div>
@@ -689,7 +715,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                     <div className="flex gap-2 items-center mb-2"><span className="text-xs text-gray-600">代班:</span><select id={`sub-select-${u.uid}`} className="text-xs border rounded p-1 flex-1"><option value="">-- 無代班人 --</option>{availableSubs.map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}</select></div>
                     
                     <div className="grid grid-cols-3 gap-2">
-                        {leaveTypes.filter(lt=>lt.id!=='rostered' && lt.id!=='official' && lt.id!=='comp').map(lt => {
+                        {leaveTypes.filter(lt=>lt.id!=='rostered' && lt.id!=='official').map(lt => {
                             let limitReached = false;
                             let limitMsg = "";
 
@@ -762,12 +788,34 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
         const data = shifts[date]; if(data.isClosed) return;
         const assign = data.assignments?.find(a => a.uid === uid); if(!assign) return;
         
-        if(assign.type === 'LEAVE' && assign.leaveType === 'comp') { 
-            const used = (assign.leaveHours !== undefined && assign.leaveHours !== null) ? assign.leaveHours : 8; 
-            yearStats.compHoursUsed += parseFloat(used); 
-            otHistory.push({ date, hours: -parseFloat(used), reason: '舊版補休單' });
+        // 🔴 統計請假時數
+        if(assign.type === 'LEAVE') { 
+            const lType = assign.leaveType || 'unknown'; 
+            const typeInfo = leaveTypes.find(t => t.id === lType);
+            const hrs = assign.leaveHours ? parseFloat(assign.leaveHours) : 0;
+            
+            // 如果員工選擇用時數抵扣 (useComp = true)
+            if (assign.useComp && hrs > 0) {
+                yearStats.compHoursUsed += hrs;
+                otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label}」抵扣` });
+            }
+
+            // 月底統計
+            if(date.startsWith(targetMonth)) {
+                 if(!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
+                 monthStats.leaves[lType].days += 1;
+                 monthStats.leaves[lType].hours += hrs;
+                 
+                 // 分類是「時數抵扣」還是「扣薪」
+                 if (assign.useComp) {
+                     monthStats.leaves[lType].compHours += hrs;
+                 } else {
+                     monthStats.leaves[lType].deductHours += hrs;
+                 }
+            }
         }
         
+        // 統計加班/補休
         if(assign.otHours && assign.otConfirmed) { 
             const hrs = parseFloat(assign.otHours);
             if (hrs > 0) yearStats.otEarned += hrs;
@@ -777,16 +825,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
                  if (hrs > 0) monthStats.ot += hrs;
             }
             otHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
-        }
-
-        if(date.startsWith(targetMonth)) {
-             if(assign.type === 'LEAVE' && assign.leaveType !== 'comp') { 
-                 const lType = assign.leaveType || 'unknown'; 
-                 // 🔴 修改：統計假別天數與時數
-                 if(!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0 };
-                 monthStats.leaves[lType].days += 1;
-                 if(assign.leaveHours) monthStats.leaves[lType].hours += assign.leaveHours;
-             }
         }
     });
 
@@ -800,6 +838,10 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
       <div className="bg-white p-4 rounded-xl border flex justify-between items-center"><h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2"/></div>
       <div className="grid gap-3">{visibleUsers.map(u => {
           const s = calc(u.uid);
+          
+          // 🔴 檢查是否有需要扣薪的時數 (過濾出有設定為 deduct: true 的假別)
+          const needsDeduction = leaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
+
           return (
             <div key={u.uid} className="bg-white p-4 rounded shadow-sm border">
               <div className="flex justify-between items-start mb-2 border-b pb-2">
@@ -811,7 +853,23 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
               </div>
               
               <div className="space-y-3 text-sm">
-                <div className="bg-orange-50 p-2 rounded border border-orange-100 flex justify-between text-xs text-gray-600"><span>累積加班: {s.yearStats.otEarned} hr</span><span>已扣抵補休: {s.yearStats.compHoursUsed} hr</span></div>
+                
+                {/* 🔴 本月作帳用：扣薪警告區塊 */}
+                {needsDeduction && (
+                    <div className="bg-red-50 p-2.5 rounded-lg border border-red-200">
+                        <div className="text-xs font-bold text-red-800 mb-1">⚠️ 本月需扣薪總計 (未用時數抵扣)：</div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-red-700 font-bold">
+                            {leaveTypes.map(lt => {
+                                if (lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0) {
+                                    return <span key={lt.id}>{lt.label}: <span className="text-lg">{s.monthStats.leaves[lt.id].deductHours}</span>h</span>
+                                }
+                                return null;
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                <div className="bg-orange-50 p-2 rounded border border-orange-100 flex justify-between text-xs text-gray-600"><span>累積加班: {s.yearStats.otEarned} hr</span><span>已扣抵(含請假): {s.yearStats.compHoursUsed} hr</span></div>
                 
                 {s.otHistory.length > 0 && (
                     <div className="mt-3 bg-white p-2 rounded border border-gray-200">
@@ -834,13 +892,17 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
                     <div className="text-xs font-bold text-gray-500 mb-1">本月 ({targetMonth}) 各類請假明細</div>
                     {Object.keys(s.monthStats.leaves).length > 0 ? (
                         <div className="grid grid-cols-2 gap-2 mt-1">
-                            {/* 🔴 顯示假別天數與扣除時數 */}
                             {Object.entries(s.monthStats.leaves).map(([typeId, data]) => { 
                                 const typeInfo = leaveTypes.find(t => t.id === typeId); 
                                 return (
-                                    <span key={typeId} className={`text-xs px-2 py-1 rounded bg-white border ${typeInfo?.deduct ? 'text-red-500 border-red-200' : 'text-gray-600'}`}>
-                                        {typeInfo?.label || '假'}: {data.days}天 {data.hours > 0 ? <span className="font-mono ml-1 font-bold">(-{data.hours}h)</span> : ''}
-                                    </span>
+                                    <div key={typeId} className={`text-xs px-2 py-1.5 rounded bg-white border ${typeInfo?.deduct ? 'border-red-200' : 'border-gray-200'}`}>
+                                        <div className={`font-bold ${typeInfo?.deduct ? 'text-red-600' : 'text-gray-700'}`}>{typeInfo?.label || '假'}: {data.days}天 ({data.hours}h)</div>
+                                        {data.hours > 0 && (
+                                            <div className="text-[10px] text-gray-500 mt-0.5">
+                                                時數抵扣: {data.compHours}h / 月底扣薪: {data.deductHours}h
+                                            </div>
+                                        )}
+                                    </div>
                                 ); 
                             })}
                         </div>
