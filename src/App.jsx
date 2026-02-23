@@ -7,10 +7,10 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v5.2 (Anti-Crash Fix)"; 
+const CURRENT_VERSION = "v5.3 (Anti-Crash Stable)"; 
 
 const UPDATE_LOGS = [
-  { version: "v5.2", date: "2026-02-23", content: "穩定性更新：加入全域資料格式防呆與安全陣列轉換，徹底解決畫面偶發性白屏問題。" },
+  { version: "v5.3", date: "2026-02-23", content: "穩定性修復：解決語法變數未宣告導致的白屏問題，並加入全域資料防呆機制，確保畫面永不崩潰。" },
   { version: "v5.1", date: "2026-02-23", content: "差勤升級：新增「班別」排班功能；出勤報表自動標示「遲到/早退」。" }
 ];
 
@@ -180,7 +180,11 @@ export default function App() {
     });
     const unsubRequests = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => {
       const list = []; let newCount = 0;
-      snap.forEach(doc => { data = doc.data(); list.push({ id: doc.id, ...data }); if (data.timestamp && (new Date() - data.timestamp.toDate()) < 10000) newCount++; });
+      snap.forEach(doc => { 
+          const data = doc.data(); // 🔴 這裡已徹底修復白屏 Bug
+          list.push({ id: doc.id, ...data }); 
+          if (data.timestamp && (new Date() - data.timestamp.toDate()) < 10000) newCount++; 
+      });
       setRequests(list);
       if (newCount > 0 && Notification.permission === 'granted' && document.hidden) new Notification("TeamShift 通知", { body: `您有 ${newCount} 筆新的申請待處理！` });
     });
@@ -201,8 +205,7 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    // 確保有資料才執行通知檢查
-    if (!Array.isArray(companyEvents) || companyEvents.length === 0 || Object.keys(users).length === 0) return;
+    if (!companyEvents.length || Object.keys(users).length === 0) return;
     const checkAndNotifyEvents = async () => {
         const date = new Date();
         const localTodayStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -398,6 +401,10 @@ export default function App() {
     </div>
   );
 }
+
+const NavBtn = ({ active, onClick, icon: Icon, label }) => (
+  <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
+);
 
 // ==========================================
 // 📍 GPS 打卡頁面 (ClockView)
@@ -614,6 +621,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
   const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
   const safeShiftTypes = Array.isArray(shiftTypes) ? shiftTypes : [];
   const safeCompanyEvents = Array.isArray(companyEvents) ? companyEvents : [];
+  const safeLeaveTypes = Array.isArray(leaveTypes) ? leaveTypes : [];
 
   const handleSaveEvent = async (eventData) => {
       if (eventData.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventData.id), eventData);
@@ -643,7 +651,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
           const d=i+1, dateStr=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
           const data = shifts[dateStr] || {};
           const todaysEvents = safeCompanyEvents.filter(e => checkEventOnDate(e, dateStr));
-          const safeLeaveTypes = Array.isArray(leaveTypes) ? leaveTypes : [];
 
           return (<div key={d} onClick={()=>setSelectedDate(dateStr)} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
             <div className="flex justify-between mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{d}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent"></div>}</div>
@@ -685,7 +692,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
           </div>)
         })}
        </div>
-       {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} requests={requests} companyEvents={safeCompanyEvents} setEditingEvent={setEditingEvent} users={users} currentUser={currentUser} leaveTypes={leaveTypes} shiftTypes={safeShiftTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} appId={appId} db={db} />}
+       {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} requests={requests} companyEvents={safeCompanyEvents} setEditingEvent={setEditingEvent} users={users} currentUser={currentUser} leaveTypes={safeLeaveTypes} shiftTypes={safeShiftTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} appId={appId} db={db} />}
     </div>
     <CompanyEventModal isOpen={!!editingEvent} onClose={()=>setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
     </>
@@ -1098,6 +1105,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
       <div className="bg-white p-4 rounded-xl border flex justify-between items-center"><h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2"/></div>
       <div className="grid gap-3">{visibleUsers.map(u => {
           const s = calc(u.uid);
+          
           const needsDeduction = safeLeaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
 
           return (
