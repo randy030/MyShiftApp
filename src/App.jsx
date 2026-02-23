@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v5.3 (Anti-Crash Stable)"; 
+const CURRENT_VERSION = "v5.4 (Clean Calendar)"; 
 
 const UPDATE_LOGS = [
-  { version: "v5.3", date: "2026-02-23", content: "穩定性修復：解決語法變數未宣告導致的白屏問題，並加入全域資料防呆機制，確保畫面永不崩潰。" },
-  { version: "v5.1", date: "2026-02-23", content: "差勤升級：新增「班別」排班功能；出勤報表自動標示「遲到/早退」。" }
+  { version: "v5.4", date: "2026-02-23", content: "視覺優化：隱藏月曆上的「班別」顯示，讓版面回歸乾淨，確保能「一眼看出誰休假」。" },
+  { version: "v5.3", date: "2026-02-23", content: "穩定性修復：解決語法變數未宣告導致的白屏問題，並加入全域資料防呆機制。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -181,7 +181,7 @@ export default function App() {
     const unsubRequests = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => {
       const list = []; let newCount = 0;
       snap.forEach(doc => { 
-          const data = doc.data(); // 🔴 這裡已徹底修復白屏 Bug
+          const data = doc.data(); 
           list.push({ id: doc.id, ...data }); 
           if (data.timestamp && (new Date() - data.timestamp.toDate()) < 10000) newCount++; 
       });
@@ -609,7 +609,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
     );
 };
 
-// --- Calendar View ---
+// --- 1. Calendar View (🔴 已隱藏 WORK 的班別顯示) ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEvents, users, allUsers, currentUser, leaveTypes, shiftTypes, sendLineNotification, appId, db }) => {
   const [selectedDate, setSelectedDate] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null); 
@@ -619,7 +619,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
   const { firstDay, days } = getMonthData(year, month);
   const sortedUserIds = useMemo(() => Object.keys(allUsers).sort(), [allUsers]);
   const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
-  const safeShiftTypes = Array.isArray(shiftTypes) ? shiftTypes : [];
   const safeCompanyEvents = Array.isArray(companyEvents) ? companyEvents : [];
   const safeLeaveTypes = Array.isArray(leaveTypes) ? leaveTypes : [];
 
@@ -660,6 +659,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
             {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded flex items-center gap-1 font-bold shadow"><Store size={14} /> 店休</div></div> : 
               <div className="space-y-1 overflow-y-auto flex-1">
                 {Array.isArray(data.assignments) && data.assignments.map((a,ix)=>{ 
+                    // 🔴 視覺優化：只顯示 LEAVE(請假)，隱藏 WORK 的班別顯示
                     if (a.type === 'LEAVE') {
                         const pColor = getUserColor(a.uid); 
                         const subName = a.subUid ? allUsers[a.subUid]?.name : null;
@@ -677,14 +677,6 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
                                 {subName && <div className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1 bg-white/50 px-1 rounded"><ArrowRightLeft size={10}/> {subName} 代</div>}
                             </div>
                         )
-                    } else if (a.type === 'WORK' && a.shiftCode) {
-                        const shiftLabel = safeShiftTypes.find(st => st.id === a.shiftCode)?.label || a.shiftCode;
-                        return (
-                            <div key={ix} className="text-[11px] px-1 py-0.5 rounded border border-gray-200 bg-white text-gray-700 flex justify-between items-center shadow-sm mb-0.5">
-                                <span className="font-bold truncate">{allUsers[a.uid]?.name}</span>
-                                <span className="bg-gray-100 text-gray-500 px-1 rounded font-mono shrink-0">{shiftLabel}</span>
-                            </div>
-                        );
                     }
                     return null;
                 })}
@@ -692,7 +684,7 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
           </div>)
         })}
        </div>
-       {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} requests={requests} companyEvents={safeCompanyEvents} setEditingEvent={setEditingEvent} users={users} currentUser={currentUser} leaveTypes={safeLeaveTypes} shiftTypes={safeShiftTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} appId={appId} db={db} />}
+       {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} shifts={shifts} requests={requests} companyEvents={safeCompanyEvents} setEditingEvent={setEditingEvent} users={users} currentUser={currentUser} leaveTypes={safeLeaveTypes} shiftTypes={shiftTypes} userColors={USER_COLORS} sortedUserIds={sortedUserIds} sendLineNotification={sendLineNotification} appId={appId} db={db} />}
     </div>
     <CompanyEventModal isOpen={!!editingEvent} onClose={()=>setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
     </>
@@ -1105,7 +1097,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
       <div className="bg-white p-4 rounded-xl border flex justify-between items-center"><h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2"/></div>
       <div className="grid gap-3">{visibleUsers.map(u => {
           const s = calc(u.uid);
-          
           const needsDeduction = safeLeaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
 
           return (
