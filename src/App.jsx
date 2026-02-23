@@ -7,10 +7,10 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v5.4 (Clean Calendar)"; 
+const CURRENT_VERSION = "v5.4 (Calendar UI)"; 
 
 const UPDATE_LOGS = [
-  { version: "v5.4", date: "2026-02-23", content: "視覺優化：隱藏月曆上的「班別」顯示，讓版面回歸乾淨，確保能「一眼看出誰休假」。" },
+  { version: "v5.4", date: "2026-02-23", content: "視覺優化：月曆請假名單自動縮寫為2字，代班資訊移至下方並高亮，提升整體辨識度。" },
   { version: "v5.3", date: "2026-02-23", content: "穩定性修復：解決語法變數未宣告導致的白屏問題，並加入全域資料防呆機制。" }
 ];
 
@@ -609,7 +609,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
     );
 };
 
-// --- 1. Calendar View (🔴 已隱藏 WORK 的班別顯示) ---
+// --- Calendar View ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEvents, users, allUsers, currentUser, leaveTypes, shiftTypes, sendLineNotification, appId, db }) => {
   const [selectedDate, setSelectedDate] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null); 
@@ -659,22 +659,29 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
             {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded flex items-center gap-1 font-bold shadow"><Store size={14} /> 店休</div></div> : 
               <div className="space-y-1 overflow-y-auto flex-1">
                 {Array.isArray(data.assignments) && data.assignments.map((a,ix)=>{ 
-                    // 🔴 視覺優化：只顯示 LEAVE(請假)，隱藏 WORK 的班別顯示
                     if (a.type === 'LEAVE') {
                         const pColor = getUserColor(a.uid); 
-                        const subName = a.subUid ? allUsers[a.subUid]?.name : null;
+                        // 🔴 取姓名最後兩個字
+                        const fullName = allUsers[a.uid]?.name || '未知';
+                        const shortName = fullName.length > 2 ? fullName.slice(-2) : fullName;
+                        
+                        // 🔴 縮短代班人姓名
+                        const subNameFull = a.subUid ? allUsers[a.subUid]?.name : null;
+                        const subName = subNameFull ? (subNameFull.length > 2 ? subNameFull.slice(-2) : subNameFull) : null;
+
                         return (
-                            <div key={ix} className={`text-xs p-1.5 rounded border ${pColor} bg-opacity-20 mb-1`}>
-                                <div className="flex justify-between items-center font-bold">
-                                    <span className="truncate">{allUsers[a.uid]?.name}</span>
-                                    <span className="bg-white/80 px-1 rounded text-[10px] border shadow-sm flex items-center gap-1 shrink-0">
+                            <div key={ix} className={`p-1 rounded border ${pColor} bg-opacity-30 mb-1`}>
+                                <div className="flex justify-between items-center">
+                                    <span className="font-bold text-[11px] tracking-widest">{shortName}</span>
+                                    <span className="bg-white/90 px-1 rounded text-[10px] border shadow-sm flex items-center gap-0.5 shrink-0 font-bold">
                                         {safeLeaveTypes.find(t=>t.id===a.leaveType)?.label} 
                                         {a.leaveHours && a.leaveType !== 'menstrual' && (
-                                            <span className={`font-mono text-[9px] px-1 rounded ${a.useComp || a.leaveType === 'annual' ? 'bg-indigo-100 text-indigo-700' : 'bg-red-100 text-red-700'}`}>-{a.leaveHours}h</span>
+                                            <span className={`font-mono text-[9px] px-0.5 rounded ${a.useComp || a.leaveType === 'annual' ? 'bg-indigo-100 text-indigo-700' : 'bg-red-100 text-red-700'}`}>-{a.leaveHours}h</span>
                                         )}
                                     </span>
                                 </div>
-                                {subName && <div className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1 bg-white/50 px-1 rounded"><ArrowRightLeft size={10}/> {subName} 代</div>}
+                                {/* 🔴 代班人顯示在下方 */}
+                                {subName && <div className="text-[10px] text-gray-700 mt-0.5 flex items-center gap-1 bg-white/70 px-1 rounded w-max"><ArrowRightLeft size={9}/> {subName}代</div>}
                             </div>
                         )
                     }
@@ -1097,6 +1104,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser }) => 
       <div className="bg-white p-4 rounded-xl border flex justify-between items-center"><h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2"/></div>
       <div className="grid gap-3">{visibleUsers.map(u => {
           const s = calc(u.uid);
+          
           const needsDeduction = safeLeaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
 
           return (
