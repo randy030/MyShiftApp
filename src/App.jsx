@@ -7,11 +7,11 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v6.0 (Super App All-in-One)"; 
+const CURRENT_VERSION = "v6.1 (Dynamic Inventory)"; 
 
 const UPDATE_LOGS = [
-  { version: "v6.0", date: "2026-03-03", content: "架構大升級：將導覽列改為「下拉選單」收納管理功能，並正式加入「庫存盤點」模組，實現 All-in-One 管理。" },
-  { version: "v5.6", date: "2026-02-25", content: "權限架構升級：新增「主管」階級。主管可審核單據與查看出勤。" }
+  { version: "v6.1", date: "2026-03-03", content: "庫存升級：新增「庫存後台管理」模組，最高管理員可自行新增、修改、刪除盤點品項與單價，不再受限於預設名單。" },
+  { version: "v6.0", date: "2026-03-03", content: "架構大升級：將導覽列改為「下拉選單」收納管理功能，並正式加入「庫存盤點」模組。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -71,23 +71,12 @@ const DEFAULT_SHIFT_TYPES = [
   { id: '09O', label: '09O', start: '09:00', end: '21:00' }
 ];
 
-// 🔴 預設庫存品項 (從 PDF 擷取)
+// 🔴 預設庫存品項 (只在第一次初始化時使用)
 const DEFAULT_INVENTORY_ITEMS = [
   { id: 'i1', category: '茶葉類', name: '高山青茶', spec: '斤', price: 370 },
-  { id: 'i2', category: '茶葉類', name: '日月潭紅茶', spec: '斤', price: 350 },
-  { id: 'i3', category: '茶葉類', name: '大綠茶', spec: '斤', price: 285 },
-  { id: 'i4', category: '茶葉類', name: '春芽絕弦', spec: '斤', price: 480 },
-  { id: 'i5', category: '茶葉類', name: '烏龍綠茶', spec: '包', price: 61 },
   { id: 'i6', category: '果汁與糖漿', name: '梅果漿', spec: '包', price: 165 },
-  { id: 'i7', category: '果汁與糖漿', name: '冷凍草莓', spec: '包', price: 28 },
-  { id: 'i8', category: '果汁與糖漿', name: '冷凍百香', spec: '包', price: 16 },
-  { id: 'i9', category: '果汁與糖漿', name: '蘋果丁漿', spec: '罐', price: 350 },
-  { id: 'i10', category: '果汁與糖漿', name: '芒果醬', spec: '罐', price: 170 },
   { id: 'i11', category: '奶與粉類', name: '鮮奶', spec: '罐', price: 68 },
-  { id: 'i12', category: '奶與粉類', name: '液態奶精', spec: '罐', price: 200 },
-  { id: 'i13', category: '奶與粉類', name: '養樂多', spec: '罐', price: 5 },
-  { id: 'i14', category: '配料與其他', name: '大吸管(12mm)', spec: '包', price: 0 },
-  { id: 'i15', category: '配料與其他', name: '黑糖薑茶調味糖漿', spec: '桶', price: 210 }
+  { id: 'i14', category: '配料與包材', name: '大吸管(12mm)', spec: '包', price: 0 }
 ];
 
 const USER_COLORS = ['bg-yellow-100 text-yellow-900 border-yellow-300', 'bg-blue-100 text-blue-900 border-blue-300', 'bg-green-100 text-green-900 border-green-300', 'bg-purple-100 text-purple-900 border-purple-300', 'bg-orange-100 text-orange-900 border-orange-300', 'bg-pink-100 text-pink-900 border-pink-300', 'bg-teal-100 text-teal-900 border-teal-300', 'bg-red-100 text-red-900 border-red-300'];
@@ -177,20 +166,18 @@ export default function App() {
   const [requests, setRequests] = useState([]);
   const [leaveTypes, setLeaveTypes] = useState(DEFAULT_LEAVE_TYPES);
   const [shiftTypes, setShiftTypes] = useState(DEFAULT_SHIFT_TYPES);
+  
+  // 🔴 盤點品項的 State
+  const [inventoryItems, setInventoryItems] = useState(DEFAULT_INVENTORY_ITEMS);
+  
   const [storeConfig, setStoreConfig] = useState(null); 
   const [currentDate, setCurrentDate] = useState(new Date());
 
-  // 🔴 導覽列下拉選單控制
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
 
-  // 點擊外面關閉下拉選單
   useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setMenuOpen(false);
-      }
-    };
+    const handleClickOutside = (event) => { if (dropdownRef.current && !dropdownRef.current.contains(event.target)) setMenuOpen(false); };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
@@ -234,9 +221,36 @@ export default function App() {
     const unsubStore = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => {
       if (snap.exists()) setStoreConfig(snap.data());
     });
+    // 🔴 監聽庫存品項設定
+    const unsubInventory = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), (snap) => {
+      if (snap.exists() && Array.isArray(snap.data().items)) setInventoryItems(snap.data().items);
+    });
 
-    return () => { unsubUsers(); unsubShifts(); unsubRequests(); unsubSettings(); unsubShiftSettings(); unsubEvents(); unsubStore(); };
+    return () => { unsubUsers(); unsubShifts(); unsubRequests(); unsubSettings(); unsubShiftSettings(); unsubEvents(); unsubStore(); unsubInventory(); };
   }, [user]);
+
+  useEffect(() => {
+    if (!companyEvents.length || Object.keys(users).length === 0) return;
+    const checkAndNotifyEvents = async () => {
+        const date = new Date();
+        const localTodayStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const todaysEvents = companyEvents.filter(e => checkEventOnDate(e, localTodayStr));
+        for (const event of todaysEvents) {
+            const notifyId = `${localTodayStr}_${event.id}`;
+            const notifyRef = doc(db, 'artifacts', appId, 'public', 'data', 'notifications', notifyId);
+            const snap = await getDoc(notifyRef);
+            if (!snap.exists()) {
+                await setDoc(notifyRef, { sentAt: new Date() });
+                const allLineIds = Object.values(users).map(u => u.lineUserId).filter(id => id);
+                if(allLineIds.length > 0) {
+                    const msg = `🔔【公司重要通知】\n📌 ${event.title}\n📅 日期：${localTodayStr}${event.time ? `\n⏰ 時間：${event.time}` : ''}${event.note ? `\n📝 備註：${event.note}` : ''}`;
+                    sendLineNotification(allLineIds, msg);
+                }
+            }
+        }
+    };
+    checkAndNotifyEvents();
+  }, [companyEvents, users]);
 
   const handleLogin = async () => { try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (e) { alert("登入失敗: " + e.message); } };
   const handleLogout = () => { if(window.confirm("確定要登出系統嗎？")) { signOut(auth); } };
@@ -333,12 +347,10 @@ export default function App() {
           </div>
           
           <div className="flex gap-1 sm:gap-2 items-center">
-            {/* 🔴 主要選單：月曆、打卡、盤點 */}
             <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
             <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
             <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
             
-            {/* 🔴 下拉選單：管理工具 */}
             <div className="relative" ref={dropdownRef}>
                 <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors font-bold ${['salary','attendance','payroll','settings'].includes(view) ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
                     <Settings className="w-4 h-4" /> 
@@ -369,11 +381,16 @@ export default function App() {
       <main className="max-w-6xl mx-auto p-3 sm:p-4">
         {view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} shifts={shifts} requests={requests} companyEvents={companyEvents} users={activeUsers} allUsers={users} currentUser={user} currentUserInfo={currentUserInfo} leaveTypes={leaveTypes} shiftTypes={shiftTypes} sendLineNotification={sendLineNotification} appId={appId} db={db} />}
         {view === 'clock' && <ClockView currentUser={user} users={users} storeConfig={storeConfig} db={db} appId={appId} />}
-        {view === 'inventory' && <InventoryView db={db} appId={appId} />}
+        
+        {/* 🔴 將動態 InventoryItems 傳入 */}
+        {view === 'inventory' && <InventoryView db={db} appId={appId} inventoryItems={inventoryItems} />}
+        
         {view === 'attendance' && isPrivileged && <AttendanceView users={users} currentDate={currentDate} db={db} appId={appId} shifts={shifts} shiftTypes={shiftTypes} />}
         {view === 'salary' && <SalaryView users={activeUsers} shifts={shifts} currentDate={currentDate} leaveTypes={leaveTypes} currentUser={user} isPrivileged={isPrivileged} />}
         {view === 'payroll' && isSuperAdmin && <PayrollView users={users} currentDate={currentDate} />}
-        {view === 'settings' && <SettingsView users={users} currentUser={user} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} leaveTypes={leaveTypes} shiftTypes={shiftTypes} appId={appId} storeConfig={storeConfig} db={db} />}
+        
+        {/* 🔴 將動態 InventoryItems 傳入設定頁面 */}
+        {view === 'settings' && <SettingsView users={users} currentUser={user} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} leaveTypes={leaveTypes} shiftTypes={shiftTypes} inventoryItems={inventoryItems} appId={appId} storeConfig={storeConfig} db={db} />}
         
         {view === 'inbox' && (
             <div className="max-w-md mx-auto space-y-4 pb-20">
@@ -432,7 +449,6 @@ const NavBtn = ({ active, onClick, icon: Icon, label }) => (
   <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors font-bold ${active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
 );
 
-// 下拉選單項目元件
 const DropdownItem = ({ onClick, icon: Icon, label, active }) => (
     <button onClick={onClick} className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-indigo-50 font-bold transition-colors ${active ? 'text-indigo-600 bg-indigo-50/50' : 'text-gray-600'}`}>
         <Icon className="w-4 h-4 opacity-70" /> {label}
@@ -440,17 +456,28 @@ const DropdownItem = ({ onClick, icon: Icon, label, active }) => (
 );
 
 // ==========================================
-// 📦 庫存盤點頁面 (InventoryView) - 全新模組！
+// 📦 庫存盤點頁面 (InventoryView)
 // ==========================================
-const InventoryView = ({ db, appId }) => {
-    const [items, setItems] = useState(DEFAULT_INVENTORY_ITEMS);
-    const [activeTab, setActiveTab] = useState('茶葉類');
+const InventoryView = ({ db, appId, inventoryItems }) => {
+    const items = Array.isArray(inventoryItems) && inventoryItems.length > 0 ? inventoryItems : [];
+    
+    // 如果連一個品項都沒有的防呆畫面
+    if (items.length === 0) {
+        return (
+            <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
+                <Package size={64} className="mx-auto text-gray-300 mb-4" />
+                <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
+                <p className="text-gray-500 mt-2">請使用「最高管理員」帳號，前往「管理 > 系統設定」新增庫存品項。</p>
+            </div>
+        )
+    }
+
+    const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
+    const [activeTab, setActiveTab] = useState(categories[0] || '');
     const [records, setRecords] = useState({});
     
-    const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
     const filteredItems = items.filter(i => i.category === activeTab);
 
-    // 快速增減數量
     const handleCountChange = (id, delta) => {
         setRecords(prev => {
             const current = prev[id] || 0;
@@ -459,7 +486,6 @@ const InventoryView = ({ db, appId }) => {
         });
     };
 
-    // 手動輸入數量
     const handleInputChange = (id, val) => {
         const num = parseFloat(val);
         if(!isNaN(num) && num >= 0) {
@@ -489,7 +515,6 @@ const InventoryView = ({ db, appId }) => {
                 <button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> 送出盤點</button>
             </div>
 
-            {/* 分類標籤 */}
             <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
                 {categories.map(c => (
                     <button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>
@@ -498,7 +523,6 @@ const InventoryView = ({ db, appId }) => {
                 ))}
             </div>
 
-            {/* 盤點清單 */}
             <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
                 {filteredItems.map((item, idx) => (
                     <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
@@ -1208,6 +1232,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser, isPri
       <div className="bg-white p-4 rounded-xl border flex justify-between items-center"><h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2"/></div>
       <div className="grid gap-3">{visibleUsers.map(u => {
           const s = calc(u.uid);
+          
           const needsDeduction = safeLeaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
 
           return (
@@ -1303,13 +1328,16 @@ const PayrollView = ({ users, currentDate }) => {
 };
 
 // --- Settings View ---
-const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTypes, shiftTypes, appId, storeConfig, db }) => {
+const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db }) => {
   const userList = Object.values(users);
   const currentUserInfo = users[currentUser.uid] || {};
   
   const [newLeave, setNewLeave] = useState({ label: '', note: '', color: 'bg-gray-100 text-gray-700' });
   const [newShift, setNewShift] = useState({ id: '', label: '', start: '09:00', end: '18:00' });
   
+  // 🔴 庫存品項管理 State
+  const [newInvItem, setNewInvItem] = useState({ category: '茶葉類', name: '', spec: '', price: '' });
+
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
   const [showResigned, setShowResigned] = useState(false);
@@ -1329,6 +1357,7 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
 
   const safeLeaveTypes = Array.isArray(leaveTypes) ? leaveTypes : [];
   const safeShiftTypes = Array.isArray(shiftTypes) ? shiftTypes : [];
+  const safeInvItems = Array.isArray(inventoryItems) ? inventoryItems : [];
 
   const addLeave = async () => { if(!newLeave.label) return; const types = [...safeLeaveTypes, { ...newLeave, id: Math.random().toString(36).substr(2,9) }]; await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), { types }); setNewLeave({ label: '', note: '', color: 'bg-gray-100 text-gray-700' }); };
   
@@ -1343,6 +1372,20 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
   const deleteShiftType = async (idToDelete) => {
       const types = safeShiftTypes.filter(t => t.id !== idToDelete);
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftTypes'), { types });
+  };
+
+  // 🔴 新增/刪除庫存品項
+  const addInventoryItem = async () => {
+      if (!newInvItem.name || !newInvItem.spec) return alert("請填寫品名與單位");
+      const newItem = { ...newInvItem, id: `i_${Date.now()}`, price: parseFloat(newInvItem.price) || 0 };
+      const items = [...safeInvItems, newItem];
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items });
+      setNewInvItem({ category: newInvItem.category, name: '', spec: '', price: '' });
+  };
+  const deleteInventoryItem = async (idToDelete) => {
+      if(!window.confirm("確定刪除此盤點品項？")) return;
+      const items = safeInvItems.filter(i => i.id !== idToDelete);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items });
   };
 
   const saveUser = async () => { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); setEditingId(null); };
@@ -1370,11 +1413,50 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
             )}
         </div>
       </div>
+
+      {/* 🔴 庫存品項管理模組 */}
+      {isSuperAdmin && (
+        <div className="bg-white p-4 rounded-xl border shadow-sm">
+            <h3 className="font-bold mb-3 flex gap-2"><Package size={18}/> 庫存盤點品項管理</h3>
+            <p className="text-xs text-gray-500 mb-3">在這裡建立您所有的店內物料，員工在「盤點」頁面就能直接看到。</p>
+            <div className="grid grid-cols-5 gap-2 mb-4 bg-gray-50 p-2 rounded border">
+                <select value={newInvItem.category} onChange={e=>setNewInvItem({...newInvItem, category: e.target.value})} className="col-span-2 sm:col-span-1 border rounded px-2 py-1.5 text-sm bg-white">
+                    <option value="茶葉類">茶葉類</option>
+                    <option value="果汁與糖漿">果汁與糖漿</option>
+                    <option value="奶與粉類">奶與粉類</option>
+                    <option value="配料類">配料類</option>
+                    <option value="包材類">包材類</option>
+                    <option value="五金與其他">五金與其他</option>
+                </select>
+                <input placeholder="品名 (如: 珍珠)" value={newInvItem.name} onChange={e=>setNewInvItem({...newInvItem, name:e.target.value})} className="col-span-3 sm:col-span-2 border rounded px-2 py-1.5 text-sm"/>
+                <input placeholder="單位 (包/斤)" value={newInvItem.spec} onChange={e=>setNewInvItem({...newInvItem, spec:e.target.value})} className="col-span-2 sm:col-span-1 border rounded px-2 py-1.5 text-sm"/>
+                <div className="col-span-3 sm:col-span-1 flex gap-2">
+                    <input type="number" placeholder="單價" value={newInvItem.price} onChange={e=>setNewInvItem({...newInvItem, price:e.target.value})} className="w-full border rounded px-2 py-1.5 text-sm"/>
+                    <button onClick={addInventoryItem} className="bg-indigo-600 text-white rounded px-3 flex justify-center items-center shrink-0"><Plus size={18}/></button>
+                </div>
+            </div>
+            
+            <div className="max-h-64 overflow-y-auto space-y-1 pr-1 border-t pt-2">
+                {safeInvItems.map(item => (
+                    <div key={item.id} className="flex justify-between items-center bg-white p-2 rounded border border-gray-100 hover:bg-gray-50">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
+                            <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold w-max">{item.category}</span>
+                            <span className="font-bold text-gray-700 text-sm">{item.name}</span>
+                            <span className="text-xs text-gray-500">({item.spec})</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <span className="text-xs font-mono text-gray-400">${item.price}</span>
+                            <button onClick={()=>deleteInventoryItem(item.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+      )}
       
       {isSuperAdmin && (
           <div className="bg-white p-4 rounded-xl border shadow-sm">
               <h3 className="font-bold mb-3 flex gap-2 text-indigo-700"><Map size={18}/> 打卡定位設定 (GPS防作弊)</h3>
-              <p className="text-xs text-gray-500 mb-3">請在您的店面內按下「獲取目前位置」，系統會將此處設為打卡中心點。</p>
               <div className="grid grid-cols-2 gap-3 mb-3">
                   <div><label className="block text-xs font-bold text-gray-700 mb-1">緯度 (Latitude)</label><input type="number" value={locConfig.lat} onChange={e=>setLocConfig({...locConfig, lat: parseFloat(e.target.value)})} className="w-full border rounded px-3 py-2 text-sm bg-gray-50"/></div>
                   <div><label className="block text-xs font-bold text-gray-700 mb-1">經度 (Longitude)</label><input type="number" value={locConfig.lng} onChange={e=>setLocConfig({...locConfig, lng: parseFloat(e.target.value)})} className="w-full border rounded px-3 py-2 text-sm bg-gray-50"/></div>
