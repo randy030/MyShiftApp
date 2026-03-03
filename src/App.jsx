@@ -1,17 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, getDoc, addDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
-import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Trash2, BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Map } from 'lucide-react';
+import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Trash2, BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Map, Package, Settings, ChevronDown, Minus } from 'lucide-react';
 
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v5.6 (3-Tier RBAC)"; 
+const CURRENT_VERSION = "v6.0 (Super App All-in-One)"; 
 
 const UPDATE_LOGS = [
-  { version: "v5.6", date: "2026-02-25", content: "權限架構升級：新增「主管」階級。主管可審核單據與查看出勤，但無法排班或查看薪資與敏感資料。" },
-  { version: "v5.5", date: "2026-02-23", content: "介面大改造：優化排班視窗排版，採用狀態分離設計，大幅降低視覺凌亂感。" }
+  { version: "v6.0", date: "2026-03-03", content: "架構大升級：將導覽列改為「下拉選單」收納管理功能，並正式加入「庫存盤點」模組，實現 All-in-One 管理。" },
+  { version: "v5.6", date: "2026-02-25", content: "權限架構升級：新增「主管」階級。主管可審核單據與查看出勤。" }
 ];
 
 const LINE_API_URL = "/api/webhook"; 
@@ -69,6 +69,25 @@ const DEFAULT_LEAVE_TYPES = [
 const DEFAULT_SHIFT_TYPES = [
   { id: '09A', label: '09A', start: '09:00', end: '17:30' },
   { id: '09O', label: '09O', start: '09:00', end: '21:00' }
+];
+
+// 🔴 預設庫存品項 (從 PDF 擷取)
+const DEFAULT_INVENTORY_ITEMS = [
+  { id: 'i1', category: '茶葉類', name: '高山青茶', spec: '斤', price: 370 },
+  { id: 'i2', category: '茶葉類', name: '日月潭紅茶', spec: '斤', price: 350 },
+  { id: 'i3', category: '茶葉類', name: '大綠茶', spec: '斤', price: 285 },
+  { id: 'i4', category: '茶葉類', name: '春芽絕弦', spec: '斤', price: 480 },
+  { id: 'i5', category: '茶葉類', name: '烏龍綠茶', spec: '包', price: 61 },
+  { id: 'i6', category: '果汁與糖漿', name: '梅果漿', spec: '包', price: 165 },
+  { id: 'i7', category: '果汁與糖漿', name: '冷凍草莓', spec: '包', price: 28 },
+  { id: 'i8', category: '果汁與糖漿', name: '冷凍百香', spec: '包', price: 16 },
+  { id: 'i9', category: '果汁與糖漿', name: '蘋果丁漿', spec: '罐', price: 350 },
+  { id: 'i10', category: '果汁與糖漿', name: '芒果醬', spec: '罐', price: 170 },
+  { id: 'i11', category: '奶與粉類', name: '鮮奶', spec: '罐', price: 68 },
+  { id: 'i12', category: '奶與粉類', name: '液態奶精', spec: '罐', price: 200 },
+  { id: 'i13', category: '奶與粉類', name: '養樂多', spec: '罐', price: 5 },
+  { id: 'i14', category: '配料與其他', name: '大吸管(12mm)', spec: '包', price: 0 },
+  { id: 'i15', category: '配料與其他', name: '黑糖薑茶調味糖漿', spec: '桶', price: 210 }
 ];
 
 const USER_COLORS = ['bg-yellow-100 text-yellow-900 border-yellow-300', 'bg-blue-100 text-blue-900 border-blue-300', 'bg-green-100 text-green-900 border-green-300', 'bg-purple-100 text-purple-900 border-purple-300', 'bg-orange-100 text-orange-900 border-orange-300', 'bg-pink-100 text-pink-900 border-pink-300', 'bg-teal-100 text-teal-900 border-teal-300', 'bg-red-100 text-red-900 border-red-300'];
@@ -161,6 +180,21 @@ export default function App() {
   const [storeConfig, setStoreConfig] = useState(null); 
   const [currentDate, setCurrentDate] = useState(new Date());
 
+  // 🔴 導覽列下拉選單控制
+  const [menuOpen, setMenuOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // 點擊外面關閉下拉選單
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   useEffect(() => {
     if (!auth) { setLoading(false); return; }
     const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
@@ -204,38 +238,13 @@ export default function App() {
     return () => { unsubUsers(); unsubShifts(); unsubRequests(); unsubSettings(); unsubShiftSettings(); unsubEvents(); unsubStore(); };
   }, [user]);
 
-  // 🔔 當日行程通知
-  useEffect(() => {
-    if (!companyEvents.length || Object.keys(users).length === 0) return;
-    const checkAndNotifyEvents = async () => {
-        const date = new Date();
-        const localTodayStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        const todaysEvents = companyEvents.filter(e => checkEventOnDate(e, localTodayStr));
-        for (const event of todaysEvents) {
-            const notifyId = `${localTodayStr}_${event.id}`;
-            const notifyRef = doc(db, 'artifacts', appId, 'public', 'data', 'notifications', notifyId);
-            const snap = await getDoc(notifyRef);
-            if (!snap.exists()) {
-                await setDoc(notifyRef, { sentAt: new Date() });
-                const allLineIds = Object.values(users).map(u => u.lineUserId).filter(id => id);
-                if(allLineIds.length > 0) {
-                    const msg = `🔔【公司重要通知】\n📌 ${event.title}\n📅 日期：${localTodayStr}${event.time ? `\n⏰ 時間：${event.time}` : ''}${event.note ? `\n📝 備註：${event.note}` : ''}`;
-                    sendLineNotification(allLineIds, msg);
-                }
-            }
-        }
-    };
-    checkAndNotifyEvents();
-  }, [companyEvents, users]);
-
   const handleLogin = async () => { try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (e) { alert("登入失敗: " + e.message); } };
   const handleLogout = () => { if(window.confirm("確定要登出系統嗎？")) { signOut(auth); } };
 
-  // 🔴 角色權限判定
   const currentUserInfo = users[user?.uid] || {};
   const isSuperAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
   const isManager = currentUserInfo.isManager || false;
-  const isPrivileged = isSuperAdmin || isManager; // 管理員與主管都算特權帳號
+  const isPrivileged = isSuperAdmin || isManager; 
 
   const handleRequest = async (req, action) => {
       const targetUser = users[req.uid || req.fromUid]; 
@@ -267,7 +276,7 @@ export default function App() {
           alert("時數已確認並寫入統計！");
       } 
       else if (req.type === 'admin_ot_approve') {
-          if (!isPrivileged) return alert("無權限核准單據"); // 防呆
+          if (!isPrivileged) return alert("無權限核准單據"); 
           const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
           const shiftSnap = await getDoc(shiftRef);
           const data = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
@@ -308,15 +317,10 @@ export default function App() {
   };
 
   if (loading) return <div className="flex h-screen items-center justify-center">載入中...</div>;
-  if (!user) return <div className="flex h-screen items-center justify-center p-4 bg-gray-50"><div className="bg-white p-8 rounded-xl shadow-lg text-center"><h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 排班系統</h1><button onClick={handleLogin} className="bg-white border px-6 py-2 rounded shadow hover:bg-gray-50 flex items-center gap-2 mx-auto"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5"/> Google 登入</button></div></div>;
+  if (!user) return <div className="flex h-screen items-center justify-center p-4 bg-gray-50"><div className="bg-white p-8 rounded-xl shadow-lg text-center"><h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 雲端店務系統</h1><button onClick={handleLogin} className="bg-white border px-6 py-2 rounded shadow hover:bg-gray-50 flex items-center gap-2 mx-auto"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5"/> Google 登入</button></div></div>;
 
   const safeRequests = Array.isArray(requests) ? requests : [];
-  // 🔴 主管可以收到核准通知
-  const myNotifications = safeRequests.filter(r => 
-      r.toUid === user.uid || 
-      (r.type === 'ot_confirm' && r.uid === user.uid) || 
-      (r.type === 'admin_ot_approve' && isPrivileged)
-  );
+  const myNotifications = safeRequests.filter(r => r.toUid === user.uid || (r.type === 'ot_confirm' && r.uid === user.uid) || (r.type === 'admin_ot_approve' && isPrivileged));
   const activeUsers = Object.values(users).filter(u => !u.isResigned);
 
   return (
@@ -327,17 +331,32 @@ export default function App() {
             <Calendar className="w-6 h-6" /> <span className="hidden sm:inline">TeamShift</span>
             <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1 hidden md:inline">{CURRENT_VERSION}</span>
           </div>
-          <div className="flex gap-1 sm:gap-2 items-center overflow-x-auto">
-            <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
+          
+          <div className="flex gap-1 sm:gap-2 items-center">
+            {/* 🔴 主要選單：月曆、打卡、盤點 */}
             <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
-            {/* 🔴 主管可以看出勤紀錄 */}
-            {isPrivileged && <NavBtn active={view==='attendance'} onClick={()=>setView('attendance')} icon={History} label="出勤" />}
+            <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
+            <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
             
-            <NavBtn active={view==='salary'} onClick={()=>setView('salary')} icon={FileBarChart} label="統計" />
-            {/* 🔴 只有最高管理員能看薪資 */}
-            {isSuperAdmin && <NavBtn active={view==='payroll'} onClick={()=>setView('payroll')} icon={DollarSign} label="薪資" />}
-            <NavBtn active={view==='settings'} onClick={()=>setView('settings')} icon={Users} label="設定" />
-            
+            {/* 🔴 下拉選單：管理工具 */}
+            <div className="relative" ref={dropdownRef}>
+                <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors font-bold ${['salary','attendance','payroll','settings'].includes(view) ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
+                    <Settings className="w-4 h-4" /> 
+                    <span className="hidden xs:inline">管理</span>
+                    <ChevronDown className={`w-3 h-3 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {menuOpen && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
+                        <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false);}} icon={FileBarChart} label="統計明細" active={view==='salary'} />
+                        {isPrivileged && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤與結算" active={view==='attendance'} />}
+                        {isSuperAdmin && <DropdownItem onClick={() => {setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
+                        <div className="border-t my-1 border-gray-100"></div>
+                        <DropdownItem onClick={() => {setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定" active={view==='settings'} />
+                    </div>
+                )}
+            </div>
+
             <button onClick={() => setView('inbox')} className={`p-2 relative ${view === 'inbox' ? 'text-indigo-600 bg-indigo-50 rounded-lg' : 'text-gray-500 hover:text-indigo-600'}`}>
                 <Bell className="w-5 h-5" />
                 {myNotifications.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white"></span>}
@@ -348,12 +367,10 @@ export default function App() {
       </nav>
 
       <main className="max-w-6xl mx-auto p-3 sm:p-4">
+        {view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} shifts={shifts} requests={requests} companyEvents={companyEvents} users={activeUsers} allUsers={users} currentUser={user} currentUserInfo={currentUserInfo} leaveTypes={leaveTypes} shiftTypes={shiftTypes} sendLineNotification={sendLineNotification} appId={appId} db={db} />}
         {view === 'clock' && <ClockView currentUser={user} users={users} storeConfig={storeConfig} db={db} appId={appId} />}
+        {view === 'inventory' && <InventoryView db={db} appId={appId} />}
         {view === 'attendance' && isPrivileged && <AttendanceView users={users} currentDate={currentDate} db={db} appId={appId} shifts={shifts} shiftTypes={shiftTypes} />}
-        
-        {view === 'calendar' && (
-            <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} shifts={shifts} requests={requests} companyEvents={companyEvents} users={activeUsers} allUsers={users} currentUser={user} currentUserInfo={currentUserInfo} leaveTypes={leaveTypes} shiftTypes={shiftTypes} sendLineNotification={sendLineNotification} appId={appId} db={db} />
-        )}
         {view === 'salary' && <SalaryView users={activeUsers} shifts={shifts} currentDate={currentDate} leaveTypes={leaveTypes} currentUser={user} isPrivileged={isPrivileged} />}
         {view === 'payroll' && isSuperAdmin && <PayrollView users={users} currentDate={currentDate} />}
         {view === 'settings' && <SettingsView users={users} currentUser={user} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} leaveTypes={leaveTypes} shiftTypes={shiftTypes} appId={appId} storeConfig={storeConfig} db={db} />}
@@ -410,9 +427,103 @@ export default function App() {
   );
 }
 
+// Navbar 按鈕元件
 const NavBtn = ({ active, onClick, icon: Icon, label }) => (
-  <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
+  <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors font-bold ${active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
 );
+
+// 下拉選單項目元件
+const DropdownItem = ({ onClick, icon: Icon, label, active }) => (
+    <button onClick={onClick} className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-indigo-50 font-bold transition-colors ${active ? 'text-indigo-600 bg-indigo-50/50' : 'text-gray-600'}`}>
+        <Icon className="w-4 h-4 opacity-70" /> {label}
+    </button>
+);
+
+// ==========================================
+// 📦 庫存盤點頁面 (InventoryView) - 全新模組！
+// ==========================================
+const InventoryView = ({ db, appId }) => {
+    const [items, setItems] = useState(DEFAULT_INVENTORY_ITEMS);
+    const [activeTab, setActiveTab] = useState('茶葉類');
+    const [records, setRecords] = useState({});
+    
+    const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
+    const filteredItems = items.filter(i => i.category === activeTab);
+
+    // 快速增減數量
+    const handleCountChange = (id, delta) => {
+        setRecords(prev => {
+            const current = prev[id] || 0;
+            const next = Math.max(0, current + delta);
+            return { ...prev, [id]: next };
+        });
+    };
+
+    // 手動輸入數量
+    const handleInputChange = (id, val) => {
+        const num = parseFloat(val);
+        if(!isNaN(num) && num >= 0) {
+            setRecords(prev => ({ ...prev, [id]: num }));
+        } else if (val === '') {
+            const newRecs = {...records}; delete newRecs[id]; setRecords(newRecs);
+        }
+    };
+
+    const handleSave = async () => {
+        if (Object.keys(records).length === 0) return alert("尚未填寫任何盤點數量！");
+        if (window.confirm("確定要送出今日盤點結果嗎？")) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', todayStr), {
+                date: todayStr,
+                timestamp: Date.now(),
+                data: records
+            }, { merge: true });
+            alert("✅ 盤點資料已成功儲存至雲端！");
+        }
+    };
+
+    return (
+        <div className="max-w-2xl mx-auto pb-20">
+            <div className="bg-white p-4 rounded-xl border flex justify-between items-center mb-4 shadow-sm">
+                <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><Package/> 庫存盤點系統</h2>
+                <button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> 送出盤點</button>
+            </div>
+
+            {/* 分類標籤 */}
+            <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
+                {categories.map(c => (
+                    <button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>
+                        {c}
+                    </button>
+                ))}
+            </div>
+
+            {/* 盤點清單 */}
+            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                {filteredItems.map((item, idx) => (
+                    <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
+                        <div>
+                            <div className="font-bold text-gray-800 text-lg">{item.name}</div>
+                            <div className="text-xs text-gray-400 font-mono">盤點單位: {item.spec}</div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <button onClick={()=>handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
+                            <input 
+                                type="number" 
+                                value={records[item.id] !== undefined ? records[item.id] : ''} 
+                                onChange={(e)=>handleInputChange(item.id, e.target.value)} 
+                                placeholder="0"
+                                className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent"
+                            />
+                            <button onClick={()=>handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <p className="text-center text-xs text-gray-400 mt-4">提示：您可以點擊上方分類標籤切換倉庫區域。資料輸入後會暫存於畫面中。</p>
+        </div>
+    );
+};
 
 // ==========================================
 // 📍 GPS 打卡頁面 (ClockView)
@@ -711,7 +822,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
   const safeRequests = Array.isArray(requests) ? requests : [];
   const safeLeaveTypes = Array.isArray(leaveTypes) ? leaveTypes : [];
 
-  // 🔴 權限變數
   const isSuperAdmin = currentUserInfo.isAdmin || currentUser?.email === ADMIN_EMAIL;
   const isManager = currentUserInfo.isManager || false;
   const isPrivileged = isSuperAdmin || isManager;
@@ -770,7 +880,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
 
   const toggle = (uid, type, lType=null, subUid=null) => {
     const isMe = uid === currentUser.uid;
-    // 🔴 只能修改自己，或是最高管理員
     if (!isSuperAdmin && !isMe) return alert("無權限");
     if (isClosed) return alert("本日店休");
 
@@ -813,7 +922,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
   const handleOTSave = async (numHours, remark) => {
       const uid = otModalData.user.uid; const actionType = numHours > 0 ? '加班' : '補休';
 
-      // 🔴 若是管理員填其他人的單 -> 變為確認單
       if (isSuperAdmin && uid !== currentUser.uid) {
         const existingReq = safeRequests.find(r => r.date === dateStr && r.uid === uid && r.type === 'ot_confirm');
         if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
@@ -822,20 +930,16 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
         if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `🕒 管理員已登錄您的${actionType}時數\n日期: ${dateStr}\n時數: ${Math.abs(numHours)}hr\n請至系統確認。`);
         setOtModalData(null); onClose(); setTimeout(() => alert("已送出時數確認單給員工"), 100);
       } 
-      // 🔴 若是一般員工(或主管)填自己的單 -> 送出審核
       else if (!isSuperAdmin && uid === currentUser.uid) {
         const existingReq = safeRequests.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
         if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUser.uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
-        
-        // 抓出所有老闆(Admin)與主管(Manager)發通知
         const adminLineIds = safeUsers.filter(u => u.isAdmin || u.isManager || u.email === ADMIN_EMAIL).map(u => u.lineUserId).filter(id => id);
         const currentUserName = safeUsers.find(u => u.uid === currentUser.uid)?.name || '某員工';
         if(adminLineIds.length > 0) sendLineNotification(adminLineIds, `🔔【審核通知】\n員工 ${currentUserName} 申請了 ${dateStr} 的 ${actionType} (${Math.abs(numHours)}hr)\n請至系統通知中心核准。`);
         setOtModalData(null); onClose(); setTimeout(() => alert("已送出審核明細！請等候主管核准。"), 100);
       } 
       else {
-        // 老闆填自己的 -> 直接生效
         let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid); 
         const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
         if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
@@ -892,8 +996,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
             const isRostered = assign?.type === 'LEAVE' && assign?.leaveType === 'rostered'; 
             const userColor = getUserColor(u.uid); 
             const isMe = u.uid === currentUser.uid; 
-            
-            // 🔴 編輯權限防護：老闆可以改任何人，員工只能改自己。
             const canEdit = isMe || isSuperAdmin; 
 
             const showSwapBtn = (Array.isArray(dayData.assignments) && dayData.assignments.some(a=>a.uid===currentUser.uid && a.type==='LEAVE')) && !isMe && assign?.type === 'WORK';
@@ -1047,8 +1149,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser, isPri
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const safeUsers = Array.isArray(users) ? users : Object.values(users || {});
   const safeLeaveTypes = Array.isArray(leaveTypes) ? leaveTypes : [];
-  
-  // 🔴 主管可以看所有人，員工只能看自己
   const visibleUsers = useMemo(() => isPrivileged ? safeUsers : safeUsers.filter(u => u.uid === currentUser.uid), [safeUsers, currentUser, isPrivileged]);
 
   const calc = (uid) => {
@@ -1108,7 +1208,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser, isPri
       <div className="bg-white p-4 rounded-xl border flex justify-between items-center"><h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2"/></div>
       <div className="grid gap-3">{visibleUsers.map(u => {
           const s = calc(u.uid);
-          
           const needsDeduction = safeLeaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
 
           return (
@@ -1249,14 +1348,12 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
   const saveUser = async () => { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); setEditingId(null); };
   const handleImageUpload = (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 1024 * 1024) { alert("圖片檔案過大，請使用 1MB 以下的圖片"); return; } const reader = new FileReader(); reader.onloadend = () => { setFormData({ ...formData, bankImage: reader.result }); }; reader.readAsDataURL(file); };
   
-  // 🔴 主管可以看所有在職員工，但無法看離職員工(除非有特殊按鈕)，這裡讓Privileged都能看
   const visibleUsers = useMemo(() => { let list = userList; if (!isPrivileged) list = list.filter(u => u.uid === currentUser.uid); else if (!showResigned) list = list.filter(u => !u.isResigned); return list; }, [userList, currentUser, isPrivileged, showResigned]);
 
   return (
     <div className="space-y-6 pb-20">
       <div className="bg-white p-6 rounded-xl border shadow-sm text-center">
         <h2 className="font-bold text-xl">{currentUserInfo.name}</h2>
-        {/* LINE 綁定區塊 */}
         <div className="mt-4 bg-green-50 p-3 rounded-lg border border-green-100 text-left">
             <h4 className="text-sm font-bold text-green-800 flex items-center gap-2"><Smartphone size={16}/> LINE 通知綁定</h4>
             <p className="text-xs text-gray-600 mb-2">請在公司 LINE 官方帳號輸入 <span className="font-bold text-red-500">查ID</span>，並將回傳的代碼貼在下方：</p>
@@ -1274,7 +1371,6 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
         </div>
       </div>
       
-      {/* 🔴 只有最高管理員能改系統設定 */}
       {isSuperAdmin && (
           <div className="bg-white p-4 rounded-xl border shadow-sm">
               <h3 className="font-bold mb-3 flex gap-2 text-indigo-700"><Map size={18}/> 打卡定位設定 (GPS防作弊)</h3>
@@ -1320,7 +1416,7 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
       {isSuperAdmin && (
         <div className="bg-white p-4 rounded-xl border"><h3 className="font-bold mb-3 flex gap-2"><BookOpen size={18}/> 假別管理</h3><div className="flex gap-2 mb-3"><input placeholder="名稱" value={newLeave.label} onChange={e=>setNewLeave({...newLeave, label:e.target.value})} className="border rounded px-2 w-20"/><input placeholder="說明" value={newLeave.note} onChange={e=>setNewLeave({...newLeave, note:e.target.value})} className="border rounded px-2 flex-1"/><button onClick={addLeave} className="bg-indigo-600 text-white px-3 rounded"><Plus/></button></div><div className="space-y-2">{safeLeaveTypes.filter(lt=>lt.id!=='comp').map(l => (<div key={l.id} className="flex justify-between items-center bg-gray-50 p-2 rounded"><span className={`text-xs px-2 py-1 rounded ${l.color}`}>{l.label}</span><span className="text-xs text-gray-500 truncate flex-1 mx-2">{l.note}</span><button onClick={async()=>{ const types = safeLeaveTypes.filter(t=>t.id!==l.id); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), { types }); }} className="text-gray-400"><Trash2 size={14}/></button></div>))}</div></div>
       )}
-
+      
       <div className="bg-white p-4 rounded-xl border">
          <div className="flex justify-between items-center mb-3"><h3 className="font-bold flex gap-2"><Users size={18}/> 資料設定</h3>{isSuperAdmin && (<label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer"><input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} />顯示已離職</label>)}</div>
          {visibleUsers.map(u => (
@@ -1330,7 +1426,6 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
                  <div className="grid grid-cols-2 gap-2">
                      <div><label className="text-xs text-gray-500">姓名</label><input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="w-full border p-2 rounded"/></div>
                      {isSuperAdmin && (<div><label className="text-xs text-gray-500">在職狀態</label><select value={formData.isResigned ? 'true' : 'false'} onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})} className="w-full border p-2 rounded bg-white"><option value="false">在職中</option><option value="true">已離職</option></select></div>)}
-                     {/* 🔴 系統權限指派下拉選單 */}
                      {isSuperAdmin && (
                         <div>
                             <label className="text-xs text-gray-500 font-bold text-indigo-600">系統權限指派</label>
@@ -1345,7 +1440,6 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
                         </div>
                      )}
                  </div>
-                 {/* 🔴 只有最高管理員才能看到敏感資料 */}
                  {isSuperAdmin && (<div className="space-y-2 border-t pt-2 mt-2"><div className="text-xs font-bold text-indigo-600 flex items-center gap-1"><Lock size={10}/> 敏感資料</div><div className="grid grid-cols-2 gap-2"><input placeholder="到職日 (YYYY-MM-DD)" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="border p-2 rounded text-sm"/><input placeholder="電話" value={formData.phone || ''} onChange={e=>setFormData({...formData, phone:e.target.value})} className="border p-2 rounded text-sm"/><input placeholder="出生年月日" value={formData.birthday || ''} onChange={e=>setFormData({...formData, birthday:e.target.value})} className="border p-2 rounded text-sm"/><input placeholder="身分證字號" value={formData.nationalId || ''} onChange={e=>setFormData({...formData, nationalId:e.target.value})} className="border p-2 rounded text-sm"/></div><div><label className="text-xs text-gray-500 block mb-1">銀行存摺封面</label><div className="flex items-center gap-2"><label className="cursor-pointer bg-white border border-gray-300 text-gray-600 px-3 py-1.5 rounded text-xs hover:bg-gray-50 flex items-center gap-1"><Upload size={12}/> 上傳圖片<input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" /></label>{formData.bankImage && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle2 size={12}/> 已選取</span>}</div>{formData.bankImage && (<img src={formData.bankImage} alt="Bank" className="mt-2 h-20 object-contain border rounded bg-white" />)}</div></div>)}
                  <div className="flex gap-2 justify-end mt-2"><button onClick={()=>setEditingId(null)} className="px-3 py-1 bg-gray-200 rounded">取消</button><button onClick={saveUser} className="px-3 py-1 bg-indigo-600 text-white rounded">儲存</button></div>
                </div>
@@ -1354,13 +1448,11 @@ const SettingsView = ({ users, currentUser, isSuperAdmin, isPrivileged, leaveTyp
                    <div>
                        <div className="font-bold flex items-center gap-2">
                            {u.name}
-                           {/* 🔴 顯示職位標籤 */}
                            {u.isAdmin ? <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">管理員</span> : u.isManager ? <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">主管</span> : null}
                            {u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded flex items-center gap-0.5"><UserX size={10}/> 已離職</span>}
                        </div>
                        {isPrivileged && u.startDate && <div className="text-xs text-gray-400">到職: {u.startDate}</div>}
                    </div>
-                   {/* 🔴 只有最高管理員或是自己才能按編輯 */}
                    {(isSuperAdmin || u.uid === currentUser.uid) && <button onClick={()=>{setEditingId(u.uid);setFormData(u)}} className="text-indigo-600 text-sm">編輯</button>}
                </div>
              )}
