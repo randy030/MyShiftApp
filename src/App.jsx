@@ -7,8 +7,7 @@ import { Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Tr
 // ==========================================
 // 🚀 系統設定
 // ==========================================
-const CURRENT_VERSION = "v6.3 (Inventory Pro Full)"; 
-
+const CURRENT_VERSION = "v6.3 (Super App Full)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -102,13 +101,8 @@ const checkEventOnDate = (event, checkDateStr) => {
 const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
     const [hours, setHours] = useState('');
     const [reason, setReason] = useState('');
-    
-    useEffect(() => { 
-        if(isOpen && modalData) { setHours(modalData.initialHours || ''); setReason(modalData.initialReason || ''); } 
-    }, [isOpen, modalData]);
-
+    useEffect(() => { if(isOpen && modalData) { setHours(modalData.initialHours || ''); setReason(modalData.initialReason || ''); } }, [isOpen, modalData]);
     if (!isOpen || !modalData) return null;
-
     const { user, balance } = modalData;
     const numHours = parseFloat(hours);
     const isExceeding = numHours < 0 && Math.abs(numHours) > balance;
@@ -392,14 +386,13 @@ export default function App() {
     </div>
   );
 }
+
 const NavBtn = ({ active, onClick, icon: Icon, label }) => (
   <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors font-bold ${active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}><Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span></button>
 );
 
 const DropdownItem = ({ onClick, icon: Icon, label, active }) => (
-    <button onClick={onClick} className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-indigo-50 font-bold transition-colors ${active ? 'text-indigo-600 bg-indigo-50/50' : 'text-gray-600'}`}>
-        <Icon className="w-4 h-4 opacity-70" /> {label}
-    </button>
+    <button onClick={onClick} className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-indigo-50 font-bold transition-colors ${active ? 'text-indigo-600 bg-indigo-50/50' : 'text-gray-600'}`}><Icon className="w-4 h-4 opacity-70" /> {label}</button>
 );
 
 // ==========================================
@@ -413,7 +406,7 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
             <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
                 <Package size={64} className="mx-auto text-gray-300 mb-4" />
                 <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
-                <p className="text-gray-500 mt-2">請使用「最高管理員」帳號，前往「管理 > 系統設定」新增庫存品項。</p>
+                <p className="text-gray-500 mt-2">請使用「最高管理員」帳號，前往「管理 ➡️ 系統設定」新增庫存品項。</p>
             </div>
         )
     }
@@ -676,6 +669,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
         </div>
     );
 };
+
 // --- Calendar View ---
 const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEvents, users, allUsers, currentUser, currentUserInfo, leaveTypes, shiftTypes, sendLineNotification, appId, db }) => {
   const [selectedDate, setSelectedDate] = useState(null);
@@ -783,7 +777,6 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
   const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); if(newData.assignments) setExpanded(null); };
   const toggleClosed = async () => { if (!isSuperAdmin) return; const newStatus = !isClosed; if (newStatus && Array.isArray(dayData.assignments) && dayData.assignments.length > 0) { if (!confirm("設定為店休將清除當日所有排班，確定嗎？")) return; await update({ isClosed: true, assignments: [] }); } else { await update({ isClosed: newStatus }); } onClose(); };
   const cancelLeave = (uid) => { if (!isSuperAdmin) return alert("已鎖定，無法刪除。"); let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid); if(idx>=0) { next.splice(idx, 1); update({ assignments: next }); } };
-  
   const updateShiftCode = (uid, code) => {
       if (!isSuperAdmin) return alert("只有最高管理員可以排班");
       let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid);
@@ -975,6 +968,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                                 const getLeaveCount = (leaveId, prefix) => {
                                     let count = 0; Object.keys(shifts).forEach(d => { if (d.startsWith(prefix) && d !== dateStr) { if (Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a => a.uid === u.uid && a.type === 'LEAVE' && a.leaveType === leaveId)) count++; } }); return count;
                                 };
+
                                 if (lt.id === 'menstrual') {
                                     if (getLeaveCount('menstrual', yearStr) >= 3) { limitReached = true; limitMsg = "生理假一年最多請 3 天，已達上限！"; } else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天，已達上限！"; }
                                 } else if (lt.id === 'sick') { if (getLeaveCount('sick', yearStr) >= 30) { limitReached = true; limitMsg = "病假一年最多請 30 天，已達上限！"; }
