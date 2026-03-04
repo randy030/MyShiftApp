@@ -76,17 +76,18 @@ const DEFAULT_INVENTORY_ITEMS = [
 ];
 
 // 🔴 高對比 10 色色盤
+// 🔴 超高對比 10 色色盤 (加深背景色與邊框，保證一眼辨識)
 const USER_COLORS = [
-    'bg-blue-100 text-blue-900 border-blue-400',
-    'bg-orange-100 text-orange-900 border-orange-400',
-    'bg-emerald-100 text-emerald-900 border-emerald-400',
-    'bg-rose-100 text-rose-900 border-rose-400',
-    'bg-purple-100 text-purple-900 border-purple-400',
-    'bg-cyan-100 text-cyan-900 border-cyan-400',
-    'bg-amber-100 text-amber-900 border-amber-400',
-    'bg-fuchsia-100 text-fuchsia-900 border-fuchsia-400',
-    'bg-lime-100 text-lime-900 border-lime-400',
-    'bg-sky-100 text-sky-900 border-sky-400'
+    'bg-red-200 text-red-900 border-red-500',       // 1. 鮮艷紅
+    'bg-blue-200 text-blue-900 border-blue-500',    // 2. 深邃藍
+    'bg-green-200 text-green-900 border-green-500', // 3. 翡翠綠
+    'bg-yellow-200 text-yellow-900 border-yellow-600',// 4. 明亮黃
+    'bg-purple-200 text-purple-900 border-purple-500',// 5. 神秘紫
+    'bg-teal-200 text-teal-900 border-teal-500',    // 6. 湖水綠
+    'bg-pink-200 text-pink-900 border-pink-500',    // 7. 櫻花粉
+    'bg-orange-200 text-orange-900 border-orange-500',// 8. 活力橘
+    'bg-indigo-200 text-indigo-900 border-indigo-500',// 9. 靛藍色
+    'bg-rose-200 text-rose-900 border-rose-500'     // 10. 玫瑰紅
 ];
 
 const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', monthly: '每月', yearly: '每年' };
