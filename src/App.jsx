@@ -1013,6 +1013,7 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
   );
 };
 // --- 2. Salary View (加入年度統計 & 匯出 Excel) ---
+// --- 2. Salary View (加入年度統計、歷年沖抵明細 & 匯出 Excel) ---
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser, isPrivileged }) => {
   const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
   const visibleUsers = useMemo(() => isPrivileged ? users : users.filter(u => u.uid === currentUser.uid), [users, currentUser, isPrivileged]);
@@ -1020,7 +1021,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser, isPri
   const calc = (uid) => {
     const targetYear = targetMonth.substring(0, 4);
     let monthStats = { ot: 0, leaves: {} };
-    let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {} }; // 🔴 加入年度假別統計
+    let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {} }; 
     let otHistory = []; 
 
     Object.keys(shifts).forEach(date => {
@@ -1133,6 +1134,22 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUser, isPri
                 )}
                 <div className="bg-orange-50 p-2 rounded border border-orange-100 flex justify-between text-xs text-gray-600"><span>本月累積加班: {s.monthStats.ot || 0} hr</span><span>年度已扣抵: {s.yearStats.compHoursUsed} hr</span></div>
                 
+                {/* 🔴 歷年沖抵明細完美補回！ */}
+                {s.otHistory.length > 0 && (
+                    <div className="mt-3 bg-white p-2 rounded border border-gray-200">
+                        <div className="text-xs font-bold text-gray-500 mb-2 flex items-center gap-1"><History size={12}/> 加班/補休 歷年沖抵明細</div>
+                        <div className="max-h-32 overflow-y-auto space-y-1">
+                            {s.otHistory.map((h, i) => (
+                                <div key={i} className="flex justify-between items-center text-[11px] p-1.5 border-b border-gray-50 last:border-0 hover:bg-gray-50">
+                                    <span className="text-gray-500 w-16">{h.date.substring(5)}</span>
+                                    <span className={`font-bold w-12 text-right ${h.hours > 0 ? 'text-orange-600' : 'text-green-600'}`}>{h.hours > 0 ? `+${h.hours}` : h.hours} hr</span>
+                                    <span className="text-gray-400 flex-1 ml-2 truncate">{h.reason}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 <div className="bg-gray-50 p-2 rounded border border-gray-100">
                     <div className="text-xs font-bold text-gray-500 mb-1">本月 ({targetMonth}) 各類請假明細</div>
                     {Object.keys(s.monthStats.leaves).length > 0 ? (
