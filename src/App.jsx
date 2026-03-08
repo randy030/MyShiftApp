@@ -727,26 +727,46 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
             {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded flex items-center gap-1 font-bold shadow"><Store size={14} /> 店休</div></div> : 
               <div className="space-y-1 overflow-y-auto flex-1">
                 {Array.isArray(data.assignments) && data.assignments.map((a,ix)=>{ 
-                    if (a.type === 'LEAVE') {
-                        const pColor = getUserColor(a.uid); 
-                        const fullName = allUsers[a.uid]?.name || '未知';
-                        const shortName = fullName.length > 2 ? fullName.slice(-2) : fullName;
-                        const subNameFull = a.subUid ? allUsers[a.subUid]?.name : null;
-                        const subName = subNameFull ? (subNameFull.length > 2 ? subNameFull.slice(-2) : subNameFull) : null;
+    if (a.type === 'LEAVE') {
+        const pColor = getUserColor(a.uid); 
+        const fullName = allUsers[a.uid]?.name || '未知';
+        const shortName = fullName.length > 2 ? fullName.slice(-2) : fullName;
+        const subNameFull = a.subUid ? allUsers[a.subUid]?.name : null;
+        const subName = subNameFull ? (subNameFull.length > 2 ? subNameFull.slice(-2) : subNameFull) : null;
+        return (
+            <div key={ix} className={`p-1 rounded border ${pColor} bg-opacity-30 mb-1`}>
+                <div className="flex justify-between items-center">
+                    <span className="font-bold text-[11px] tracking-widest">{shortName}</span>
+                    <span className="bg-white/90 px-1 rounded text-[10px] border shadow-sm flex items-center gap-0.5 shrink-0 font-bold">
+                        {leaveTypes.find(t=>t.id===a.leaveType)?.label} 
+                    </span>
+                </div>
+                {subName && <div className="text-[10px] text-gray-700 mt-0.5 flex items-center gap-1 bg-white/70 px-1 rounded w-max"><ArrowRightLeft size={9}/> {subName}代</div>}
+            </div>
+        )
+    }
+    
+    // 🆕 新增：顯示上班班別標籤
+    if (a.type === 'WORK' && a.shiftCode) {
+        const pColor = getUserColor(a.uid);
+        const fullName = allUsers[a.uid]?.name || '?';
+        const shortName = fullName.length > 2 ? fullName.slice(-2) : fullName;
+        const shiftInfo = shiftTypes.find(st => st.id === a.shiftCode);
+        return (
+            <div key={ix} className={`p-1 rounded border ${pColor} mb-1 flex justify-between items-center`}>
+                <span className="font-bold text-[11px]">{shortName}</span>
+                {shiftInfo && (
+                    <span className="font-mono text-[10px] bg-white/80 px-1 rounded border font-bold">
+                        {shiftInfo.label}
+                    </span>
+                )}
+            </div>
+        );
+    }
+    
+    return null;
+})}
 
-                        return (
-                            <div key={ix} className={`p-1 rounded border ${pColor} bg-opacity-30 mb-1`}>
-                                <div className="flex justify-between items-center">
-                                    <span className="font-bold text-[11px] tracking-widest">{shortName}</span>
-                                    <span className="bg-white/90 px-1 rounded text-[10px] border shadow-sm flex items-center gap-0.5 shrink-0 font-bold">
-                                        {leaveTypes.find(t=>t.id===a.leaveType)?.label} 
-                                    </span>
-                                </div>
-                                {subName && <div className="text-[10px] text-gray-700 mt-0.5 flex items-center gap-1 bg-white/70 px-1 rounded w-max"><ArrowRightLeft size={9}/> {subName}代</div>}
-                            </div>
-                        )
-                    } return null;
-                })}
               </div>}
           </div>)
         })}
@@ -937,72 +957,175 @@ const ShiftModal = ({ dateStr, onClose, shifts, requests, companyEvents, setEdit
                     </div>
                 );
             } else {
-                let otButtonUi = null;
-                if (pendingApproveReq) {
-                    otButtonUi = <button onClick={() => isSuperAdmin ? openOTModal(u) : alert("已送出審核，鎖定中。")} className={`flex-1 py-2 text-xs rounded border font-bold shadow-sm bg-blue-50 text-blue-600 border-blue-200 ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : 'hover:bg-blue-100'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />審核中 ({pendingApproveReq.hours}h)</button>;
-                } else if (pendingConfirmReq) {
-                    otButtonUi = <button onClick={() => isSuperAdmin ? openOTModal(u) : alert("請至通知中心確認單據。")} className={`flex-1 py-2 text-xs rounded border font-bold shadow-sm bg-pink-50 text-pink-600 border-pink-200 ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : 'hover:bg-pink-100'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />待確認 ({pendingConfirmReq.hours}h)</button>;
-                } else if (hasOT) {
-                    otButtonUi = <button onClick={() => isSuperAdmin ? openOTModal(u) : alert("時數已生效，鎖定中。")} className={`flex-1 py-2 text-xs rounded border font-bold shadow-sm ${isOT ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-green-100 text-green-700 border-green-200'} ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : (isOT ? 'hover:bg-orange-200' : 'hover:bg-green-200')}`}><Clock className="w-3.5 h-3.5 inline mr-1" />{isOT ? `+${otValue}h` : `${otValue}h`}</button>;
-                } else {
-                    otButtonUi = <button onClick={() => openOTModal(u)} disabled={!canEditOT} className={`flex-1 py-2 text-xs rounded border shadow-sm ${!canEditOT ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />加/補休</button>;
-                }
+    // === OT 按鈕 UI 邏輯（保持不變）===
+    let otButtonUi = null;
+    if (pendingApproveReq) {
+        otButtonUi = <button onClick={() => isSuperAdmin ? openOTModal(u) : alert("已送出審核，鎖定中。")} className={`px-3 py-1.5 text-xs rounded-lg border font-bold shadow-sm bg-blue-50 text-blue-600 border-blue-200 ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : 'hover:bg-blue-100'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />審核中 ({pendingApproveReq.hours}h)</button>;
+    } else if (pendingConfirmReq) {
+        otButtonUi = <button onClick={() => isSuperAdmin ? openOTModal(u) : alert("請至通知中心確認單據。")} className={`px-3 py-1.5 text-xs rounded-lg border font-bold shadow-sm bg-pink-50 text-pink-600 border-pink-200 ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : 'hover:bg-pink-100'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />待確認 ({pendingConfirmReq.hours}h)</button>;
+    } else if (hasOT) {
+        otButtonUi = <button onClick={() => isSuperAdmin ? openOTModal(u) : alert("時數已生效，鎖定中。")} className={`px-3 py-1.5 text-xs rounded-lg border font-bold shadow-sm ${isOT ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-green-100 text-green-700 border-green-200'} ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : (isOT ? 'hover:bg-orange-200' : 'hover:bg-green-200')}`}><Clock className="w-3.5 h-3.5 inline mr-1" />{isOT ? `+${otValue}h` : `${otValue}h`}</button>;
+    } else {
+        otButtonUi = <button onClick={() => openOTModal(u)} disabled={!canEditOT} className={`px-3 py-1.5 text-xs rounded-lg border shadow-sm font-bold ${!canEditOT ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />加/補休</button>;
+    }
 
-                return (
-                  <div key={u.uid} className={`border rounded-lg p-3 ${!canEdit ? 'bg-gray-50 opacity-100' : 'bg-white'}`}>
-                    <div className="flex justify-between items-center mb-2">
-                        <div className="font-bold text-gray-800 flex items-center gap-2"><div className={`w-2.5 h-2.5 rounded-full ${userColor.split(' ')[0]} border border-gray-400`}></div>{u.name}</div>
-                        {showSwapBtn && <button onClick={() => requestSwap(currentUser.uid, u.uid)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-xs font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft size={12}/> 換假</button>}
+    return (
+      <div key={u.uid} className="border rounded-xl p-3 bg-white shadow-sm">
+        
+        {/* ── 第一行：員工名稱 + 換假按鈕 ── */}
+        <div className="flex justify-between items-center mb-2">
+            <div className="font-bold text-gray-800 flex items-center gap-2">
+                <div className={`w-2.5 h-2.5 rounded-full ${userColor.split(' ')[0]} border border-gray-400`}></div>
+                {u.name}
+            </div>
+            {showSwapBtn && (
+                <button onClick={() => requestSwap(currentUser.uid, u.uid)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-xs font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100">
+                    <ArrowRightLeft size={12}/> 換假
+                </button>
+            )}
+        </div>
+
+        {/* ── 第二行：快速操作按鈕區 ── */}
+        <div className="flex flex-wrap gap-1.5 items-center">
+
+            {/* 🟦 班別快速按鈕（管理員可一鍵點選，再點一次取消） */}
+            {isSuperAdmin ? (
+                shiftTypes.map(st => (
+                    <button
+                        key={st.id}
+                        onClick={() => updateShiftCode(u.uid, assign?.shiftCode === st.id ? '' : st.id)}
+                        title={`${st.start} ~ ${st.end}`}
+                        className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                            assign?.shiftCode === st.id
+                                ? 'bg-indigo-600 text-white border-indigo-700 shadow-md scale-105'
+                                : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 hover:scale-105'
+                        }`}
+                    >
+                        {st.label}
+                    </button>
+                ))
+            ) : (
+                assign?.shiftCode ? (
+                    <div className="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-200 font-bold">
+                        {shiftTypes.find(st=>st.id===assign.shiftCode)?.label || assign.shiftCode}
                     </div>
+                ) : null
+            )}
 
-                    <div className="flex gap-2 w-full mt-2">
-                        {isSuperAdmin ? (
-                            <select value={assign?.shiftCode || ''} onChange={(e) => updateShiftCode(u.uid, e.target.value)} className={`flex-1 text-xs border rounded p-1 shadow-sm text-center ${assign?.shiftCode ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold' : 'bg-white text-gray-500'}`}>
-                                <option value="">未排班</option>
-                                {shiftTypes.map(st => <option key={st.id} value={st.id}>{st.label}</option>)}
-                            </select>
-                        ) : (assign?.shiftCode ? (
-                            <div className="flex-1 flex items-center justify-center text-xs bg-gray-100 text-gray-600 rounded font-mono border shadow-sm font-bold">班別: {shiftTypes.find(st=>st.id===assign.shiftCode)?.label || assign.shiftCode}</div>
-                        ) : null)}
+            {/* 分隔線 */}
+            {(isSuperAdmin || canEditLeave) && (
+                <div className="w-px h-6 bg-gray-200 mx-0.5 self-center" />
+            )}
 
-                        {otButtonUi}
-                        <button onClick={() => canEditLeave ? setExpanded(expanded===u.uid?null:u.uid) : alert("無權限或已鎖定。")} className={`flex-1 py-2 text-xs rounded border shadow-sm ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50 font-bold'}`}>請休假 ▼</button>
-                    </div>
+            {/* 🔵 排休快速按鈕（管理員專用，不需展開面板） */}
+            {isSuperAdmin && (
+                <button
+                    onClick={() => toggle(u.uid, 'LEAVE', 'official', null)}
+                    className="px-3 py-1.5 rounded-lg border text-xs font-bold bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100 hover:scale-105 transition-all"
+                >
+                    📅 排休
+                </button>
+            )}
 
-                    {expanded===u.uid && (
-                      <div className="bg-gray-50 p-3 rounded-lg animate-fade-in border mt-2">
-                        <div className="text-xs font-bold text-gray-600 mb-2 border-b pb-1">休假申請表</div>
-                        <div className="flex items-center gap-2 mb-3">
-                            <span className="text-xs text-gray-600 font-bold whitespace-nowrap">找人代班:</span>
-                            <select id={`sub-select-${u.uid}`} className="text-xs border border-gray-300 rounded p-1.5 flex-1 bg-white shadow-sm focus:border-indigo-500 focus:outline-none"><option value="">-- 不需代班 --</option>{availableSubs.map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}</select>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2">
-                            {leaveTypes.map(lt => {
-                                if (lt.id === 'official' && !isSuperAdmin) return null;
-                                let limitReached = false; let limitMsg = "";
-                                const getLeaveCount = (leaveId, prefix) => {
-                                    let count = 0; Object.keys(shifts).forEach(d => { if (d.startsWith(prefix) && d !== dateStr) { if (Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a => a.uid === u.uid && a.type === 'LEAVE' && a.leaveType === leaveId)) count++; } }); return count;
-                                };
+            {/* 🟢 自畫假快速按鈕（員工/管理員皆可，含上限防呆） */}
+            {canEditLeave && (
+                <button
+                    onClick={() => {
+                        const getRosteredCount = () => {
+                            let count = 0;
+                            Object.keys(shifts).forEach(d => {
+                                if (d.startsWith(monthStr) && d !== dateStr && Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a => a.uid === u.uid && a.type === 'LEAVE' && a.leaveType === 'rostered')) count++;
+                            });
+                            return count;
+                        };
+                        if (!isSuperAdmin && getRosteredCount() >= 3) return alert("本月自選畫休已達 3 天上限！");
+                        toggle(u.uid, 'LEAVE', 'rostered', null);
+                    }}
+                    className="px-3 py-1.5 rounded-lg border text-xs font-bold bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 hover:scale-105 transition-all"
+                >
+                    🌿 自畫假
+                </button>
+            )}
 
-                                if (lt.id === 'menstrual') {
-                                    if (getLeaveCount('menstrual', yearStr) >= 3) { limitReached = true; limitMsg = "生理假一年最多請 3 天，已達上限！"; } else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天，已達上限！"; }
-                                } else if (lt.id === 'sick') { if (getLeaveCount('sick', yearStr) >= 30) { limitReached = true; limitMsg = "病假一年最多請 30 天，已達上限！"; }
-                                } else if (lt.id === 'personal') { if (getLeaveCount('personal', yearStr) >= 14) { limitReached = true; limitMsg = "事假一年最多請 14 天，已達上限！"; }
-                                } else if (lt.id === 'rostered') { if (!isSuperAdmin && getLeaveCount('rostered', monthStr) >= 3) { limitReached = true; limitMsg = "本月自選畫休 (排休) 已達 3 天上限！"; } }
+            {/* 🟠 加/補休按鈕 */}
+            {otButtonUi}
 
-                                const btnClass = limitReached ? (isSuperAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed') : (lt.id === 'rostered' || lt.id === 'official' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-sm' : 'bg-white hover:bg-gray-100 shadow-sm');
-                                return (
-                                    <button key={lt.id} onClick={() => { if (limitReached) { if (isSuperAdmin) { if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return; } else { alert(`🚫 拒絕：${limitMsg}`); return; } } const subVal = document.getElementById(`sub-select-${u.uid}`).value; toggle(u.uid,'LEAVE',lt.id, subVal || null); }} className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}>
-                                        {limitReached && isSuperAdmin && <span className="mr-1">⚠️</span>}{lt.label}
-                                    </button>
-                                )
-                            })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-            }
+            {/* ⋯ 更多假別（特休、病假、事假等需填時數的假別） */}
+            <button
+                onClick={() => canEditLeave ? setExpanded(expanded === u.uid ? null : u.uid) : alert("無權限或已鎖定。")}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                    expanded === u.uid
+                        ? 'bg-gray-200 text-gray-800 border-gray-400'
+                        : !canEditLeave
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'bg-white text-gray-500 hover:bg-gray-100 border-gray-200'
+                }`}
+            >
+                其他假別 {expanded === u.uid ? '▲' : '▼'}
+            </button>
+        </div>
+
+        {/* ── 展開面板：特休 / 生理假 / 病假 / 事假（含代班選擇） ── */}
+        {expanded === u.uid && (
+            <div className="bg-gray-50 p-3 rounded-lg animate-fade-in border mt-2">
+                <div className="text-xs font-bold text-gray-600 mb-2 border-b pb-1">其他假別申請（含代班安排）</div>
+                <div className="flex items-center gap-2 mb-3">
+                    <span className="text-xs text-gray-600 font-bold whitespace-nowrap">找人代班:</span>
+                    <select id={`sub-select-${u.uid}`} className="text-xs border border-gray-300 rounded p-1.5 flex-1 bg-white shadow-sm focus:border-indigo-500 focus:outline-none">
+                        <option value="">-- 不需代班 --</option>
+                        {availableSubs.map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}
+                    </select>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                    {leaveTypes
+                        .filter(lt => !['official', 'rostered'].includes(lt.id)) // 排休/自畫假已在快速按鈕，這裡不重複
+                        .map(lt => {
+                            let limitReached = false; let limitMsg = "";
+                            const getLeaveCount = (leaveId, prefix) => {
+                                let count = 0;
+                                Object.keys(shifts).forEach(d => {
+                                    if (d.startsWith(prefix) && d !== dateStr) {
+                                        if (Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a => a.uid === u.uid && a.type === 'LEAVE' && a.leaveType === leaveId)) count++;
+                                    }
+                                });
+                                return count;
+                            };
+                            if (lt.id === 'menstrual') {
+                                if (getLeaveCount('menstrual', yearStr) >= 3) { limitReached = true; limitMsg = "生理假一年最多請 3 天，已達上限！"; }
+                                else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天，已達上限！"; }
+                            } else if (lt.id === 'sick') {
+                                if (getLeaveCount('sick', yearStr) >= 30) { limitReached = true; limitMsg = "病假一年最多請 30 天，已達上限！"; }
+                            } else if (lt.id === 'personal') {
+                                if (getLeaveCount('personal', yearStr) >= 14) { limitReached = true; limitMsg = "事假一年最多請 14 天，已達上限！"; }
+                            }
+                            const btnClass = limitReached
+                                ? (isSuperAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed')
+                                : 'bg-white hover:bg-gray-100 shadow-sm';
+                            return (
+                                <button
+                                    key={lt.id}
+                                    onClick={() => {
+                                        if (limitReached) {
+                                            if (isSuperAdmin) { if (!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n是否要「強制核准」？`)) return; }
+                                            else { alert(`🚫 拒絕：${limitMsg}`); return; }
+                                        }
+                                        const subVal = document.getElementById(`sub-select-${u.uid}`)?.value;
+                                        toggle(u.uid, 'LEAVE', lt.id, subVal || null);
+                                    }}
+                                    className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}
+                                >
+                                    {limitReached && isSuperAdmin && <span className="mr-1">⚠️</span>}{lt.label}
+                                </button>
+                            );
+                        })
+                    }
+                </div>
+            </div>
+        )}
+      </div>
+    );
+}
+
           })}
           <div className="border-t pt-3 mt-2"><div className="flex gap-2 items-center mb-1"><StickyNote className="w-4 h-4 text-gray-500" /><span className="text-xs font-bold text-gray-600">當日備註 (顯示於右上角紅點)</span></div><div className="flex gap-2"><input value={note} onChange={e=>setNote(e.target.value)} className="border flex-1 rounded px-2 py-1 text-sm" placeholder="例如: 衛生局檢查..."/><button onClick={()=>setDoc(doc(db,'artifacts',appId,'public', 'data', 'shifts',dateStr),{...dayData,note},{merge:true})} className="bg-indigo-600 text-white px-3 rounded"><Save size={16}/></button></div></div>
           {isSuperAdmin && !isClosed && <div className="pt-2 border-t mt-2"><button onClick={toggleClosed} className="w-full bg-gray-100 text-gray-600 text-xs py-2 rounded hover:bg-gray-200 flex items-center justify-center gap-1"><Store className="w-3.5 h-3.5" /> 設為店休 (清空當日班表)</button></div>}
