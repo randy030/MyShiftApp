@@ -744,28 +744,9 @@ const CalendarView = ({ currentDate, setCurrentDate, shifts, requests, companyEv
                 {subName && <div className="text-[10px] text-gray-700 mt-0.5 flex items-center gap-1 bg-white/70 px-1 rounded w-max"><ArrowRightLeft size={9}/> {subName}代</div>}
             </div>
         )
-    }
-    
-    // 🆕 新增：顯示上班班別標籤
-    if (a.type === 'WORK' && a.shiftCode) {
-        const pColor = getUserColor(a.uid);
-        const fullName = allUsers[a.uid]?.name || '?';
-        const shortName = fullName.length > 2 ? fullName.slice(-2) : fullName;
-        const shiftInfo = shiftTypes.find(st => st.id === a.shiftCode);
-        return (
-            <div key={ix} className={`p-1 rounded border ${pColor} mb-1 flex justify-between items-center`}>
-                <span className="font-bold text-[11px]">{shortName}</span>
-                {shiftInfo && (
-                    <span className="font-mono text-[10px] bg-white/80 px-1 rounded border font-bold">
-                        {shiftInfo.label}
-                    </span>
-                )}
-            </div>
-        );
-    }
-    
-    return null;
+    } return null;
 })}
+
 
               </div>}
           </div>)
