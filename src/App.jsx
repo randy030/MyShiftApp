@@ -864,6 +864,9 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
 // ==========================================
 // 📝 表單簽署中心 (FormsView)
 // ==========================================
+// ==========================================
+// 📝 表單簽署中心 (FormsView)
+// ==========================================
 const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures }) => {
     const [activeTab, setActiveTab] = useState('fill'); 
     const [signModal, setSignModal] = useState(null); 
@@ -927,6 +930,9 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
                     </div>
                 </div>
             )}
+            
+            {/* 🔴 就是漏了最關鍵的這一行，把彈出視窗呼叫出來！ */}
+            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} />}
         </div>
     );
 };
