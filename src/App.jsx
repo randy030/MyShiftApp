@@ -11,9 +11,9 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 🚀 系統設定
+// 🚀 系統設定與 Firebase 初始化
 // ==========================================
-const CURRENT_VERSION = "v7.4 (Stable 5-Part Edition)"; 
+const CURRENT_VERSION = "v7.4 (Stable 4-Part Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -33,7 +33,7 @@ const db = getFirestore(app);
 const appId = 'team-shift-pc-v1'; 
 
 // ==========================================
-// 🛠️ 共用輔助函式
+// 🛠️ 輔助函式
 // ==========================================
 const exportToCSV = (filename, rows) => {
     const csvContent = "\uFEFF" + rows.map(row => 
@@ -66,11 +66,6 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
     return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
 };
 
-// 經典三級權限驗證
-const isUserSuperAdmin = (userObj) => userObj?.isAdmin || userObj?.email === ADMIN_EMAIL;
-const isUserManager = (userObj) => userObj?.isManager;
-const isUserPrivileged = (userObj) => isUserSuperAdmin(userObj) || isUserManager(userObj);
-
 // ==========================================
 // 📊 預設常數資料
 // ==========================================
@@ -95,7 +90,7 @@ const DEFAULT_INVENTORY_ITEMS = [
   { id: 'i14', category: '配料與包材', name: '大吸管(12mm)', spec: '包', price: 0 }
 ];
 
-// 🔴 高對比 10 色色盤 (解決顏色太相近的問題)
+// 高對比 10 色色盤
 const USER_COLORS = [
     'bg-red-200 text-red-900 border-red-500',       
     'bg-blue-200 text-blue-900 border-blue-500',    
@@ -113,6 +108,7 @@ const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', mo
 
 const getMonthData = (year, month) => ({ firstDay: new Date(year, month, 1).getDay(), days: new Date(year, month + 1, 0).getDate() });
 const getLocalDate = (dateStr) => { const [y, m, d] = dateStr.split('-'); return new Date(y, m - 1, d); };
+
 const checkEventOnDate = (event, checkDateStr) => {
     if (!event.startDate) return false;
     if (checkDateStr < event.startDate) return false;
@@ -125,6 +121,7 @@ const checkEventOnDate = (event, checkDateStr) => {
     if (event.repeatType === 'yearly') return checkDate.getMonth() === startDate.getMonth() && checkDate.getDate() === startDate.getDate();
     return false;
 };
+
 // ==========================================
 // 🪟 共用組件與彈出視窗
 // ==========================================
@@ -140,7 +137,6 @@ const DropdownItem = ({ onClick, icon: Icon, label, active }) => (
     </button>
 );
 
-// --- 加班/補休申請 Modal ---
 const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
     const [hours, setHours] = useState('');
     const [reason, setReason] = useState('');
@@ -190,7 +186,6 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
     );
 };
 
-// --- 公司行程備忘錄 Modal ---
 const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => {
     const [formData, setFormData] = useState({ title: '', startDate: '', time: '', repeatType: 'none', note: '' });
     
@@ -243,7 +238,6 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
     );
 };
 
-// --- 表單簽署 Modal ---
 const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     const [agree, setAgree] = useState(false);
     const [origDate, setOrigDate] = useState('');
@@ -339,31 +333,278 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     );
 };
 // ==========================================
+// 🌟 系統主程式 (Main App) - Vite 進入點
+// ==========================================
+export default function App() {
+    const [user, setUser] = useState(null);
+    const [view, setView] = useState('calendar'); 
+    const [loading, setLoading] = useState(true);
+    const [dbData, setDbData] = useState({ 
+        users: {}, shifts: {}, events: [], requests: [], 
+        leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES, 
+        inventory: DEFAULT_INVENTORY_ITEMS, store: null, signatures: []
+    });
+    
+    const [currentDate, setCurrentDate] = useState(new Date());
+    const [menuOpen, setMenuOpen] = useState(false);
+    const dropdownRef = useRef(null);
+  
+    useEffect(() => {
+        const handleClickOutside = (e) => { 
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setMenuOpen(false); 
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+  
+    useEffect(() => {
+        if ('Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
+        return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
+    }, []);
+  
+    useEffect(() => {
+        if (!user) return;
+        const unsub = [
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), snap => {
+                const users = {}; 
+                snap.forEach(doc => users[doc.id] = doc.data());
+                
+                // 新員工第一次登入自動建檔
+                if (!users[user.uid]) {
+                    setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), { 
+                        uid: user.uid, 
+                        name: user.displayName || `員工`, 
+                        email: user.email, 
+                        isAdmin: false,
+                        isManager: false,
+                        isResigned: false
+                    });
+                }
+                setDbData(prev => ({...prev, users}));
+            }),
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), snap => {
+                const shifts = {}; 
+                snap.forEach(doc => shifts[doc.id] = doc.data()); 
+                setDbData(prev => ({...prev, shifts}));
+            }),
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), snap => {
+                const requests = []; let newCount = 0;
+                snap.forEach(doc => { 
+                    const d = doc.data(); 
+                    requests.push({ id: doc.id, ...d }); 
+                    if (d.timestamp && (new Date() - d.timestamp.toDate()) < 10000) newCount++; 
+                });
+                if (newCount > 0 && Notification.permission === 'granted' && document.hidden) {
+                    new Notification("通知", { body: `您有 ${newCount} 筆新申請待處理！` });
+                }
+                setDbData(prev => ({...prev, requests}));
+            }),
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), snap => { 
+                if(snap.exists() && snap.data().types) setDbData(prev => ({...prev, leaves: snap.data().types})); 
+            }),
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftTypes'), snap => { 
+                if(snap.exists() && snap.data().types) setDbData(prev => ({...prev, shiftsDef: snap.data().types})); 
+            }),
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), snap => { 
+                if(snap.exists() && snap.data().items) setDbData(prev => ({...prev, inventory: snap.data().items})); 
+            }),
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), snap => { 
+                if(snap.exists()) setDbData(prev => ({...prev, store: snap.data()})); 
+            }),
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), snap => {
+                const events = []; 
+                snap.forEach(doc => events.push({ id: doc.id, ...doc.data() })); 
+                setDbData(prev => ({...prev, events}));
+            }),
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), snap => {
+                const signatures = []; 
+                snap.forEach(doc => signatures.push({ id: doc.id, ...doc.data() })); 
+                setDbData(prev => ({...prev, signatures}));
+            })
+        ];
+        return () => unsub.forEach(fn => fn());
+    }, [user]);
+  
+    const { users, shifts, events, requests, leaves, shiftsDef, inventory, store, signatures } = dbData;
+    const currentUserInfo = users[user?.uid] || {};
+    
+    // 傳統三級權限驗證
+    const isSuperAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
+    const isManager = currentUserInfo.isManager || false;
+    const isPrivileged = isSuperAdmin || isManager;
+    
+    // 通知判斷
+    const myNotifications = requests.filter(r => 
+        r.toUid === user?.uid || 
+        (r.type === 'ot_confirm' && r.uid === user?.uid) || 
+        (r.type === 'admin_ot_approve' && isPrivileged)
+    );
+  
+    const handleRequest = async (req, action) => {
+        const targetUser = users[req.uid || req.fromUid]; 
+        if (action === 'reject') {
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+            if(targetUser?.lineUserId) sendLineNotification([targetUser?.lineUserId], `❌ 申請 (${req.date}) 已被駁回。`);
+            return;
+        }
+
+        if (['ot_confirm', 'admin_ot_approve'].includes(req.type)) {
+            if (req.type === 'admin_ot_approve' && !isPrivileged) return alert("無權限核准單據"); 
+            
+            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+            const shiftSnap = await getDoc(shiftRef);
+            let assigns = shiftSnap.exists() && Array.isArray(shiftSnap.data().assignments) ? [...shiftSnap.data().assignments] : [];
+            const idx = assigns.findIndex(a => a.uid === (req.uid || req.fromUid));
+            const newEntry = { otHours: req.hours, otReason: req.reason, otConfirmed: true };
+            
+            if(idx >= 0) assigns[idx] = { ...assigns[idx], ...newEntry }; 
+            else assigns.push({ uid: (req.uid || req.fromUid), type: 'WORK', ...newEntry });
+            
+            await setDoc(shiftRef, { ...(shiftSnap.exists() ? shiftSnap.data() : {}), assignments: assigns }, { merge: true });
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+            
+            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `✅ ${req.hours>0?'加班':'補休'}申請 (${req.date}) 已核准！`);
+            alert("已核准並寫入統計！");
+        } 
+        else if (req.type === 'swap') {
+            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+            const shiftSnap = await getDoc(shiftRef);
+            if (shiftSnap.exists() && Array.isArray(shiftSnap.data().assignments)) {
+                const assigns = [...shiftSnap.data().assignments];
+                const idxA = assigns.findIndex(a => a.uid === req.fromUid); 
+                const idxB = assigns.findIndex(a => a.uid === req.toUid);
+                
+                if (idxA >= 0 && idxB >= 0) {
+                    const temp = { ...assigns[idxA], uid: req.toUid }; 
+                    assigns[idxA] = { ...assigns[idxB], uid: req.fromUid }; 
+                    assigns[idxB] = temp;
+                    await updateDoc(shiftRef, { assignments: assigns }); 
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+                    alert("換假成功！");
+                } else { 
+                    alert("班表已變更，無法換假"); 
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id)); 
+                }
+            }
+        }
+    };
+  
+    if (loading) return <div className="flex h-screen items-center justify-center">載入中...</div>;
+    
+    if (!user) return (
+        <div className="flex h-screen items-center justify-center bg-gray-50">
+            <div className="bg-white p-8 rounded-xl shadow-lg text-center">
+                <h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 雲端系統</h1>
+                <button onClick={()=>signInWithPopup(auth, new GoogleAuthProvider())} className="border px-6 py-2 rounded shadow hover:bg-gray-50 font-bold">
+                    Google 登入
+                </button>
+            </div>
+        </div>
+    );
+  
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans text-slate-800 pb-20 sm:pb-0">
+        <nav className="bg-white shadow-sm border-b sticky top-0 z-20">
+          <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-2 font-bold text-xl text-indigo-600">
+              <Calendar className="w-6 h-6" /> <span className="hidden sm:inline">TeamShift</span>
+              <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1 hidden md:inline">{CURRENT_VERSION}</span>
+            </div>
+            
+            <div className="flex gap-1 sm:gap-2 items-center">
+              <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
+              <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
+              <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
+              
+              <div className="relative" ref={dropdownRef}>
+                  <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold ${['salary','attendance','payroll','settings','forms'].includes(view) ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
+                      <Settings className="w-4 h-4" /> <span className="hidden xs:inline">管理</span>
+                      <ChevronDown className="w-3 h-3" />
+                  </button>
+                  {menuOpen && (
+                      <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
+                          {isPrivileged && <DropdownItem onClick={()=>{setView('salary'); setMenuOpen(false);}} icon={FileBarChart} label="統計明細" active={view==='salary'} />}
+                          {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
+                          {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
+                          <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
+                          <div className="border-t my-1 border-gray-100"></div>
+                          <DropdownItem onClick={()=>{setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定" active={view==='settings'} />
+                      </div>
+                  )}
+              </div>
+              <button onClick={()=>setView('inbox')} className={`p-2 relative rounded-lg ${view==='inbox'?'bg-indigo-50 text-indigo-600':'text-gray-500 hover:text-indigo-600'}`}>
+                  <Bell className="w-5 h-5" />
+                  {myNotifications.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border border-white rounded-full"></span>}
+              </button>
+              <button onClick={()=>window.confirm("確定登出？")&&signOut(auth)} className="p-2 text-gray-400 hover:text-red-500">
+                  <LogOut className="w-5 h-5"/>
+              </button>
+            </div>
+          </div>
+        </nav>
+  
+        <main className="max-w-6xl mx-auto p-3 sm:p-4">
+          {view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} />}
+          {view === 'clock' && <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={store} db={db} appId={appId} />}
+          {view === 'inventory' && <InventoryView inventoryItems={inventory} db={db} appId={appId} />}
+          {view === 'attendance' && isPrivileged && <AttendanceView users={users} currentDate={currentDate} shifts={shifts} shiftTypes={shiftsDef} db={db} appId={appId} />}
+          {view === 'salary' && isPrivileged && <SalaryView users={users} shifts={shifts} currentDate={currentDate} leaveTypes={leaves} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} />}
+          {view === 'payroll' && isSuperAdmin && <PayrollView users={Object.values(users).filter(u=>!u.isResigned)} currentDate={currentDate} db={db} appId={appId} />}
+          {view === 'settings' && <SettingsView users={users} currentUserInfo={currentUserInfo} leaveTypes={leaves} shiftTypes={shiftsDef} inventoryItems={inventory} storeConfig={store} db={db} appId={appId} isSuperAdmin={isSuperAdmin} />}
+          {view === 'forms' && <FormsView users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={signatures} />}
+          
+          {view === 'inbox' && (
+              <div className="max-w-md mx-auto space-y-4">
+                  <div className="bg-white p-4 rounded-xl border flex items-center gap-2">
+                      <Bell className="text-indigo-600"/><h2 className="font-bold text-lg">通知中心</h2>
+                  </div>
+                  {myNotifications.length === 0 ? (
+                      <div className="text-center py-10 text-gray-400">目前沒有通知</div>
+                  ) : (
+                      myNotifications.map(req => (
+                          <div key={req.id} className="bg-white p-4 rounded-xl border border-l-4 border-l-indigo-500 shadow-sm mb-3">
+                              <h3 className="font-bold text-gray-800">單據審核</h3>
+                              <p className="text-sm">申請人：{users[req.uid || req.fromUid]?.name} | 日期：{req.date}</p>
+                              <div className="bg-gray-50 p-2 my-2 text-sm rounded font-bold text-indigo-800">
+                                  {req.hours > 0 ? '加班' : '補休'} {Math.abs(req.hours)} 小時 ({req.reason})
+                              </div>
+                              <div className="flex gap-2">
+                                  <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border py-2 rounded-lg font-bold hover:bg-gray-50">駁回</button>
+                                  <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow hover:bg-indigo-700">核准</button>
+                              </div>
+                          </div>
+                      ))
+                  )}
+              </div>
+          )}
+        </main>
+      </div>
+    );
+}
+// ==========================================
 // 📦 庫存盤點頁面 (InventoryView)
 // ==========================================
 const InventoryView = ({ db, appId, inventoryItems }) => {
     const items = Array.isArray(inventoryItems) && inventoryItems.length > 0 ? inventoryItems : [];
-    
-    // 🔴 修正了白屏報錯的問題，確保 Hook 順序正確
     const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
     const [activeTab, setActiveTab] = useState(categories[0] || '');
     const [records, setRecords] = useState({});
     
-    if (items.length === 0) {
-        return (
-            <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
-                <Package size={64} className="mx-auto text-gray-300 mb-4" />
-                <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
-                <p className="text-gray-500 mt-2">請使用最高管理員帳號，前往「管理」➡️「系統設定」新增庫存品項。</p>
-            </div>
-        )
-    }
-
     const filteredItems = items.filter(i => i.category === activeTab);
 
     const totalValue = useMemo(() => {
         return items.reduce((sum, item) => sum + ((records[item.id] || 0) * item.price), 0);
     }, [items, records]);
+
+    if (items.length === 0) {
+        return (
+            <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
+                <Package size={64} className="mx-auto text-gray-300 mb-4" />
+                <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
+                <p className="text-gray-500 mt-2">請使用管理員帳號，前往「管理」➡️「系統設定」新增庫存品項。</p>
+            </div>
+        )
+    }
 
     const handleCountChange = (id, delta) => {
         setRecords(prev => { const current = prev[id] || 0; return { ...prev, [id]: Math.max(0, current + delta) }; });
@@ -686,7 +927,6 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
                     </div>
                 </div>
             )}
-            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} />}
         </div>
     );
 };
@@ -709,7 +949,6 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
       else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), eventData);
       setEditingEvent(null);
   };
-
   const handleDeleteEvent = async (eventId) => {
       if(window.confirm("確定要刪除這個行程嗎？")) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId)); setEditingEvent(null); }
   };
@@ -844,6 +1083,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
     const idx = next.findIndex(a=>a.uid===uid);
     if (!isSuperAdmin && next[idx]?.type === 'LEAVE') { return alert("請假已鎖定。"); }
 
+    // 🔴 核心防呆：假日畫假限制 (2天) & 月畫假限制 (3天)
     if (lType === 'rostered') { 
         let totalRostered = 0; let weekendRostered = 0;
         Object.keys(shifts).forEach(d => { 
