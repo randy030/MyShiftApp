@@ -66,6 +66,7 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
     return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
 };
 
+// 🔴 法定特休自動計算
 const getAnnualLeaveDays = (startDateStr) => {
     if (!startDateStr) return 0;
     const start = new Date(startDateStr);
@@ -198,6 +199,7 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
     );
 };
 
+// 🔴 油資發票自動累計 Modal
 const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRecords }) => {
     const [amount, setAmount] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -555,8 +557,11 @@ export default function App() {
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isPrivileged && !hasSignedContract;
 
+    // 若被鎖定，強制跳轉到 forms 頁面
     useEffect(() => {
-        if (isLocked && view !== 'forms') setView('forms');
+        if (isLocked && view !== 'forms') {
+            setView('forms');
+        }
     }, [isLocked, view]);
 
     const myNotifications = requests.filter(r => 
@@ -621,6 +626,7 @@ export default function App() {
             </div>
             
             <div className="flex gap-1 sm:gap-2 items-center">
+              {/* 🔴 如果鎖定中，隱藏導覽列按鈕，只顯示強制簽約提示 */}
               {!isLocked ? (
                   <>
                       <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
@@ -657,6 +663,7 @@ export default function App() {
         </nav>
   
         <main className="max-w-6xl mx-auto p-3 sm:p-4">
+          {/* 🔴 鎖定時的紅底警告橫幅 */}
           {isLocked && (
               <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg shadow-sm animate-fade-in">
                   <h3 className="text-red-800 font-bold flex items-center gap-2"><AlertTriangle size={18}/> 員工報到強制簽署提醒</h3>
