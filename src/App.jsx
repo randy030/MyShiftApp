@@ -13,7 +13,7 @@ import {
 // ==========================================
 // 🚀 系統設定與 Firebase 初始化
 // ==========================================
-const CURRENT_VERSION = "v7.8 (Ultimate Legal Shield Edition)"; 
+const CURRENT_VERSION = "v7.8.2 (Ultimate Legal Shield Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
