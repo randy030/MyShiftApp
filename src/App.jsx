@@ -13,7 +13,7 @@ import {
 // ==========================================
 // 🚀 系統設定與 Firebase 初始化
 // ==========================================
-const CURRENT_VERSION = "v7.9 (Clean Reports Edition)"; 
+const CURRENT_VERSION = "v8.0 (Perfect Contract Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -198,7 +198,6 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
     );
 };
 
-// 🔴 油資發票自動累計 Modal
 const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRecords }) => {
     const [amount, setAmount] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -251,17 +250,14 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
     );
 };
 
-// 🔴 動態表單簽署 Modal
+// 🔴 動態表單簽署 Modal (V8.0: 管理員預先填寫制 & 8大條款展開)
 const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     const [agree, setAgree] = useState(false);
     const [origDate, setOrigDate] = useState('');
     const [newDate, setNewDate] = useState('');
     
-    const [contractStart, setContractStart] = useState('');
-    const [contractEnd, setContractEnd] = useState('');
-    const [isIndefinite, setIsIndefinite] = useState(false);
-    const [workLocation, setWorkLocation] = useState('');
-    const [salaryAmount, setSalaryAmount] = useState('');
+    // 從 currentUserInfo 抓取管理員設定好的合約資料
+    const { workLocation, salaryAmount, contractStart, contractEnd, isIndefinite } = currentUserInfo;
 
     const canvasRef = useRef(null);
     const [isDrawing, setIsDrawing] = useState(false);
@@ -303,8 +299,8 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
             if (!origDate || !newDate) return alert("請完整選擇原假日與調移日期！");
             formName = '國定假日調移同意書'; customData = { origDate, newDate };
         } else if (formType === 'contract') {
-            if (!contractStart || !workLocation || !salaryAmount) return alert("請填寫合約日期、地點與約定薪資！");
-            formName = '員工勞動契約書'; customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation, salaryAmount };
+            formName = '員工勞動契約暨保密與工作守則同意書'; 
+            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation, salaryAmount };
         }
         
         const signatureImage = canvasRef.current.toDataURL('image/png');
@@ -316,7 +312,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4 animate-fade-in">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[95vh]">
-                <div className="bg-gray-800 p-4 text-white flex justify-between items-center"><h3 className="font-bold">{formType === 'holiday' ? '填寫：國定假日調移同意書' : '填寫：員工勞動契約書'}</h3><button onClick={onClose}><X size={20}/></button></div>
+                <div className="bg-gray-800 p-4 text-white flex justify-between items-center"><h3 className="font-bold">{formType === 'holiday' ? '填寫：國定假日調移同意書' : '填寫：員工勞動契約暨保密與工作守則同意書'}</h3><button onClick={onClose}><X size={20}/></button></div>
                 <div className="p-6 overflow-y-auto flex-1 space-y-4">
                     
                     {formType === 'holiday' && (
@@ -327,19 +323,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
                         </div>
                     )}
 
-                    {formType === 'contract' && (
-                        <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mb-4 space-y-3 shadow-sm">
-                            <h4 className="font-bold text-indigo-800">請填寫契約基本資料：</h4>
-                            <div className="flex flex-col sm:flex-row gap-2">
-                                <div className="flex-1"><label className="text-xs font-bold text-gray-700 block mb-1">契約起始日</label><input type="date" value={contractStart} onChange={e=>setContractStart(e.target.value)} className="w-full border rounded px-3 py-2 text-sm focus:outline-none"/></div>
-                                <div className="flex-1"><div className="flex justify-between items-center mb-1"><label className="text-xs font-bold text-gray-700">契約迄日</label><label className="text-xs flex items-center gap-1 text-indigo-600 font-bold cursor-pointer"><input type="checkbox" checked={isIndefinite} onChange={e=>setIsIndefinite(e.target.checked)}/> 不定期契約</label></div><input type="date" value={contractEnd} disabled={isIndefinite} onChange={e=>setContractEnd(e.target.value)} className={`w-full border rounded px-3 py-2 text-sm focus:outline-none ${isIndefinite ? 'bg-gray-100 text-gray-400' : 'bg-white'}`}/></div>
-                            </div>
-                            <div><label className="text-xs font-bold text-gray-700 block mb-1">約定工作地點 (門市地址)</label><input type="text" value={workLocation} onChange={e=>setWorkLocation(e.target.value)} placeholder="例如：台中市西屯區..." className="w-full border rounded px-3 py-2 text-sm focus:outline-none"/></div>
-                            <div><label className="text-xs font-bold text-gray-700 block mb-1">約定月薪 (新台幣)</label><input type="number" value={salaryAmount} onChange={e=>setSalaryAmount(e.target.value)} placeholder="例如：35000" className="w-full border rounded px-3 py-2 text-sm focus:outline-none"/></div>
-                        </div>
-                    )}
-
-                    <div className="border border-gray-300 rounded-lg p-5 bg-gray-50 h-64 overflow-y-auto text-sm text-gray-700 leading-relaxed shadow-inner">
+                    <div className="border border-gray-300 rounded-lg p-5 bg-gray-50 h-72 overflow-y-auto text-sm text-gray-700 leading-relaxed shadow-inner">
                         {formType === 'holiday' ? (
                             <>
                                 <h4 className="font-bold text-center text-lg mb-4 text-gray-900">國定假日調移同意書</h4>
@@ -351,42 +335,56 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
                             </>
                         ) : (
                             <>
-                                <h4 className="font-bold text-center text-xl mb-4 text-gray-900">員工勞動契約書</h4>
+                                <h4 className="font-bold text-center text-xl mb-4 text-gray-900">員工勞動契約暨保密與工作守則同意書</h4>
                                 <p className="mb-4">立契約書人 <strong>{currentUserInfo.name}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
-                                <p className="font-bold text-gray-900 mt-4">第一條：契約起訖與工作場所</p>
-                                <ol className="list-decimal pl-8 space-y-1">
-                                    <li>契約期間：自 {contractStart || '【】'} 起至 {isIndefinite ? '不定期契約' : (contractEnd || '【】')} 止。</li>
-                                    <li>工作地點：乙方應於甲方指定地點（<span className="text-indigo-600 font-bold border-b border-indigo-300 pb-0.5">{workLocation || '【尚未填寫】'}</span>）提供勞務，負責相關門市工作。</li>
+                                
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第一條：契約起訖與工作場所</p>
+                                <ol className="list-decimal pl-8 space-y-1 mt-2">
+                                    <li>契約期間：自 <span className="text-indigo-600 font-bold">{contractStart}</span> 起至 <span className="text-indigo-600 font-bold">{isIndefinite ? '不定期契約' : contractEnd}</span> 止。</li>
+                                    <li>工作地點：乙方應於甲方指定地點（<span className="text-indigo-600 font-bold">{workLocation}</span>）提供勞務，負責相關門市工作。</li>
                                 </ol>
-                                <p className="font-bold text-gray-900 mt-4">第二條：出勤、請假與排班制度</p>
-                                <ol className="list-decimal pl-8 space-y-1">
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第二條：出勤、請假與排班制度</p>
+                                <ol className="list-decimal pl-8 space-y-1 mt-2">
                                     <li>採排班制與變形工時，確實透過 APP 打卡。</li>
                                     <li>換假與換班需於 <strong>3 天前</strong> 經雙方確認並送交店長審核核准。未經核准擅自不到班者，依曠職論處。</li>
                                     <li><strong>特休</strong>：依勞動基準法第 38 條規定，由系統按到職日自動計算發放。</li>
                                     <li><strong>自畫假/排休</strong>：每月自畫休假上限 3 天，且逢星期六、日之假日最多僅能畫休 2 天。</li>
                                     <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理，全年事假上限 14 日、病假上限 30 日。</li>
                                 </ol>
-                                <p className="font-bold text-gray-900 mt-4">第三條：寒暑假旺季特別約定</p>
-                                <ol className="list-decimal pl-8 space-y-1">
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第三條：寒暑假旺季特別約定</p>
+                                <ol className="list-decimal pl-8 space-y-1 mt-2">
                                     <li>因應門市寒暑假（1,2月及7,8月）之營運高峰，乙方同意配合延長工時，正常與延長工時合計單日最長不超過 12 小時。</li>
                                     <li>針對旺季配合排班衍生之額外工時，甲方得視出勤與營運績效另行核發「旺季特別獎金」，連同當月薪資發放。</li>
                                 </ol>
-                                <p className="font-bold text-gray-900 mt-4">第四條：薪資、油資與補休結算</p>
-                                <ol className="list-decimal pl-8 space-y-1">
-                                    <li><strong>本薪發放</strong>：甲方每月給付乙方本薪新台幣 <span className="text-indigo-600 font-bold border-b border-indigo-300 pb-0.5">{salaryAmount || '【尚未填寫】'}</span> 元整。統一於 <strong>次月 5 日</strong> 轉帳發放。</li>
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第四條：薪資、油資與補休結算</p>
+                                <ol className="list-decimal pl-8 space-y-1 mt-2">
+                                    <li><strong>本薪發放</strong>：甲方每月給付乙方本薪新台幣 <span className="text-indigo-600 font-bold">{salaryAmount}</span> 元整。統一於 <strong>次月 5 日</strong> 轉帳發放。</li>
                                     <li><strong>油資補貼約定</strong>：每月最高補貼 500 元。採實報實銷，須主動提交甲方「統編發票」核銷。未達 500 元以實際發票金額核發，超過以 500 元為限，未核銷額度不得遞延。</li>
                                     <li><strong>國定假日出勤與時數轉換</strong>：乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發當日加倍工資。</li>
                                     <li><strong>補休排定</strong>：加班或國定假日出勤產生之補休，視營運排定，主管保留調度權。</li>
                                     <li><strong>年度結算</strong>：至當年 12/31 止，年度終結未休畢之補休時數，將依法折發工資或依雙方協議之獎金發放辦法結算。</li>
                                 </ol>
-                                <p className="font-bold text-gray-900 mt-4">第五條至第八條：離職、福利、懲處與保密</p>
-                                <p className="pl-4">乙方離職須依法預告並交接。甲方依法提撥6%勞退。嚴禁代打卡、偷料。若因個人重大過失造成具體財物損失，乙方負損害賠償責任（甲方不得自薪資預扣，須由乙方另行給付或依法協議）。乙方對營業機密負絕對保密義務，違者願負法律責任。</p>
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第五條：離職與交接</p>
+                                <p className="pl-4 mt-2">乙方自請離職須依勞動基準法第 15 條及相關規定提前預告，並確實辦理業務與器材交接。未依規定致甲方受有損害者，須負損害賠償責任。</p>
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第六條：法定保障與福利</p>
+                                <p className="pl-4 mt-2">甲方依法提撥 6% 勞退、提供勞保及職災協助。獎金視營運狀況發放，非屬經常性薪資。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第七條：懲處與賠償制度</p>
+                                <p className="pl-4 mt-2">嚴禁代打卡、偷料、擅自給予客人口頭折扣等行為。違反工作規則者予以懲處；若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣，須由乙方另行給付或依法協議）。</p>
+
+                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第八條：機密保密</p>
+                                <p className="pl-4 mt-2">乙方對職務上知悉之營業機密（含配方、進貨價格、營業額、客源資料等）負有絕對保密義務，離職後亦同。如有違反，乙方願負一切法律責任與損害賠償。</p>
                             </>
                         )}
                     </div>
 
                     <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 cursor-pointer hover:bg-blue-100 transition-colors" onClick={()=>setAgree(!agree)}>
-                        <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="w-5 h-5 accent-blue-600 cursor-pointer"/><span className="font-bold text-blue-900 leading-tight">本人已詳細審閱、充分了解且同意上述條款，並以下方親筆簽名為憑。</span></label>
+                        <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="w-5 h-5 accent-blue-600 cursor-pointer"/><span className="font-bold text-blue-900 leading-tight">本人已詳細審閱、充分了解且同意上述 8 項條款，並以下方親筆簽名為憑。</span></label>
                     </div>
 
                     <div className="border-2 border-gray-300 rounded-lg overflow-hidden relative">
@@ -403,7 +401,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     );
 };
 
-// 🔴 合約預覽與列印 Modal
+// 🔴 合約預覽與列印 Modal (同新版 8大條款)
 const ViewSignatureModal = ({ sigData, onClose }) => {
     if (!sigData) return null;
     const handlePrint = () => { window.print(); };
@@ -431,14 +429,17 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
                         ) : (
                             <>
                                 <p>立契約書人 <strong>{sigData.userName}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
-                                <p><strong>一、契約起訖與工作地點：</strong> 契約期間自 {sigData.customData?.contractStart} 至 {sigData.customData?.contractEnd}。乙方應於甲方指定地點（{sigData.customData?.workLocation}）提供勞務，負責相關門市工作。</p>
-                                <p><strong>二、排班與請假制度：</strong> 採排班制與變形工時。請換假需於 3 天前審核。特休依勞基法發放；每月自畫休假上限 3 天（含假日最多 2 天）。</p>
-                                <p><strong>三、寒暑假旺季與工時：</strong> 因應寒暑假（1,2月及7,8月）營運高峰，乙方同意配合延長工時，合計單日最長不超過 12 小時。甲方得視營運績效另行核發「旺季特別獎金」。</p>
-                                <p><strong>四、薪資、油資與補休結算：</strong> 甲方每月給付乙方本薪新台幣 <strong>{sigData.customData?.salaryAmount}</strong> 元整。每月最高 500 元油資補貼（憑統編發票實報實銷）。<strong>乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發加倍工資。</strong>年度終結未休畢之補休時數，將依法或雙方協議之獎金辦法結算發放。</p>
-                                <p><strong>五、紀律與保密：</strong> 乙方離職須依法預告並交接。若因個人重大過失造成具體財物損失，乙方負損害賠償責任（甲方不得自薪資預扣）。乙方對營業機密負絕對保密義務，違者願負法律責任。</p>
+                                <p><strong>第一條：契約起訖與工作地點</strong><br/>契約期間自 {sigData.customData?.contractStart} 至 {sigData.customData?.contractEnd}。乙方應於甲方指定地點（{sigData.customData?.workLocation}）提供勞務，負責相關門市工作。</p>
+                                <p><strong>第二條：出勤、請假與排班制度</strong><br/>採排班制與變形工時。請換假需於 3 天前審核。特休依勞基法發放；每月自畫休假上限 3 天（含假日最多 2 天）。</p>
+                                <p><strong>第三條：寒暑假旺季與工時</strong><br/>因應寒暑假（1,2月及7,8月）營運高峰，乙方同意配合延長工時，合計單日最長不超過 12 小時。甲方得視營運績效另行核發「旺季特別獎金」。</p>
+                                <p><strong>第四條：薪資、油資與補休結算</strong><br/>甲方每月給付乙方本薪新台幣 <strong>{sigData.customData?.salaryAmount}</strong> 元整。每月最高 500 元油資補貼（憑統編發票實報實銷）。乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發加倍工資。年度終結未休畢之補休時數，依法或獎金辦法結算發放。</p>
+                                <p><strong>第五條：離職與交接</strong><br/>乙方自請離職須依法預告並交接。未依規定致甲方受有損害者，須負損害賠償責任。</p>
+                                <p><strong>第六條：法定保障與福利</strong><br/>甲方依法提撥 6% 勞工退休金、提供勞保及職災協助。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
+                                <p><strong>第七條：懲處與賠償制度</strong><br/>嚴禁代打卡、偷料。若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣）。</p>
+                                <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
                             </>
                         )}
-                        <div className="bg-gray-100 p-3 text-sm font-bold text-center border mt-6">☑️ 本人已詳細審閱、充分了解且同意上述條款，並以下方親筆簽名為憑。</div>
+                        <div className="bg-gray-100 p-3 text-sm font-bold text-center border mt-6">☑️ 本人已詳細審閱、充分了解且同意上述 8 項條款，並以下方親筆簽名為憑。</div>
                     </div>
 
                     <div className="mt-8 flex justify-end">
@@ -456,7 +457,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
     );
 };
 // ==========================================
-// 🌟 系統主程式 (Main App) - 包含強制鎖定機制
+// 🌟 系統主程式 (Main App) 
 // ==========================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -552,7 +553,7 @@ export default function App() {
     const isManager = currentUserInfo.isManager || false;
     const isPrivileged = isSuperAdmin || isManager;
     
-    // 🔴 V7.8 強制簽約鎖定防呆
+    // 🔴 V8.0 強制簽約鎖定防呆
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isPrivileged && !hasSignedContract;
 
@@ -636,7 +637,6 @@ export default function App() {
                               <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
                                   {isPrivileged && <DropdownItem onClick={()=>{setView('salary'); setMenuOpen(false);}} icon={FileBarChart} label="統計明細" active={view==='salary'} />}
                                   {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
-                                  {/* 🔴 V7.9 修改：將所有 users 傳入 PayrollView，由裡面自己過濾 */}
                                   {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
                                   <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
                                   <div className="border-t my-1 border-gray-100"></div>
@@ -662,7 +662,7 @@ export default function App() {
           {isLocked && (
               <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg shadow-sm animate-fade-in">
                   <h3 className="text-red-800 font-bold flex items-center gap-2"><AlertTriangle size={18}/> 員工報到強制簽署提醒</h3>
-                  <p className="text-red-700 text-sm mt-1">您尚未簽署《員工勞動契約書》。請先閱讀並完成下方合約之「親筆簽名」，方可解鎖打卡、看班表與其他系統功能！</p>
+                  <p className="text-red-700 text-sm mt-1">您尚未簽署《員工勞動契約暨保密與工作守則同意書》。請先閱讀並完成下方合約之「親筆簽名」，方可解鎖打卡、看班表與其他系統功能！</p>
               </div>
           )}
 
@@ -671,7 +671,6 @@ export default function App() {
           {!isLocked && view === 'inventory' && <InventoryView inventoryItems={inventory} db={db} appId={appId} />}
           {!isLocked && view === 'attendance' && isPrivileged && <AttendanceView users={users} currentDate={currentDate} shifts={shifts} shiftTypes={shiftsDef} db={db} appId={appId} />}
           {!isLocked && view === 'salary' && isPrivileged && <SalaryView users={users} shifts={shifts} currentDate={currentDate} leaveTypes={leaves} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} gasReceipts={gasReceipts} db={db} appId={appId} />}
-          {/* 🔴 V7.9 修改：將 Object.values(users) 傳入，拿掉 .filter */}
           {!isLocked && view === 'payroll' && isSuperAdmin && <PayrollView users={Object.values(users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={gasReceipts} />}
           {!isLocked && view === 'settings' && <SettingsView users={users} currentUserInfo={currentUserInfo} leaveTypes={leaves} shiftTypes={shiftsDef} inventoryItems={inventory} storeConfig={store} db={db} appId={appId} isSuperAdmin={isSuperAdmin} insurances={insurances} />}
           
@@ -914,7 +913,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
 };
 
 // ==========================================
-// 📝 表單簽署中心 (FormsView) - 支援鎖定模式
+// 📝 表單簽署中心 (FormsView) - 🔴 V8.0 檢查管理員設定
 // ==========================================
 const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked }) => {
     const [activeTab, setActiveTab] = useState('fill'); 
@@ -923,6 +922,16 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
     const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
+
+    const handleSignContract = () => {
+        // 檢查管理員是否已經在後台設定好該員工的薪水與合約日期
+        const isContractReady = currentUserInfo.workLocation && currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
+        
+        if (!isContractReady) {
+            return alert("🚨 管理員尚未設定您的「約定薪資」與「合約日期」！\n\n請先通知店長至【系統設定】完成您的合約基本資料設定，才能進行簽署。");
+        }
+        setSignModal('contract');
+    };
 
     return (
         <div className="max-w-4xl mx-auto space-y-4 pb-20">
@@ -938,9 +947,9 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
             {activeTab === 'fill' && (
                 <div className="grid sm:grid-cols-2 gap-4">
                     <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'ring-4 ring-red-500 ring-opacity-50' : 'hover:shadow-md'}`}>
-                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約書 (新進/年度)</h3></div>
+                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約暨保密與工作守則同意書</h3></div>
                         <p className="text-sm text-gray-500 mb-4 h-10">新進員工報到或年度工作規範及業務機密保密約定。</p>
-                        <button onClick={()=>setSignModal('contract')} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
+                        <button onClick={handleSignContract} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
                             {hasSignedContract ? '重新檢視/簽署' : '立即填寫與簽名'}
                         </button>
                         <div className="mt-3 text-xs text-gray-400 font-bold">{hasSignedContract ? '✅ 您已完成簽署' : <span className="text-red-500">⚠️ 尚未簽署 (請盡速完成以解鎖系統)</span>}</div>
@@ -1070,7 +1079,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     );
 };
 
-// --- 排班細節 Modal (含特休自動防呆、假日防呆) ---
+// --- 排班細節 Modal ---
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId }) => {
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
     const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
@@ -1397,14 +1406,13 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
 };
 
 // ==========================================
-// 📊 統計明細 (SalaryView) - 🔴 V7.9 新增離職過濾
+// 📊 統計明細 (SalaryView)
 // ==========================================
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [showResigned, setShowResigned] = useState(false);
     const [gasModalData, setGasModalData] = useState(null);
 
-    // 🔴 根據「顯示已離職」開關過濾名單
     const visibleUsers = useMemo(() => {
         let list = isPrivileged ? Object.values(users) : [currentUserInfo];
         if (!showResigned) list = list.filter(u => !u.isResigned);
@@ -1462,7 +1470,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
       const balance = yearStats.otEarned - yearStats.compHoursUsed;
       const cashOut = Math.floor(balance / 8) * 1000;
 
-      // 計算本月油資總額
       const userGasRecords = gasReceipts?.[targetMonth]?.[uid] || [];
       const gasTotal = userGasRecords.reduce((sum, r) => sum + r.amount, 0);
       const gasCapped = Math.min(gasTotal, 500);
@@ -1497,7 +1504,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
         <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
             <h2 className="font-bold flex gap-2 text-indigo-700"><ListFilter /> 統計明細</h2>
             <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
-                {/* 🔴 V7.9 新增離職過濾打勾 */}
                 {isPrivileged && (
                     <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
                         <input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} className="accent-indigo-600" />
@@ -1608,7 +1614,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
       </div>
     );
 };
-// --- 薪資管理 (PayrollView) - 🔴 V7.9 新增離職過濾 ---
+// --- 薪資管理 (PayrollView) ---
 const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
@@ -1627,7 +1633,6 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true }); 
     };
 
-    // 🔴 根據「顯示已離職」開關過濾名單
     const visibleUsers = users.filter(u => showResigned ? true : !u.isResigned);
 
     return (
@@ -1647,7 +1652,6 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
                 <table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">姓名</th><th className="p-3 w-24">本薪</th><th className="p-3 w-20 bg-teal-50 text-teal-700 text-center">油資核銷<br/><span className="text-[10px] font-normal">(自動計算)</span></th><th className="p-3 w-24">補助/津貼</th><th className="p-3 w-24 bg-pink-50 text-pink-700">生日禮金</th><th className="p-3 w-24 bg-purple-50 text-purple-700">三節獎金</th><th className="p-3 w-24 bg-yellow-50 text-yellow-700">年終獎金</th><th className="p-3">備註</th></tr></thead>
                 <tbody>{visibleUsers.map(u => { 
                     const record = payrollData[u.uid] || {}; 
-                    // 自動抓取油資累計並封頂 500
                     const userGasRecords = gasReceipts?.[targetMonth]?.[u.uid] || [];
                     const gasTotal = userGasRecords.reduce((sum, r) => sum + r.amount, 0);
                     const gasCapped = Math.min(gasTotal, 500);
@@ -1675,7 +1679,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     );
 };
 
-// --- Settings View ---
+// --- Settings View (V8.0: 🔴 新增管理員後台輸入薪資與合約日期) ---
 const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin, insurances }) => {
   const userList = Object.values(users);
   
@@ -1691,7 +1695,6 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
   const [locConfig, setLocConfig] = useState(storeConfig || { lat: '', lng: '', radius: 50 });
   useEffect(() => { if (storeConfig) setLocConfig(storeConfig); }, [storeConfig]);
   
-  // 🔴 公司保險櫃 State
   const safeInsurances = Array.isArray(insurances) ? insurances : [];
   const [newIns, setNewIns] = useState({ name: '', expiryDate: '', image: '' });
 
@@ -1743,7 +1746,6 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
       reader.readAsDataURL(file); 
   };
 
-  // 保險櫃相關函式
   const handleInsImageUpload = (e) => {
       const file = e.target.files[0]; 
       if (!file) return; 
@@ -1792,7 +1794,6 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
         </div>
       </div>
 
-      {/* 🔴 公司保險櫃 (僅限最高管理員) */}
       {isSuperAdmin && (
           <div className="bg-white p-4 rounded-xl border shadow-sm">
               <h3 className="font-bold mb-3 flex gap-2 text-indigo-700"><ShieldAlert size={18}/> 公司重要保險與檔案櫃</h3>
@@ -1892,7 +1893,6 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                      {isSuperAdmin && (<div><label className="text-xs font-bold text-gray-500">在職狀態</label><select value={formData.isResigned ? 'true' : 'false'} onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})} className="w-full border p-2 rounded bg-white focus:outline-none"><option value="false">在職中</option><option value="true">已離職</option></select></div>)}
                  </div>
 
-                 {/* 🔴 傳統三級角色設定 */}
                  {isSuperAdmin && (
                       <div className="p-3 bg-indigo-50 rounded border border-indigo-100">
                           <label className="text-xs font-bold text-indigo-700 mb-2 block">系統角色指派 (RBAC)</label>
@@ -1905,6 +1905,34 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                               <option value="admin">最高管理員 Admin (豁免鎖定、擁有所有權限與薪資查閱)</option>
                           </select>
                       </div>
+                 )}
+
+                 {/* 🔴 V8.0 新增：合約設定區塊 (僅限管理員填寫) */}
+                 {isSuperAdmin && (
+                     <div className="space-y-3 border-t pt-3 mt-3">
+                         <div className="text-xs font-bold text-indigo-600 flex items-center gap-1"><FileSignature size={12}/> 勞動契約專屬設定 (將帶入員工合約)</div>
+                         <div className="grid grid-cols-2 gap-2 bg-white p-2 rounded border shadow-sm">
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">約定工作地點</label>
+                                 <input type="text" placeholder="例:台中市西屯區..." value={formData.workLocation || ''} onChange={e=>setFormData({...formData, workLocation:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">約定月薪 (新台幣)</label>
+                                 <input type="number" placeholder="例:35000" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">契約起始日</label>
+                                 <input type="date" value={formData.contractStart || ''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <div className="flex justify-between items-center mb-0.5">
+                                     <label className="text-[10px] font-bold text-gray-500">契約迄日</label>
+                                     <label className="text-[10px] flex items-center gap-0.5 text-indigo-600 font-bold cursor-pointer"><input type="checkbox" checked={formData.isIndefinite || false} onChange={e=>setFormData({...formData, isIndefinite:e.target.checked})}/>不定期契約</label>
+                                 </div>
+                                 <input type="date" value={formData.contractEnd || ''} disabled={formData.isIndefinite} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className={`w-full border p-1.5 rounded text-sm focus:outline-none ${formData.isIndefinite?'bg-gray-100 text-gray-400':''}`}/>
+                             </div>
+                         </div>
+                     </div>
                  )}
 
                  {isSuperAdmin && (
@@ -1960,6 +1988,7 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                            <div className="text-xs text-gray-500 mt-1 font-mono flex gap-2">
                                <span>到職日: <span className={u.startDate ? 'text-gray-700' : 'text-red-500 font-bold'}>{u.startDate || '未填寫'}</span></span>
                                {u.healthCheckImage && <span className="text-green-600 font-bold flex items-center gap-0.5"><CheckCircle2 size={10}/> 體檢</span>}
+                               {u.salaryAmount ? <span className="text-indigo-600 font-bold flex items-center gap-0.5"><FileSignature size={10}/> 合約OK</span> : <span className="text-red-500 font-bold flex items-center gap-0.5"><FileSignature size={10}/> 缺合約資料</span>}
                            </div>
                        )}
                    </div>
@@ -1972,3 +2001,5 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
     </div>
   );
 };
+
+export { App as default };
