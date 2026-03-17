@@ -13,7 +13,7 @@ import {
 // ==========================================
 // 🚀 系統設定與 Firebase 初始化
 // ==========================================
-const CURRENT_VERSION = "v7.8.2 (Ultimate Legal Shield Edition)"; 
+const CURRENT_VERSION = "v7.9 (Clean Reports Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -66,7 +66,6 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
     return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
 };
 
-// 🔴 法定特休自動計算
 const getAnnualLeaveDays = (startDateStr) => {
     if (!startDateStr) return 0;
     const start = new Date(startDateStr);
@@ -252,7 +251,7 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
     );
 };
 
-// 🔴 動態表單簽署 Modal (含手寫板與終極法務合約條文)
+// 🔴 動態表單簽署 Modal
 const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     const [agree, setAgree] = useState(false);
     const [origDate, setOrigDate] = useState('');
@@ -404,7 +403,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     );
 };
 
-// 🔴 合約預覽與列印 Modal (同新版條文)
+// 🔴 合約預覽與列印 Modal
 const ViewSignatureModal = ({ sigData, onClose }) => {
     if (!sigData) return null;
     const handlePrint = () => { window.print(); };
@@ -553,15 +552,12 @@ export default function App() {
     const isManager = currentUserInfo.isManager || false;
     const isPrivileged = isSuperAdmin || isManager;
     
-    // 🔴 V7.8 強制簽約鎖定防呆 (主管與管理員豁免)
+    // 🔴 V7.8 強制簽約鎖定防呆
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isPrivileged && !hasSignedContract;
 
-    // 若被鎖定，強制跳轉到 forms 頁面
     useEffect(() => {
-        if (isLocked && view !== 'forms') {
-            setView('forms');
-        }
+        if (isLocked && view !== 'forms') setView('forms');
     }, [isLocked, view]);
 
     const myNotifications = requests.filter(r => 
@@ -626,7 +622,6 @@ export default function App() {
             </div>
             
             <div className="flex gap-1 sm:gap-2 items-center">
-              {/* 🔴 如果鎖定中，隱藏導覽列按鈕，只顯示強制簽約提示 */}
               {!isLocked ? (
                   <>
                       <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
@@ -641,6 +636,7 @@ export default function App() {
                               <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
                                   {isPrivileged && <DropdownItem onClick={()=>{setView('salary'); setMenuOpen(false);}} icon={FileBarChart} label="統計明細" active={view==='salary'} />}
                                   {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
+                                  {/* 🔴 V7.9 修改：將所有 users 傳入 PayrollView，由裡面自己過濾 */}
                                   {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
                                   <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
                                   <div className="border-t my-1 border-gray-100"></div>
@@ -663,7 +659,6 @@ export default function App() {
         </nav>
   
         <main className="max-w-6xl mx-auto p-3 sm:p-4">
-          {/* 🔴 鎖定時的紅底警告橫幅 */}
           {isLocked && (
               <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg shadow-sm animate-fade-in">
                   <h3 className="text-red-800 font-bold flex items-center gap-2"><AlertTriangle size={18}/> 員工報到強制簽署提醒</h3>
@@ -676,7 +671,8 @@ export default function App() {
           {!isLocked && view === 'inventory' && <InventoryView inventoryItems={inventory} db={db} appId={appId} />}
           {!isLocked && view === 'attendance' && isPrivileged && <AttendanceView users={users} currentDate={currentDate} shifts={shifts} shiftTypes={shiftsDef} db={db} appId={appId} />}
           {!isLocked && view === 'salary' && isPrivileged && <SalaryView users={users} shifts={shifts} currentDate={currentDate} leaveTypes={leaves} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} gasReceipts={gasReceipts} db={db} appId={appId} />}
-          {!isLocked && view === 'payroll' && isSuperAdmin && <PayrollView users={Object.values(users).filter(u=>!u.isResigned)} currentDate={currentDate} db={db} appId={appId} gasReceipts={gasReceipts} />}
+          {/* 🔴 V7.9 修改：將 Object.values(users) 傳入，拿掉 .filter */}
+          {!isLocked && view === 'payroll' && isSuperAdmin && <PayrollView users={Object.values(users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={gasReceipts} />}
           {!isLocked && view === 'settings' && <SettingsView users={users} currentUserInfo={currentUserInfo} leaveTypes={leaves} shiftTypes={shiftsDef} inventoryItems={inventory} storeConfig={store} db={db} appId={appId} isSuperAdmin={isSuperAdmin} insurances={insurances} />}
           
           {view === 'forms' && <FormsView users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={signatures} isLocked={isLocked} />}
@@ -1401,12 +1397,19 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
 };
 
 // ==========================================
-// 📊 統計明細 (SalaryView) - 含自動特休、發票紀錄與年度結算
+// 📊 統計明細 (SalaryView) - 🔴 V7.9 新增離職過濾
 // ==========================================
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
-    const visibleUsers = useMemo(() => isPrivileged ? Object.values(users) : [currentUserInfo], [users, currentUserInfo, isPrivileged]);
+    const [showResigned, setShowResigned] = useState(false);
     const [gasModalData, setGasModalData] = useState(null);
+
+    // 🔴 根據「顯示已離職」開關過濾名單
+    const visibleUsers = useMemo(() => {
+        let list = isPrivileged ? Object.values(users) : [currentUserInfo];
+        if (!showResigned) list = list.filter(u => !u.isResigned);
+        return list;
+    }, [users, currentUserInfo, isPrivileged, showResigned]);
   
     const calc = (uid) => {
       const targetYear = targetMonth.substring(0, 4);
@@ -1491,21 +1494,34 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
   
     return (
       <div className="space-y-4 pb-20">
-        <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
-            <h2 className="font-bold flex gap-2"><ListFilter className="text-indigo-600"/> 統計明細</h2>
-            <div className="flex gap-2">
-                <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 focus:outline-none"/>
-                {isPrivileged && <button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button>}
+        <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
+            <h2 className="font-bold flex gap-2 text-indigo-700"><ListFilter /> 統計明細</h2>
+            <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
+                {/* 🔴 V7.9 新增離職過濾打勾 */}
+                {isPrivileged && (
+                    <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
+                        <input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} className="accent-indigo-600" />
+                        顯示已離職
+                    </label>
+                )}
+                <div className="flex gap-2">
+                    <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none"/>
+                    {isPrivileged && <button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button>}
+                </div>
             </div>
         </div>
+
         <div className="grid gap-3">{visibleUsers.map(u => {
             const s = calc(u.uid);
             const needsDeduction = leaveTypes.some(lt => lt.deduct && s.monthStats.leaves[lt.id]?.deductHours > 0);
   
             return (
-              <div key={u.uid} className="bg-white p-4 rounded-xl shadow-sm border hover:shadow-md transition-shadow">
+              <div key={u.uid} className={`bg-white p-4 rounded-xl shadow-sm border hover:shadow-md transition-shadow ${u.isResigned ? 'opacity-70 bg-gray-50' : ''}`}>
                 <div className="flex justify-between items-start mb-2 border-b pb-2">
-                    <div className="font-bold text-lg">{u.name}</div>
+                    <div className="font-bold text-lg flex items-center gap-2">
+                        {u.name}
+                        {u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded border border-red-200 flex items-center gap-0.5"><UserX size={10}/> 已離職</span>}
+                    </div>
                     <div className="text-right">
                         <div className="text-xs text-gray-400">年度剩餘可休 (至 {s.targetYear}/12/31)</div>
                         <div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{s.balance} <span className="text-xs">hr</span></div>
@@ -1514,7 +1530,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                 </div>
                 <div className="space-y-3 text-sm">
                   
-                  {/* 🔴 特休儀表板 */}
                   <div className="bg-indigo-50 p-2.5 rounded-lg border border-indigo-200 mt-2 flex justify-between items-center">
                       <div className="text-[11px] font-bold text-indigo-800 flex items-center gap-1"><Gift size={12}/> 法定特休帳戶</div>
                       <div className="text-xs font-bold text-indigo-700">總額: {s.annualLimit} 天 ｜ 已休: {s.yearStats.usedAnnual} 天 ｜ 剩餘: <span className="text-lg">{Math.max(0, s.annualLimit - s.yearStats.usedAnnual)}</span> 天</div>
@@ -1541,7 +1556,6 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                       </div>
                   )}
 
-                  {/* 🔴 油資登錄與顯示區塊 */}
                   <div className="bg-teal-50 p-2 rounded-lg border border-teal-200 flex justify-between items-center shadow-sm">
                       <div>
                           <div className="text-[11px] font-bold text-teal-800 flex items-center gap-1"><Fuel size={12}/> 本月油資發票 (實報實銷)</div>
@@ -1594,10 +1608,11 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
       </div>
     );
 };
-// --- 薪資管理 (PayrollView) ---
+// --- 薪資管理 (PayrollView) - 🔴 V7.9 新增離職過濾 ---
 const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
+    const [showResigned, setShowResigned] = useState(false);
     
     useEffect(() => { 
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => { 
@@ -1612,12 +1627,25 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true }); 
     };
 
+    // 🔴 根據「顯示已離職」開關過濾名單
+    const visibleUsers = users.filter(u => showResigned ? true : !u.isResigned);
+
     return (
         <div className="space-y-4 pb-20">
-            <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm"><h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資與福利管理 (機密)</h2><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 focus:outline-none"/></div>
+            <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
+                <h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資與福利管理 (機密)</h2>
+                <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
+                    <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
+                        <input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} className="accent-indigo-600" />
+                        顯示已離職
+                    </label>
+                    <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none"/>
+                </div>
+            </div>
+            
             <div className="bg-white rounded-xl border overflow-x-auto shadow-sm">
                 <table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">姓名</th><th className="p-3 w-24">本薪</th><th className="p-3 w-20 bg-teal-50 text-teal-700 text-center">油資核銷<br/><span className="text-[10px] font-normal">(自動計算)</span></th><th className="p-3 w-24">補助/津貼</th><th className="p-3 w-24 bg-pink-50 text-pink-700">生日禮金</th><th className="p-3 w-24 bg-purple-50 text-purple-700">三節獎金</th><th className="p-3 w-24 bg-yellow-50 text-yellow-700">年終獎金</th><th className="p-3">備註</th></tr></thead>
-                <tbody>{users.map(u => { 
+                <tbody>{visibleUsers.map(u => { 
                     const record = payrollData[u.uid] || {}; 
                     // 自動抓取油資累計並封頂 500
                     const userGasRecords = gasReceipts?.[targetMonth]?.[u.uid] || [];
@@ -1625,8 +1653,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
                     const gasCapped = Math.min(gasTotal, 500);
 
                     return (
-                        <tr key={u.uid} className="border-b hover:bg-gray-50">
-                            <td className="p-3 font-bold">{u.name}</td>
+                        <tr key={u.uid} className={`border-b hover:bg-gray-50 ${u.isResigned ? 'opacity-60 bg-gray-50' : ''}`}>
+                            <td className="p-3 font-bold flex items-center gap-1 mt-1">
+                                {u.name}
+                                {u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1 py-0.5 rounded ml-1 border border-red-200">離職</span>}
+                            </td>
                             <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.base || ''} onChange={e=>updatePayroll(u.uid, 'base', e.target.value)}/></td>
                             <td className="p-3 bg-teal-50 text-center font-bold text-teal-800">${gasCapped}</td>
                             <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={e=>updatePayroll(u.uid, 'subsidy', e.target.value)}/></td>
@@ -1636,7 +1667,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
                             <td className="p-3"><input type="text" placeholder="..." className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={e=>updatePayroll(u.uid, 'note', e.target.value)}/></td>
                         </tr>
                     ); 
-                })}</tbody></table>
+                })}
+                {visibleUsers.length === 0 && <tr><td colSpan="8" className="p-8 text-center text-gray-400">目前無員工資料</td></tr>}
+                </tbody></table>
             </div>
         </div>
     );
