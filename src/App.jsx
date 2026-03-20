@@ -13,7 +13,7 @@ import {
 // ==========================================
 // 🚀 系統設定與 Firebase 初始化
 // ==========================================
-const CURRENT_VERSION = "v8.0 (Perfect Contract Edition)"; 
+const CURRENT_VERSION = "v8.1 (Clean Flow Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -198,6 +198,7 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
     );
 };
 
+// 🔴 油資發票自動累計 Modal
 const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRecords }) => {
     const [amount, setAmount] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -250,8 +251,8 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
     );
 };
 
-// 🔴 動態表單簽署 Modal (V8.0: 管理員預先填寫制 & 8大條款展開)
-const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
+// 🔴 動態表單簽署 Modal 
+const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) => {
     const [agree, setAgree] = useState(false);
     const [origDate, setOrigDate] = useState('');
     const [newDate, setNewDate] = useState('');
@@ -306,7 +307,13 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
         const signatureImage = canvasRef.current.toDataURL('image/png');
         const docData = { uid: currentUserInfo.uid, userName: currentUserInfo.name, formType, formName, agreedAt: Date.now(), customData, signatureImage };
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), docData);
-        alert("✅ 簽署完成！系統已解鎖並安全存檔。"); onClose();
+        alert("✅ 簽署完成！系統已解鎖並安全存檔。"); 
+        onClose();
+        
+        // 🔴 簽署完成後直接跳轉至班表 (Calendar)
+        if (formType === 'contract' && setView) {
+            setView('calendar');
+        }
     };
 
     return (
@@ -401,7 +408,6 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId }) => {
     );
 };
 
-// 🔴 合約預覽與列印 Modal (同新版 8大條款)
 const ViewSignatureModal = ({ sigData, onClose }) => {
     if (!sigData) return null;
     const handlePrint = () => { window.print(); };
@@ -432,7 +438,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
                                 <p><strong>第一條：契約起訖與工作地點</strong><br/>契約期間自 {sigData.customData?.contractStart} 至 {sigData.customData?.contractEnd}。乙方應於甲方指定地點（{sigData.customData?.workLocation}）提供勞務，負責相關門市工作。</p>
                                 <p><strong>第二條：出勤、請假與排班制度</strong><br/>採排班制與變形工時。請換假需於 3 天前審核。特休依勞基法發放；每月自畫休假上限 3 天（含假日最多 2 天）。</p>
                                 <p><strong>第三條：寒暑假旺季與工時</strong><br/>因應寒暑假（1,2月及7,8月）營運高峰，乙方同意配合延長工時，合計單日最長不超過 12 小時。甲方得視營運績效另行核發「旺季特別獎金」。</p>
-                                <p><strong>第四條：薪資、油資與補休結算</strong><br/>甲方每月給付乙方本薪新台幣 <strong>{sigData.customData?.salaryAmount}</strong> 元整。每月最高 500 元油資補貼（憑統編發票實報實銷）。乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發加倍工資。年度終結未休畢之補休時數，依法或獎金辦法結算發放。</p>
+                                <p><strong>第四條：薪 সির、油資與補休結算</strong><br/>甲方每月給付乙方本薪新台幣 <strong>{sigData.customData?.salaryAmount}</strong> 元整。每月最高 500 元油資補貼（憑統編發票實報實銷）。乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發加倍工資。年度終結未休畢之補休時數，依法或獎金辦法結算發放。</p>
                                 <p><strong>第五條：離職與交接</strong><br/>乙方自請離職須依法預告並交接。未依規定致甲方受有損害者，須負損害賠償責任。</p>
                                 <p><strong>第六條：法定保障與福利</strong><br/>甲方依法提撥 6% 勞工退休金、提供勞保及職災協助。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
                                 <p><strong>第七條：懲處與賠償制度</strong><br/>嚴禁代打卡、偷料。若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣）。</p>
@@ -553,7 +559,7 @@ export default function App() {
     const isManager = currentUserInfo.isManager || false;
     const isPrivileged = isSuperAdmin || isManager;
     
-    // 🔴 V8.0 強制簽約鎖定防呆
+    // 🔴 強制簽約鎖定防呆
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isPrivileged && !hasSignedContract;
 
@@ -674,7 +680,8 @@ export default function App() {
           {!isLocked && view === 'payroll' && isSuperAdmin && <PayrollView users={Object.values(users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={gasReceipts} />}
           {!isLocked && view === 'settings' && <SettingsView users={users} currentUserInfo={currentUserInfo} leaveTypes={leaves} shiftTypes={shiftsDef} inventoryItems={inventory} storeConfig={store} db={db} appId={appId} isSuperAdmin={isSuperAdmin} insurances={insurances} />}
           
-          {view === 'forms' && <FormsView users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={signatures} isLocked={isLocked} />}
+          {/* 🔴 將 setView 傳入，以便簽署完自動跳轉 */}
+          {view === 'forms' && <FormsView users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />}
           
           {!isLocked && view === 'inbox' && (
               <div className="max-w-md mx-auto space-y-4">
@@ -700,6 +707,99 @@ export default function App() {
       </div>
     );
 }
+// ==========================================
+// 📝 表單簽署中心 (FormsView) - 🔴 新增刪除功能
+// ==========================================
+const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked, setView, isSuperAdmin }) => {
+    const [activeTab, setActiveTab] = useState('fill'); 
+    const [signModal, setSignModal] = useState(null); 
+    const [viewData, setViewData] = useState(null);
+
+    const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
+    const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
+
+    const handleSignContract = () => {
+        const isContractReady = currentUserInfo.workLocation && currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
+        if (!isContractReady) {
+            return alert("🚨 管理員尚未設定您的「約定薪資」與「合約日期」！\n\n請先通知店長至【系統設定】完成您的合約基本資料設定，才能進行簽署。");
+        }
+        setSignModal('contract');
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto space-y-4 pb-20">
+            <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
+                <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><FileSignature/> 表單與同意書簽署</h2>
+            </div>
+
+            <div className="flex gap-2 border-b pb-2">
+                <button onClick={()=>setActiveTab('fill')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='fill'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>📝 填寫表單</button>
+                {isPrivileged && <button onClick={()=>setActiveTab('records')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='records'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>🗂️ 簽署紀錄後台</button>}
+            </div>
+
+            {activeTab === 'fill' && (
+                <div className="grid sm:grid-cols-2 gap-4">
+                    <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'ring-4 ring-red-500 ring-opacity-50' : 'hover:shadow-md'}`}>
+                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約暨保密與工作守則同意書</h3></div>
+                        <p className="text-sm text-gray-500 mb-4 h-10">新進員工報到或年度工作規範及業務機密保密約定。</p>
+                        <button onClick={handleSignContract} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
+                            {hasSignedContract ? '重新檢視/簽署' : '立即填寫與簽名'}
+                        </button>
+                        <div className="mt-3 text-xs text-gray-400 font-bold">{hasSignedContract ? '✅ 您已完成簽署' : <span className="text-red-500">⚠️ 尚未簽署 (請盡速完成以解鎖系統)</span>}</div>
+                    </div>
+
+                    <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-md'}`}>
+                        <div className="flex items-center gap-2 mb-2 text-orange-600"><Calendar size={20}/><h3 className="font-bold text-lg">國定假日調移同意書</h3></div>
+                        <p className="text-sm text-gray-500 mb-4 h-10">依法將特定國定假日調移至其他工作日之同意書填寫。</p>
+                        <button onClick={()=> !isLocked && setSignModal('holiday')} disabled={isLocked} className={`w-full font-bold py-2 rounded-lg border transition-colors ${isLocked ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'}`}>填寫與簽名</button>
+                        <div className="mt-3 text-xs text-gray-400">您已累計簽署 {userSignatures.filter(s=>s.formType==='holiday').length} 份</div>
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'records' && isPrivileged && (
+                <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+                    <div className="p-4 bg-gray-50 border-b font-bold text-gray-700">全體員工簽署紀錄清單</div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-gray-100 text-gray-600"><tr><th className="p-3">簽署時間</th><th className="p-3">員工</th><th className="p-3">表單名稱</th><th className="p-3">操作</th></tr></thead>
+                            <tbody>
+                                {signatures.sort((a,b)=>b.agreedAt-a.agreedAt).map(sig => (
+                                    <tr key={sig.id} className="border-b hover:bg-gray-50">
+                                        <td className="p-3 text-gray-500 font-mono">{new Date(sig.agreedAt).toLocaleString()}</td>
+                                        <td className="p-3 font-bold text-indigo-600">{sig.userName}</td>
+                                        <td className="p-3 font-bold">
+                                            {sig.formName}
+                                            <div className="text-xs text-gray-500 font-normal mt-1">
+                                                {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
+                                            </div>
+                                        </td>
+                                        <td className="p-3 flex items-center gap-2">
+                                            <button onClick={()=>setViewData(sig)} className="text-gray-600 hover:text-indigo-600 bg-white border px-2 py-1.5 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Eye size={14}/> 檢視</button>
+                                            {/* 🔴 V8.1 新增：刪除按鈕 (僅管理員可見) */}
+                                            {isSuperAdmin && (
+                                                <button onClick={async () => {
+                                                    if(window.confirm("⚠️ 確定要刪除這筆簽署紀錄嗎？刪除後無法復原！")) {
+                                                        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'signatures', sig.id));
+                                                    }
+                                                }} className="text-gray-400 hover:text-red-500 bg-white border px-2 py-1.5 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Trash2 size={14}/> 刪除</button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                                {signatures.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-400">目前尚無任何簽署紀錄</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+            
+            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} />}
+            {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
+        </div>
+    );
+};
+
 // ==========================================
 // 📦 庫存盤點頁面 (InventoryView)
 // ==========================================
@@ -908,93 +1008,6 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
                     </tbody></table></div>
                 )}
             </div>
-        </div>
-    );
-};
-
-// ==========================================
-// 📝 表單簽署中心 (FormsView) - 🔴 V8.0 檢查管理員設定
-// ==========================================
-const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked }) => {
-    const [activeTab, setActiveTab] = useState('fill'); 
-    const [signModal, setSignModal] = useState(null); 
-    const [viewData, setViewData] = useState(null);
-
-    const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
-    const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
-
-    const handleSignContract = () => {
-        // 檢查管理員是否已經在後台設定好該員工的薪水與合約日期
-        const isContractReady = currentUserInfo.workLocation && currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
-        
-        if (!isContractReady) {
-            return alert("🚨 管理員尚未設定您的「約定薪資」與「合約日期」！\n\n請先通知店長至【系統設定】完成您的合約基本資料設定，才能進行簽署。");
-        }
-        setSignModal('contract');
-    };
-
-    return (
-        <div className="max-w-4xl mx-auto space-y-4 pb-20">
-            <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
-                <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><FileSignature/> 表單與同意書簽署</h2>
-            </div>
-
-            <div className="flex gap-2 border-b pb-2">
-                <button onClick={()=>setActiveTab('fill')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='fill'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>📝 填寫表單</button>
-                {isPrivileged && <button onClick={()=>setActiveTab('records')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='records'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>🗂️ 簽署紀錄後台</button>}
-            </div>
-
-            {activeTab === 'fill' && (
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'ring-4 ring-red-500 ring-opacity-50' : 'hover:shadow-md'}`}>
-                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約暨保密與工作守則同意書</h3></div>
-                        <p className="text-sm text-gray-500 mb-4 h-10">新進員工報到或年度工作規範及業務機密保密約定。</p>
-                        <button onClick={handleSignContract} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
-                            {hasSignedContract ? '重新檢視/簽署' : '立即填寫與簽名'}
-                        </button>
-                        <div className="mt-3 text-xs text-gray-400 font-bold">{hasSignedContract ? '✅ 您已完成簽署' : <span className="text-red-500">⚠️ 尚未簽署 (請盡速完成以解鎖系統)</span>}</div>
-                    </div>
-
-                    <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-md'}`}>
-                        <div className="flex items-center gap-2 mb-2 text-orange-600"><Calendar size={20}/><h3 className="font-bold text-lg">國定假日調移同意書</h3></div>
-                        <p className="text-sm text-gray-500 mb-4 h-10">依法將特定國定假日調移至其他工作日之同意書填寫。</p>
-                        <button onClick={()=> !isLocked && setSignModal('holiday')} disabled={isLocked} className={`w-full font-bold py-2 rounded-lg border transition-colors ${isLocked ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'}`}>填寫與簽名</button>
-                        <div className="mt-3 text-xs text-gray-400">您已累計簽署 {userSignatures.filter(s=>s.formType==='holiday').length} 份</div>
-                    </div>
-                </div>
-            )}
-
-            {activeTab === 'records' && isPrivileged && (
-                <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
-                    <div className="p-4 bg-gray-50 border-b font-bold text-gray-700">全體員工簽署紀錄清單</div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-gray-100 text-gray-600"><tr><th className="p-3">簽署時間</th><th className="p-3">員工</th><th className="p-3">表單名稱</th><th className="p-3">約定詳細內容 / 檢視</th></tr></thead>
-                            <tbody>
-                                {signatures.sort((a,b)=>b.agreedAt-a.agreedAt).map(sig => (
-                                    <tr key={sig.id} className="border-b hover:bg-gray-50">
-                                        <td className="p-3 text-gray-500 font-mono">{new Date(sig.agreedAt).toLocaleString()}</td>
-                                        <td className="p-3 font-bold text-indigo-600">{sig.userName}</td>
-                                        <td className="p-3 font-bold">{sig.formName}</td>
-                                        <td className="p-3 flex items-center gap-3">
-                                            {sig.formType === 'holiday' ? 
-                                                <span className="bg-orange-50 text-orange-700 px-2 py-1 rounded border border-orange-200 font-bold text-xs truncate max-w-[200px]">原: {sig.customData?.origDate} ➡️ 調: {sig.customData?.newDate}</span> 
-                                            : 
-                                                <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-200 text-xs font-bold truncate max-w-[200px]">月薪: ${sig.customData?.salaryAmount} / 地點: {sig.customData?.workLocation}</span>
-                                            }
-                                            <button onClick={()=>setViewData(sig)} className="text-gray-500 hover:text-indigo-600 bg-white border px-2 py-1 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Eye size={12}/> 檢視</button>
-                                        </td>
-                                    </tr>
-                                ))}
-                                {signatures.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-400">目前尚無任何簽署紀錄</td></tr>}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            )}
-            
-            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} />}
-            {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
         </div>
     );
 };
@@ -1679,7 +1692,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     );
 };
 
-// --- Settings View (V8.0: 🔴 新增管理員後台輸入薪資與合約日期) ---
+// --- Settings View (🔴 修正 Date Input 沒標籤的問題) ---
 const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin, insurances }) => {
   const userList = Object.values(users);
   
@@ -1889,12 +1902,12 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
              {editingId === u.uid ? (
                <div className="space-y-3 p-3 bg-gray-50 rounded">
                  <div className="grid grid-cols-2 gap-2">
-                     <div><label className="text-xs font-bold text-gray-500">姓名</label><input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="w-full border p-2 rounded focus:outline-none"/></div>
-                     {isSuperAdmin && (<div><label className="text-xs font-bold text-gray-500">在職狀態</label><select value={formData.isResigned ? 'true' : 'false'} onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})} className="w-full border p-2 rounded bg-white focus:outline-none"><option value="false">在職中</option><option value="true">已離職</option></select></div>)}
+                     <div><label className="text-[10px] font-bold text-gray-500 mb-0.5 block">員工姓名</label><input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/></div>
+                     {isSuperAdmin && (<div><label className="text-[10px] font-bold text-gray-500 mb-0.5 block">在職狀態</label><select value={formData.isResigned ? 'true' : 'false'} onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})} className="w-full border p-1.5 rounded text-sm bg-white focus:outline-none"><option value="false">在職中</option><option value="true">已離職</option></select></div>)}
                  </div>
 
                  {isSuperAdmin && (
-                      <div className="p-3 bg-indigo-50 rounded border border-indigo-100">
+                      <div className="p-3 bg-indigo-50 rounded border border-indigo-100 mt-2">
                           <label className="text-xs font-bold text-indigo-700 mb-2 block">系統角色指派 (RBAC)</label>
                           <select value={formData.isAdmin ? 'admin' : (formData.isManager ? 'manager' : 'employee')} onChange={e=>{
                               const val = e.target.value;
@@ -1907,7 +1920,6 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                       </div>
                  )}
 
-                 {/* 🔴 V8.0 新增：合約設定區塊 (僅限管理員填寫) */}
                  {isSuperAdmin && (
                      <div className="space-y-3 border-t pt-3 mt-3">
                          <div className="text-xs font-bold text-indigo-600 flex items-center gap-1"><FileSignature size={12}/> 勞動契約專屬設定 (將帶入員工合約)</div>
@@ -1935,17 +1947,29 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                      </div>
                  )}
 
+                 {/* 🔴 V8.1 修正：為所有欄位加上明確的文字標籤 */}
                  {isSuperAdmin && (
                      <div className="space-y-3 border-t pt-3 mt-3">
                          <div className="text-xs font-bold text-indigo-600 flex items-center gap-1"><Lock size={10}/> 敏感資料與到職日 (特休計算依據)</div>
-                         <div className="grid grid-cols-2 gap-2">
-                             <input type="date" placeholder="到職日 (YYYY-MM-DD)" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="border p-2 rounded text-sm focus:outline-none focus:border-indigo-500"/>
-                             <input placeholder="電話" value={formData.phone || ''} onChange={e=>setFormData({...formData, phone:e.target.value})} className="border p-2 rounded text-sm focus:outline-none"/>
-                             <input type="date" placeholder="出生年月日" value={formData.birthday || ''} onChange={e=>setFormData({...formData, birthday:e.target.value})} className="border p-2 rounded text-sm focus:outline-none"/>
-                             <input placeholder="身分證字號" value={formData.nationalId || ''} onChange={e=>setFormData({...formData, nationalId:e.target.value})} className="border p-2 rounded text-sm focus:outline-none"/>
+                         <div className="grid grid-cols-2 gap-2 bg-white p-2 rounded border shadow-sm">
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">到職日 (計算特休用)</label>
+                                 <input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">聯絡電話</label>
+                                 <input placeholder="輸入電話..." value={formData.phone || ''} onChange={e=>setFormData({...formData, phone:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">出生年月日</label>
+                                 <input type="date" value={formData.birthday || ''} onChange={e=>setFormData({...formData, birthday:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">身分證字號</label>
+                                 <input placeholder="輸入身分證字號..." value={formData.nationalId || ''} onChange={e=>setFormData({...formData, nationalId:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/>
+                             </div>
                          </div>
                          
-                         {/* 🔴 雙證件上傳區 */}
                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-3 rounded border">
                              <div>
                                  <label className="text-xs text-gray-500 block mb-2 font-bold flex items-center gap-1"><CreditCard size={12}/> 銀行存摺封面</label>
@@ -2001,3 +2025,5 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
     </div>
   );
 };
+
+export { App as default };
