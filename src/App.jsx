@@ -10,11 +10,9 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, FileSearch, Fuel, CreditCard, AlertTriangle
 } from 'lucide-react';
 
-// ==========================================
-// 🚀 系統設定與 Firebase 初始化
-// ==========================================
 const CURRENT_VERSION = "v8.3 (Enterprise Access Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
+const ADMIN_EMAIL = "randy22444289@gmail.com";
 
 const firebaseConfig = {
     apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
@@ -31,9 +29,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'team-shift-pc-v1'; 
 
-// ==========================================
-// 🛠️ 輔助函式
-// ==========================================
 const exportToCSV = (filename, rows) => {
     const csvContent = "\uFEFF" + rows.map(row => 
         row.map(item => `"${String(item || '').replace(/"/g, '""')}"`).join(",")
@@ -82,9 +77,6 @@ const getAnnualLeaveDays = (startDateStr) => {
     return 0;
 };
 
-// ==========================================
-// 📊 預設常數資料
-// ==========================================
 const DEFAULT_LEAVE_TYPES = [
     { id: 'rostered', label: '自畫假', deduct: false },
     { id: 'official', label: '排休', deduct: false }, 
@@ -107,16 +99,9 @@ const DEFAULT_INVENTORY_ITEMS = [
 ];
 
 const USER_COLORS = [
-    'bg-red-100 text-red-900 border-red-400',       
-    'bg-blue-100 text-blue-900 border-blue-400',    
-    'bg-green-100 text-green-900 border-green-400', 
-    'bg-yellow-100 text-yellow-900 border-yellow-500',
-    'bg-purple-100 text-purple-900 border-purple-400',
-    'bg-teal-100 text-teal-900 border-teal-400',    
-    'bg-pink-100 text-pink-900 border-pink-400',    
-    'bg-orange-100 text-orange-900 border-orange-400',
-    'bg-indigo-100 text-indigo-900 border-indigo-400',
-    'bg-rose-100 text-rose-900 border-rose-400'     
+    'bg-red-100 text-red-900 border-red-400', 'bg-blue-100 text-blue-900 border-blue-400', 'bg-green-100 text-green-900 border-green-400', 
+    'bg-yellow-100 text-yellow-900 border-yellow-500', 'bg-purple-100 text-purple-900 border-purple-400', 'bg-teal-100 text-teal-900 border-teal-400',    
+    'bg-pink-100 text-pink-900 border-pink-400', 'bg-orange-100 text-orange-900 border-orange-400', 'bg-indigo-100 text-indigo-900 border-indigo-400', 'bg-rose-100 text-rose-900 border-rose-400'     
 ];
 
 const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', monthly: '每月', yearly: '每年' };
@@ -136,9 +121,6 @@ const checkEventOnDate = (event, checkDateStr) => {
     if (event.repeatType === 'yearly') return checkDate.getMonth() === startDate.getMonth() && checkDate.getDate() === startDate.getDate();
     return false;
 };
-// ==========================================
-// 🪟 共用組件與各類 Modal
-// ==========================================
 const NavBtn = ({ active, onClick, icon: Icon, label }) => (
     <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold transition-colors ${active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
         <Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span>
@@ -248,8 +230,6 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
         </div>
     );
 };
-
-// 🔴 動態表單簽署 Modal 
 const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) => {
     const [agree, setAgree] = useState(false);
     const [origDate, setOrigDate] = useState('');
@@ -307,7 +287,6 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) =
         alert("✅ 簽署完成！系統已解鎖並自動跳轉至班表頁面。"); 
         
         onClose();
-        // 🔴 簽約完成後，強制無縫跳轉到班表
         if (formType === 'contract' && setView) {
             setTimeout(() => setView('calendar'), 100);
         }
@@ -460,7 +439,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
     );
 };
 // ==========================================
-// 🌟 系統主程式 (Main App) - 🔴 V8.3 權限降級過濾
+// 🌟 系統主程式 (Main App) 
 // ==========================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -551,19 +530,15 @@ export default function App() {
     const { users, shifts, events, requests, leaves, shiftsDef, inventory, store, signatures, gasReceipts, insurances } = dbData;
     const currentUserInfo = users[user?.uid] || {};
     
-    // 權限驗證
     const isSuperAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
     const isManager = currentUserInfo.isManager || false;
     const isPrivileged = isSuperAdmin || isManager;
 
-    // 🔴 V8.3：唯讀權限判斷 (離職員工 或 指定的 Viewer)
     const isReadOnly = currentUserInfo.isResigned || currentUserInfo.isViewer;
     
-    // 強制簽約鎖定防呆 (唯讀權限者不被鎖定)
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isPrivileged && !isReadOnly && !hasSignedContract;
 
-    // 🔴 自動路由：鎖定去表單，唯讀去班表
     useEffect(() => {
         if (isLocked && view !== 'forms') {
             setView('forms');
@@ -634,7 +609,6 @@ export default function App() {
             </div>
             
             <div className="flex gap-1 sm:gap-2 items-center">
-              {/* 🔴 V8.3: 如果是唯讀權限，隱藏所有導覽列，只留月曆 */}
               {isReadOnly ? (
                   <div className="text-gray-500 font-bold text-sm bg-gray-100 px-3 py-1.5 rounded-full border border-gray-200 flex items-center gap-1">
                       <Eye size={16}/> 唯讀模式
@@ -682,7 +656,6 @@ export default function App() {
               </div>
           )}
 
-          {/* 🔴 唯讀模式：強迫只能看 Calendar，並傳入 isReadOnly 參數拔掉修改按鈕 */}
           {isReadOnly && view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />}
 
           {!isLocked && !isReadOnly && view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={false} />}
@@ -1023,7 +996,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
     );
 };
 // ==========================================
-// 📅 月曆排班模組 (CalendarView) - 🔴 傳入 isReadOnly 拔掉編輯權限
+// 📅 月曆排班模組 (CalendarView)
 // ==========================================
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
@@ -1103,7 +1076,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     );
 };
 
-// --- 排班細節 Modal (🔴 拔除唯讀者按鈕) ---
+// --- 排班細節 Modal ---
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
     const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
@@ -1300,7 +1273,6 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
               const assign = Array.isArray(dayData.assignments) ? dayData.assignments.find(a=>a.uid===u.uid) : null; 
               const userColor = getUserColor(u.uid); 
               const isMe = u.uid === currentUserInfo.uid; 
-              // 🔴 權限降級過濾
               const canEdit = (isMe || isSuperAdmin) && !isReadOnly; 
   
               const showSwapBtn = (Array.isArray(dayData.assignments) && dayData.assignments.some(a=>a.uid===currentUserInfo.uid && a.type==='LEAVE')) && !isMe && assign?.type === 'WORK' && !isReadOnly;
@@ -1362,7 +1334,6 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                               <div className="flex-1 flex items-center justify-center text-xs bg-gray-100 text-gray-600 rounded font-mono border shadow-sm font-bold">班別: {shiftsDef.find(st=>st.id===assign.shiftCode)?.label || assign.shiftCode}</div>
                           ) : <div className="flex-1 flex items-center justify-center text-xs bg-gray-50 text-gray-400 rounded font-mono border border-dashed">未排班</div>)}
   
-                          {/* 🔴 唯讀模式隱藏所有行動按鈕 */}
                           {!isReadOnly && (
                               <>
                                 {otButtonUi}
@@ -1442,7 +1413,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
 };
 
 // ==========================================
-// 📊 統計明細 (SalaryView) - 離職過濾與補休結算
+// 📊 統計明細 (SalaryView)
 // ==========================================
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
@@ -1504,7 +1475,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
   
       otHistory.sort((a, b) => b.date.localeCompare(a.date));
       const balance = yearStats.otEarned - yearStats.compHoursUsed;
-      const cashOut = Math.floor(balance / 8) * 1000; // 年底補休折算邏輯
+      const cashOut = Math.floor(balance / 8) * 1000;
 
       const userGasRecords = gasReceipts?.[targetMonth]?.[uid] || [];
       const gasTotal = userGasRecords.reduce((sum, r) => sum + r.amount, 0);
@@ -1715,7 +1686,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     );
 };
 
-// --- Settings View (🔴 支援 Viewer 角色指派) ---
+// --- Settings View ---
 const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin, insurances }) => {
   const userList = Object.values(users);
   
@@ -1929,7 +1900,6 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                      {isSuperAdmin && (<div><label className="text-[10px] font-bold text-gray-500 mb-0.5 block">在職狀態</label><select value={formData.isResigned ? 'true' : 'false'} onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})} className="w-full border p-1.5 rounded text-sm bg-white focus:outline-none"><option value="false">在職中</option><option value="true">已離職 (權限將降為唯讀)</option></select></div>)}
                  </div>
 
-                 {/* 🔴 V8.3 新增：純觀看權限 (Viewer) 指派 */}
                  {isSuperAdmin && (
                       <div className="p-3 bg-indigo-50 rounded border border-indigo-100 mt-2">
                           <label className="text-xs font-bold text-indigo-700 mb-2 block">系統角色指派 (RBAC)</label>
