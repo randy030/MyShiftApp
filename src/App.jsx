@@ -439,7 +439,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
     );
 };
 // ==========================================
-// 🌟 系統主程式 (Main App) - 🔴 修正資料讀取時間差跳轉問題
+// 🌟 系統主程式 (Main App) - 🔴 新增每日早晨頭香 LINE 提醒引擎
 // ==========================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -529,33 +529,59 @@ export default function App() {
   
     const { users, shifts, events, requests, leaves, shiftsDef, inventory, store, signatures, gasReceipts, insurances } = dbData;
     const currentUserInfo = users[user?.uid] || {};
-    
-    // 🔴 關鍵修正：確認個人資料已從雲端載入完成 (有 uid 才算載入完)
     const isDataLoading = !currentUserInfo.uid;
     
     const isSuperAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
     const isManager = currentUserInfo.isManager || false;
     const isPrivileged = isSuperAdmin || isManager;
-
     const isReadOnly = currentUserInfo.isResigned || currentUserInfo.isViewer;
     
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
-    // 🔴 關鍵修正：加入 !isDataLoading 條件，載入完畢前絕對不鎖定
     const isLocked = !isDataLoading && !isPrivileged && !isReadOnly && !hasSignedContract;
 
+    // 🔴 【新增】每日頭香自動提醒引擎 (Daily Morning Trigger)
     useEffect(() => {
-        if (isLocked && view !== 'forms') {
-            setView('forms');
-        } else if (isReadOnly && view !== 'calendar') {
-            setView('calendar');
-        }
+        if (isDataLoading || Object.keys(users).length === 0 || events.length === 0) return;
+        const checkAndSendDailyEvents = async () => {
+            const today = new Date();
+            const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+            
+            // 檢查今天有沒有行程
+            const todaysEvents = events.filter(e => checkEventOnDate(e, todayStr));
+            if (todaysEvents.length === 0) return;
+            
+            // 檢查今天是否已經發送過通知
+            const notifRef = doc(db, 'artifacts', appId, 'public', 'data', 'dailyNotifications', todayStr);
+            const snap = await getDoc(notifRef);
+            
+            if (!snap.exists()) {
+                // 先寫入資料庫，防止其他人同時打開 APP 重複發送
+                await setDoc(notifRef, { triggeredAt: Date.now(), triggeredBy: currentUserInfo.name });
+                
+                // 組裝今天的行程訊息
+                let msg = `🔔 【今日重點行程與備忘錄】\n日期：${todayStr}\n\n`;
+                todaysEvents.forEach((e, idx) => { 
+                    msg += `${idx + 1}. ${e.time ? e.time + ' ' : ''}${e.title}\n`; 
+                    if (e.note) msg += `   備註：${e.note}\n`; 
+                });
+                msg += `\n祝大家工作順利！`;
+                
+                // 找出所有在職且有綁定 LINE 的員工發送
+                const targetLineIds = Object.values(users).filter(u => !u.isResigned && u.lineUserId).map(u => u.lineUserId);
+                if (targetLineIds.length > 0) sendLineNotification(targetLineIds, msg);
+            }
+        };
+        // 延遲 3 秒執行，確保資料都載入完畢且不卡住使用者介面
+        const timer = setTimeout(checkAndSendDailyEvents, 3000);
+        return () => clearTimeout(timer);
+    }, [isDataLoading, events, users, db, currentUserInfo.name]);
+
+    useEffect(() => {
+        if (isLocked && view !== 'forms') { setView('forms'); } 
+        else if (isReadOnly && view !== 'calendar') { setView('calendar'); }
     }, [isLocked, isReadOnly, view]);
 
-    const myNotifications = requests.filter(r => 
-        r.toUid === user?.uid || 
-        (r.type === 'ot_confirm' && r.uid === user?.uid) || 
-        (r.type === 'admin_ot_approve' && isPrivileged)
-    );
+    const myNotifications = requests.filter(r => r.toUid === user?.uid || (r.type === 'ot_confirm' && r.uid === user?.uid) || (r.type === 'admin_ot_approve' && isPrivileged));
   
     const handleRequest = async (req, action) => {
         const targetUser = users[req.uid || req.fromUid]; 
@@ -564,7 +590,6 @@ export default function App() {
             if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 申請 (${req.date}) 已被駁回。`);
             return;
         }
-
         if (['ot_confirm', 'admin_ot_approve'].includes(req.type)) {
             if (req.type === 'admin_ot_approve' && !isPrivileged) return alert("無權限核准單據"); 
             const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
@@ -593,7 +618,6 @@ export default function App() {
     };
   
     if (loading) return <div className="flex h-screen items-center justify-center">載入中...</div>;
-    
     if (!user) return (
         <div className="flex h-screen items-center justify-center bg-gray-50">
             <div className="bg-white p-8 rounded-xl shadow-lg text-center">
@@ -622,7 +646,6 @@ export default function App() {
                       <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
                       <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
                       <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
-                      
                       <div className="relative" ref={dropdownRef}>
                           <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold transition-colors ${['salary','attendance','payroll','settings','forms'].includes(view) ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
                               <Settings className="w-4 h-4" /> <span className="hidden xs:inline">管理</span><ChevronDown className="w-3 h-3" />
@@ -696,97 +719,6 @@ export default function App() {
       </div>
     );
 }
-// ==========================================
-// 📝 表單簽署中心 (FormsView) 
-// ==========================================
-const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked, setView, isSuperAdmin }) => {
-    const [activeTab, setActiveTab] = useState('fill'); 
-    const [signModal, setSignModal] = useState(null); 
-    const [viewData, setViewData] = useState(null);
-
-    const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
-    const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
-
-    const handleSignContract = () => {
-        const isContractReady = currentUserInfo.workLocation && currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
-        if (!isContractReady) {
-            return alert("🚨 管理員尚未設定您的「約定薪資」與「合約日期」！\n\n請先通知店長至【系統設定】完成您的合約基本資料設定，才能進行簽署。");
-        }
-        setSignModal('contract');
-    };
-
-    return (
-        <div className="max-w-4xl mx-auto space-y-4 pb-20">
-            <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
-                <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><FileSignature/> 表單與同意書簽署</h2>
-            </div>
-
-            <div className="flex gap-2 border-b pb-2">
-                <button onClick={()=>setActiveTab('fill')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='fill'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>📝 填寫表單</button>
-                {isPrivileged && <button onClick={()=>setActiveTab('records')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='records'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>🗂️ 簽署紀錄後台</button>}
-            </div>
-
-            {activeTab === 'fill' && (
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'ring-4 ring-red-500 ring-opacity-50' : 'hover:shadow-md'}`}>
-                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約暨保密與工作守則同意書</h3></div>
-                        <p className="text-sm text-gray-500 mb-4 h-10">新進員工報到或年度工作規範及業務機密保密約定。</p>
-                        <button onClick={handleSignContract} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
-                            {hasSignedContract ? '重新檢視/簽署' : '立即填寫與簽名'}
-                        </button>
-                        <div className="mt-3 text-xs text-gray-400 font-bold">{hasSignedContract ? '✅ 您已完成簽署' : <span className="text-red-500">⚠️ 尚未簽署 (請盡速完成以解鎖系統)</span>}</div>
-                    </div>
-
-                    <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-md'}`}>
-                        <div className="flex items-center gap-2 mb-2 text-orange-600"><Calendar size={20}/><h3 className="font-bold text-lg">國定假日調移同意書</h3></div>
-                        <p className="text-sm text-gray-500 mb-4 h-10">依法將特定國定假日調移至其他工作日之同意書填寫。</p>
-                        <button onClick={()=> !isLocked && setSignModal('holiday')} disabled={isLocked} className={`w-full font-bold py-2 rounded-lg border transition-colors ${isLocked ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'}`}>填寫與簽名</button>
-                        <div className="mt-3 text-xs text-gray-400">您已累計簽署 {userSignatures.filter(s=>s.formType==='holiday').length} 份</div>
-                    </div>
-                </div>
-            )}
-
-            {activeTab === 'records' && isPrivileged && (
-                <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
-                    <div className="p-4 bg-gray-50 border-b font-bold text-gray-700">全體員工簽署紀錄清單</div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-gray-100 text-gray-600"><tr><th className="p-3">簽署時間</th><th className="p-3">員工</th><th className="p-3">表單名稱</th><th className="p-3">操作</th></tr></thead>
-                            <tbody>
-                                {signatures.sort((a,b)=>b.agreedAt-a.agreedAt).map(sig => (
-                                    <tr key={sig.id} className="border-b hover:bg-gray-50">
-                                        <td className="p-3 text-gray-500 font-mono">{new Date(sig.agreedAt).toLocaleString()}</td>
-                                        <td className="p-3 font-bold text-indigo-600">{sig.userName}</td>
-                                        <td className="p-3 font-bold">
-                                            {sig.formName}
-                                            <div className="text-xs text-gray-500 font-normal mt-1">
-                                                {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
-                                            </div>
-                                        </td>
-                                        <td className="p-3 flex items-center gap-2">
-                                            <button onClick={()=>setViewData(sig)} className="text-gray-600 hover:text-indigo-600 bg-white border px-2 py-1.5 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Eye size={14}/> 檢視</button>
-                                            {isSuperAdmin && (
-                                                <button onClick={async () => {
-                                                    if(window.confirm("⚠️ 確定要刪除這筆簽署紀錄嗎？刪除後無法復原！")) {
-                                                        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'signatures', sig.id));
-                                                    }
-                                                }} className="text-gray-400 hover:text-red-500 bg-white border px-2 py-1.5 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Trash2 size={14}/> 刪除</button>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                                {signatures.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-400">目前尚無任何簽署紀錄</td></tr>}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            )}
-            
-            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} />}
-            {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
-        </div>
-    );
-};
 
 // ==========================================
 // 📦 庫存盤點頁面 (InventoryView)
@@ -1000,7 +932,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
     );
 };
 // ==========================================
-// 📅 月曆排班模組 (CalendarView)
+// 📅 月曆排班模組 (CalendarView) - 🔴 取消存檔立即推播，改為每日早晨提醒
 // ==========================================
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
@@ -1014,10 +946,12 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
   
     const handleSaveEvent = async (eventData) => {
+        // 🔴 這裡拔掉了原本的 sendLineNotification，因為系統已經會在每天早上頭香登入時自動廣播了！
         if (eventData.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventData.id), eventData);
         else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), eventData);
         setEditingEvent(null);
     };
+    
     const handleDeleteEvent = async (eventId) => {
         if(window.confirm("確定要刪除這個行程嗎？")) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId)); setEditingEvent(null); }
     };
