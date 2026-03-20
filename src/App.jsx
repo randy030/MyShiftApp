@@ -1705,10 +1705,4 @@ document.head.appendChild(style);
     );
 }
 
-// ==========================================
-// 🛡️ 檔案末端安全檢查 (防止 export 失敗)
-// ==========================================
-/* Randy，這行確保 React 引擎能找到 App 組件。
-   如果在 Vite 環境，請確保檔案最後有這行。
-*/
-// export default App;
+export default App;
