@@ -548,7 +548,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         if(window.confirm("確定要刪除這個行程嗎？")) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId)); setEditingEvent(null); }
     };
 
-    // 🔴 一鍵自動排班邏輯 (修正：週末絕對配 09O，避免時區誤差)
+    // 自動排班邏輯 (保留週末絕對 09O 規則)
     const handleAutoSchedule = async () => {
         if (!isSuperAdmin) return;
         if(!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month+1}月」整個月，尚未排班的員工補上預設班別。\n\n(規則：週六、週日一律 09O；平日主管 09O、一般員工 09A)\n確定執行嗎？`)) return;
@@ -560,8 +560,6 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             
             let changed = false;
             const newAssigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            
-            // 🔴 安全獲取本地時間的星期幾，避免 UTC 時區導致六日判定錯誤
             const dObj = new Date(year, month, i);
             const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
 
@@ -569,10 +567,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                 if (u.isResigned || u.isViewer) return; 
                 const exist = newAssigns.find(a => a.uid === u.uid);
                 
-                // 如果該日尚未被排入，或是已排入但沒有班別代號且不是休假狀態
                 if (!exist || (!exist.shiftCode && exist.type !== 'LEAVE')) {
                     const isMgmt = u.isAdmin || u.isManager;
-                    // 🔴 絕對規則：週末一律 09O，平日再依據職位分配
                     const tShift = isWeekend ? '09O' : (isMgmt ? '09O' : '09A');
                     
                     if(exist) {
@@ -652,7 +648,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
       </>
     );
 };
-// --- 排班細節 Modal (🔴 V8.4: 完整互換兩天班別) ---
+
+// --- 排班細節 Modal (🔴 修正：尋回雙日換假與 LINE 推播) ---
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
     const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
@@ -780,12 +777,12 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
       update({ assignments: next }); if (lType === 'rostered' || lType === 'official') onClose();
     };
   
-    // 🔴 V8.4 完整雙日互換，加強 LINE 通知與輸入驗證
+    // 🔴 尋回：完整雙日換假邏輯與 LINE 推播通知
     const requestSwap = async (fromUid, toUid, date1) => {
-        const targetUser = safeUsers.find(u=>u.uid===toUid);
+        const targetUser = users[toUid]; 
         const date2 = prompt(`【🔄 換班 / 換假申請】\n您準備與 ${targetUser?.name || '對方'} 在 ${date1} 這天換班。\n\n👉 為了公平，請輸入您要「還給對方」的另一天日期 (格式: YYYY-MM-DD)：\n(也就是將這兩天的班別互換)`);
         
-        if (date2 === null) return; // 使用者按取消
+        if (date2 === null) return; 
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date2)) {
             return alert("🚨 日期格式錯誤！請務必輸入如 2026-10-15 的格式。");
         }
@@ -795,6 +792,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
             type: 'swap', fromUid, toUid, date1, date2, timestamp: new Date() 
         });
         
+        // 🔴 發送 LINE 給對方審核
         if (targetUser?.lineUserId) {
             sendLineNotification([targetUser.lineUserId], `🔄 【換班請求】\n${currentUserInfo.name} 想與您交換班別。\n互換日期：${date1} 與 ${date2}\n請登入系統「通知中心」審核。`);
         }
@@ -865,7 +863,6 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
               const isMe = u.uid === currentUserInfo.uid; 
               const canEdit = (isMe || isSuperAdmin) && !isReadOnly; 
   
-              // 🔴 V8.4 放寬換假按鈕：只要不是唯讀者、且不是點自己，就能發出換假申請
               const showSwapBtn = !isMe && !isReadOnly;
               
               const hasOT = assign?.otHours !== undefined && assign?.otHours !== null && assign?.otHours !== "" && Number(assign?.otHours) !== 0;
