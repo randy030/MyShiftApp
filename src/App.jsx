@@ -2049,5 +2049,3 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
     </div>
   );
 };
-
-export { App as default };
