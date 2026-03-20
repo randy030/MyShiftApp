@@ -548,10 +548,10 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         if(window.confirm("確定要刪除這個行程嗎？")) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId)); setEditingEvent(null); }
     };
 
-    // 🔴 V8.4: 一鍵自動排班邏輯 (依據職級與平假日)
+    // 🔴 一鍵自動排班邏輯 (修正：週末絕對配 09O，避免時區誤差)
     const handleAutoSchedule = async () => {
         if (!isSuperAdmin) return;
-        if(!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month+1}月」整個月，尚未排班的員工補上預設班別。\n\n(規則：主管一律 09O，員工平日 09A / 假日 09O)\n確定執行嗎？`)) return;
+        if(!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month+1}月」整個月，尚未排班的員工補上預設班別。\n\n(規則：週六、週日一律 09O；平日主管 09O、一般員工 09A)\n確定執行嗎？`)) return;
         
         for(let i=1; i<=days; i++) {
             const dStr = `${year}-${String(month+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
@@ -560,7 +560,9 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             
             let changed = false;
             const newAssigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            const dObj = new Date(dStr);
+            
+            // 🔴 安全獲取本地時間的星期幾，避免 UTC 時區導致六日判定錯誤
+            const dObj = new Date(year, month, i);
             const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
 
             Object.values(users).forEach(u => {
@@ -570,7 +572,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                 // 如果該日尚未被排入，或是已排入但沒有班別代號且不是休假狀態
                 if (!exist || (!exist.shiftCode && exist.type !== 'LEAVE')) {
                     const isMgmt = u.isAdmin || u.isManager;
-                    const tShift = isMgmt ? '09O' : (isWeekend ? '09O' : '09A'); // 依據職級與平假日給班
+                    // 🔴 絕對規則：週末一律 09O，平日再依據職位分配
+                    const tShift = isWeekend ? '09O' : (isMgmt ? '09O' : '09A');
                     
                     if(exist) {
                         exist.shiftCode = tShift;
@@ -595,7 +598,6 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                   <div className="font-bold text-xl">{year}年 {month+1}月</div>
                   <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronRight/></button>
               </div>
-              {/* 🔴 V8.4 新增：一鍵排滿按鈕 */}
               {!isReadOnly && isSuperAdmin && (
                   <button onClick={handleAutoSchedule} className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded items-center gap-1 font-bold shadow-sm hover:bg-indigo-100 transition-colors flex">
                       🤖 自動填補當月空班
