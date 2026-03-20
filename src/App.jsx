@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, FileSearch, Fuel, CreditCard, AlertTriangle
 } from 'lucide-react';
 
-const CURRENT_VERSION = "v8.3 (Enterprise Access Edition)"; 
+const CURRENT_VERSION = "v8.4 (Smart Schedule & Perfect Swap)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -230,216 +230,8 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
         </div>
     );
 };
-const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) => {
-    const [agree, setAgree] = useState(false);
-    const [origDate, setOrigDate] = useState('');
-    const [newDate, setNewDate] = useState('');
-    
-    const { workLocation, salaryAmount, contractStart, contractEnd, isIndefinite } = currentUserInfo;
-
-    const canvasRef = useRef(null);
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [hasSigned, setHasSigned] = useState(false);
-
-    const startDrawing = (e) => {
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        const rect = canvas.getBoundingClientRect();
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-        ctx.beginPath();
-        ctx.moveTo(clientX - rect.left, clientY - rect.top);
-        setIsDrawing(true); setHasSigned(true);
-    };
-    const draw = (e) => {
-        if (!isDrawing) return;
-        e.preventDefault(); 
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        const rect = canvas.getBoundingClientRect();
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-        ctx.lineTo(clientX - rect.left, clientY - rect.top);
-        ctx.stroke();
-    };
-    const stopDrawing = () => { setIsDrawing(false); };
-    const clearSignature = () => {
-        const canvas = canvasRef.current; const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height); setHasSigned(false);
-    };
-
-    const handleSubmit = async () => {
-        if (!agree) return alert("請勾選同意條款！");
-        if (!hasSigned) return alert("請在白色方框內親筆簽名！");
-        
-        let customData = {}; let formName = '';
-        if (formType === 'holiday') {
-            if (!origDate || !newDate) return alert("請完整選擇原假日與調移日期！");
-            formName = '國定假日調移同意書'; customData = { origDate, newDate };
-        } else if (formType === 'contract') {
-            formName = '員工勞動契約暨保密與工作守則同意書'; 
-            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation, salaryAmount };
-        }
-        
-        const signatureImage = canvasRef.current.toDataURL('image/png');
-        const docData = { uid: currentUserInfo.uid, userName: currentUserInfo.name, formType, formName, agreedAt: Date.now(), customData, signatureImage };
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), docData);
-        alert("✅ 簽署完成！系統已解鎖並自動跳轉至班表頁面。"); 
-        
-        onClose();
-        if (formType === 'contract' && setView) {
-            setTimeout(() => setView('calendar'), 100);
-        }
-    };
-
-    return (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4 animate-fade-in">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[95vh]">
-                <div className="bg-gray-800 p-4 text-white flex justify-between items-center"><h3 className="font-bold">{formType === 'holiday' ? '填寫：國定假日調移同意書' : '填寫：員工勞動契約暨保密與工作守則同意書'}</h3><button onClick={onClose}><X size={20}/></button></div>
-                <div className="p-6 overflow-y-auto flex-1 space-y-4">
-                    
-                    {formType === 'holiday' && (
-                        <div className="bg-orange-50 p-4 rounded-lg border border-orange-200 mb-4 space-y-3 shadow-sm">
-                            <h4 className="font-bold text-orange-800">請設定調移日期：</h4>
-                            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2"><label className="text-sm font-bold text-gray-700 w-24">原國定假日</label><input type="date" value={origDate} onChange={e=>setOrigDate(e.target.value)} className="border rounded px-3 py-2 flex-1 w-full text-sm focus:outline-none"/></div>
-                            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2"><label className="text-sm font-bold text-gray-700 w-24">調移至日期</label><input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)} className="border rounded px-3 py-2 flex-1 w-full text-sm focus:outline-none"/></div>
-                        </div>
-                    )}
-
-                    <div className="border border-gray-300 rounded-lg p-5 bg-gray-50 h-72 overflow-y-auto text-sm text-gray-700 leading-relaxed shadow-inner">
-                        {formType === 'holiday' ? (
-                            <>
-                                <h4 className="font-bold text-center text-lg mb-4 text-gray-900">國定假日調移同意書</h4>
-                                <p>立同意書人 <strong>{currentUserInfo.name}</strong> 茲同意雇主依勞動基準法第 37 條及相關施行細則規定，將原定之國定假日調移至其他工作日。</p><br/>
-                                <p>雙方約定調移明細如下：</p>
-                                <ul className="list-disc pl-5 my-2 space-y-1 font-bold text-indigo-700"><li>原定國定假日：{origDate || '【尚未填寫】'}</li><li>同意調移日期：{newDate || '【尚未填寫】'}</li></ul><br/>
-                                <p>說明與約定事項：</p>
-                                <ol className="list-decimal pl-5 space-y-2 mt-2"><li>調移後之「原國定假日」即轉為「正常工作日」，立同意書人於該日出勤，雇主無須另加給工資。</li><li>調移後之「調移日」即轉為「休假日」，立同意書人依法享有休假。如因業務需求於該「調移日」出勤，雇主將依法發給出勤加倍工資。</li><li>本同意書經雙方確認於系統打勾並親筆簽署後生效。</li></ol>
-                            </>
-                        ) : (
-                            <>
-                                <h4 className="font-bold text-center text-xl mb-4 text-gray-900">員工勞動契約暨保密與工作守則同意書</h4>
-                                <p className="mb-4">立契約書人 <strong>{currentUserInfo.name}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
-                                
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第一條：契約起訖與工作場所</p>
-                                <ol className="list-decimal pl-8 space-y-1 mt-2">
-                                    <li>契約期間：自 <span className="text-indigo-600 font-bold">{contractStart}</span> 起至 <span className="text-indigo-600 font-bold">{isIndefinite ? '不定期契約' : contractEnd}</span> 止。</li>
-                                    <li>工作地點：乙方應於甲方指定地點（<span className="text-indigo-600 font-bold">{workLocation}</span>）提供勞務，負責相關門市工作。</li>
-                                </ol>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第二條：出勤、請假與排班制度</p>
-                                <ol className="list-decimal pl-8 space-y-1 mt-2">
-                                    <li>採排班制與變形工時，確實透過 APP 打卡。</li>
-                                    <li>換假與換班需於 <strong>3 天前</strong> 經雙方確認並送交店長審核核准。未經核准擅自不到班者，依曠職論處。</li>
-                                    <li><strong>特休</strong>：依勞動基準法第 38 條規定，由系統按到職日自動計算發放。</li>
-                                    <li><strong>自畫假/排休</strong>：每月自畫休假上限 3 天，且逢星期六、日之假日最多僅能畫休 2 天。</li>
-                                    <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理，全年事假上限 14 日、病假上限 30 日。</li>
-                                </ol>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第三條：寒暑假旺季特別約定</p>
-                                <ol className="list-decimal pl-8 space-y-1 mt-2">
-                                    <li>因應門市寒暑假（1,2月及7,8月）之營運高峰，乙方同意配合延長工時，正常與延長工時合計單日最長不超過 12 小時。</li>
-                                    <li>針對旺季配合排班衍生之額外工時，甲方得視出勤與營運績效另行核發「旺季特別獎金」，連同當月薪資發放。</li>
-                                </ol>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第四條：薪資、油資與補休結算</p>
-                                <ol className="list-decimal pl-8 space-y-1 mt-2">
-                                    <li><strong>本薪發放</strong>：甲方每月給付乙方本薪新台幣 <span className="text-indigo-600 font-bold">{salaryAmount}</span> 元整。統一於 <strong>次月 5 日</strong> 轉帳發放。</li>
-                                    <li><strong>油資補貼約定</strong>：每月最高補貼 500 元。採實報實銷，須主動提交甲方「統編發票」核銷。未達 500 元以實際發票金額核發，超過以 500 元為限，未核銷額度不得遞延。</li>
-                                    <li><strong>國定假日出勤與時數轉換</strong>：乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發當日加倍工資。</li>
-                                    <li><strong>補休排定</strong>：加班或國定假日出勤產生之補休，視營運排定，主管保留調度權。</li>
-                                    <li><strong>年度結算</strong>：至當年 12/31 止，年度終結未休畢之補休時數，將依法折發工資或依雙方協議之獎金發放辦法結算。</li>
-                                </ol>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第五條：離職與交接</p>
-                                <p className="pl-4 mt-2">乙方自請離職須依勞動基準法第 15 條及相關規定提前預告，並確實辦理業務與器材交接。未依規定致甲方受有損害者，須負損害賠償責任。</p>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第六條：法定保障與福利</p>
-                                <p className="pl-4 mt-2">甲方依法提撥 6% 勞退、提供勞保及職災協助。獎金視營運狀況發放，非屬經常性薪資。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第七條：懲處與賠償制度</p>
-                                <p className="pl-4 mt-2">嚴禁代打卡、偷料、擅自給予客人口頭折扣等行為。違反工作規則者予以懲處；若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣，須由乙方另行給付或依法協議）。</p>
-
-                                <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第八條：機密保密</p>
-                                <p className="pl-4 mt-2">乙方對職務上知悉之營業機密（含配方、進貨價格、營業額、客源資料等）負有絕對保密義務，離職後亦同。如有違反，乙方願負一切法律責任與損害賠償。</p>
-                            </>
-                        )}
-                    </div>
-
-                    <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 cursor-pointer hover:bg-blue-100 transition-colors" onClick={()=>setAgree(!agree)}>
-                        <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="w-5 h-5 accent-blue-600 cursor-pointer"/><span className="font-bold text-blue-900 leading-tight">本人已詳細審閱、充分了解且同意上述 8 項條款，並以下方親筆簽名為憑。</span></label>
-                    </div>
-
-                    <div className="border-2 border-gray-300 rounded-lg overflow-hidden relative">
-                        <div className="bg-gray-100 p-2 text-xs font-bold text-gray-600 flex justify-between items-center border-b border-gray-300">
-                            <span>✍️ 請在下方空白處親筆簽名</span><button onClick={clearSignature} className="bg-white border px-2 py-1 rounded shadow-sm hover:bg-gray-50 text-red-600">清除重寫</button>
-                        </div>
-                        <canvas ref={canvasRef} width={600} height={150} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing} className="w-full bg-white touch-none cursor-crosshair"></canvas>
-                    </div>
-                </div>
-
-                <div className="p-4 border-t bg-gray-50 flex gap-3"><button onClick={onClose} className="flex-1 bg-white border border-gray-300 text-gray-600 py-3 rounded-lg font-bold hover:bg-gray-100 transition-colors">取消</button><button onClick={handleSubmit} className={`flex-1 py-3 rounded-lg font-bold shadow-lg transition-colors ${agree && hasSigned ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}>送出同意並簽署</button></div>
-            </div>
-        </div>
-    );
-};
-
-const ViewSignatureModal = ({ sigData, onClose }) => {
-    if (!sigData) return null;
-    const handlePrint = () => { window.print(); };
-
-    return (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[90] p-4 animate-fade-in print:bg-white print:p-0">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[95vh] print:shadow-none print:max-h-none print:h-auto">
-                <div className="bg-gray-800 p-4 text-white flex justify-between items-center print:hidden">
-                    <h3 className="font-bold flex items-center gap-2"><FileSearch size={18}/> 檢視電子簽署紀錄</h3>
-                    <div className="flex gap-2"><button onClick={handlePrint} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-sm font-bold flex items-center gap-1"><Printer size={14}/> 列印 / 轉 PDF</button><button onClick={onClose} className="hover:bg-red-500 p-1 rounded"><X size={20}/></button></div>
-                </div>
-                <div className="p-8 overflow-y-auto print:overflow-visible text-gray-800 space-y-6">
-                    <div className="border-b-2 border-gray-800 pb-4 mb-4 text-center">
-                        <h1 className="text-2xl font-black">{sigData.formName}</h1>
-                        <p className="text-gray-500 mt-2 font-mono">文件編號: {sigData.id} | 簽署日期: {new Date(sigData.agreedAt).toLocaleString()}</p>
-                    </div>
-
-                    <div className="text-sm leading-loose space-y-4">
-                        {sigData.formType === 'holiday' ? (
-                            <>
-                                <p>立同意書人 <strong>{sigData.userName}</strong> 茲同意雇主依勞動基準法第 37 條及相關施行細則規定，將原定之國定假日調移至其他工作日。</p>
-                                <ul className="list-disc pl-5 font-bold text-lg my-4"><li>原定國定假日：{sigData.customData?.origDate}</li><li>同意調移日期：{sigData.customData?.newDate}</li></ul>
-                                <p>說明與約定事項：<br/>1. 調移後之「原國定假日」轉為「正常工作日」，立同意書人於該日出勤，雇主無須加給工資。<br/>2. 調移後之「調移日」轉為「休假日」，立同意書人依法享有休假。如因業務需求於該「調移日」出勤，發給加倍工資。</p>
-                            </>
-                        ) : (
-                            <>
-                                <p>立契約書人 <strong>{sigData.userName}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
-                                <p><strong>第一條：契約起訖與工作地點</strong><br/>契約期間自 {sigData.customData?.contractStart} 至 {sigData.customData?.contractEnd}。乙方應於甲方指定地點（{sigData.customData?.workLocation}）提供勞務，負責相關門市工作。</p>
-                                <p><strong>第二條：出勤、請假與排班制度</strong><br/>採排班制與變形工時。請換假需於 3 天前審核。特休依勞基法發放；每月自畫休假上限 3 天（含假日最多 2 天）。</p>
-                                <p><strong>第三條：寒暑假旺季與工時</strong><br/>因應寒暑假（1,2月及7,8月）營運高峰，乙方同意配合延長工時，合計單日最長不超過 12 小時。甲方得視營運績效另行核發「旺季特別獎金」。</p>
-                                <p><strong>第四條：薪資、油資與補休結算</strong><br/>甲方每月給付乙方本薪新台幣 <strong>{sigData.customData?.salaryAmount}</strong> 元整。每月最高 500 元油資補貼（憑統編發票實報實銷）。乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發加倍工資。年度終結未休畢之補休時數，依法或獎金辦法結算發放。</p>
-                                <p><strong>第五條：離職與交接</strong><br/>乙方自請離職須依法預告並交接。未依規定致甲方受有損害者，須負損害賠償責任。</p>
-                                <p><strong>第六條：法定保障與福利</strong><br/>甲方依法提撥 6% 勞工退休金、提供勞保及職災協助。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
-                                <p><strong>第七條：懲處與賠償制度</strong><br/>嚴禁代打卡、偷料。若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣）。</p>
-                                <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
-                            </>
-                        )}
-                        <div className="bg-gray-100 p-3 text-sm font-bold text-center border mt-6">☑️ 本人已詳細審閱、充分了解且同意上述 8 項條款，並以下方親筆簽名為憑。</div>
-                    </div>
-
-                    <div className="mt-8 flex justify-end">
-                        <div className="text-center">
-                            <p className="text-gray-500 mb-2 font-bold">立同意書人 (親筆簽名)</p>
-                            <div className="border-b-2 border-gray-800 pb-2 mb-2 w-64 min-h-[100px] flex items-end justify-center">
-                                {sigData.signatureImage && <img src={sigData.signatureImage} alt="Signature" className="max-h-24 object-contain mix-blend-multiply" />}
-                            </div>
-                            <p className="font-mono text-xs text-gray-400">Timestamp: {sigData.agreedAt}</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
 // ==========================================
-// 🌟 系統主程式 (Main App) - 🔴 新增每日早晨頭香 LINE 提醒引擎
+// 🌟 系統主程式 (Main App)
 // ==========================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -539,39 +331,25 @@ export default function App() {
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isDataLoading && !isPrivileged && !isReadOnly && !hasSignedContract;
 
-    // 🔴 【新增】每日頭香自動提醒引擎 (Daily Morning Trigger)
     useEffect(() => {
         if (isDataLoading || Object.keys(users).length === 0 || events.length === 0) return;
         const checkAndSendDailyEvents = async () => {
             const today = new Date();
             const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-            
-            // 檢查今天有沒有行程
             const todaysEvents = events.filter(e => checkEventOnDate(e, todayStr));
             if (todaysEvents.length === 0) return;
-            
-            // 檢查今天是否已經發送過通知
             const notifRef = doc(db, 'artifacts', appId, 'public', 'data', 'dailyNotifications', todayStr);
             const snap = await getDoc(notifRef);
             
             if (!snap.exists()) {
-                // 先寫入資料庫，防止其他人同時打開 APP 重複發送
                 await setDoc(notifRef, { triggeredAt: Date.now(), triggeredBy: currentUserInfo.name });
-                
-                // 組裝今天的行程訊息
                 let msg = `🔔 【今日重點行程與備忘錄】\n日期：${todayStr}\n\n`;
-                todaysEvents.forEach((e, idx) => { 
-                    msg += `${idx + 1}. ${e.time ? e.time + ' ' : ''}${e.title}\n`; 
-                    if (e.note) msg += `   備註：${e.note}\n`; 
-                });
+                todaysEvents.forEach((e, idx) => { msg += `${idx + 1}. ${e.time ? e.time + ' ' : ''}${e.title}\n`; if (e.note) msg += `   備註：${e.note}\n`; });
                 msg += `\n祝大家工作順利！`;
-                
-                // 找出所有在職且有綁定 LINE 的員工發送
                 const targetLineIds = Object.values(users).filter(u => !u.isResigned && u.lineUserId).map(u => u.lineUserId);
                 if (targetLineIds.length > 0) sendLineNotification(targetLineIds, msg);
             }
         };
-        // 延遲 3 秒執行，確保資料都載入完畢且不卡住使用者介面
         const timer = setTimeout(checkAndSendDailyEvents, 3000);
         return () => clearTimeout(timer);
     }, [isDataLoading, events, users, db, currentUserInfo.name]);
@@ -587,9 +365,10 @@ export default function App() {
         const targetUser = users[req.uid || req.fromUid]; 
         if (action === 'reject') {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 申請 (${req.date}) 已被駁回。`);
+            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 申請已被駁回。`);
             return;
         }
+
         if (['ot_confirm', 'admin_ot_approve'].includes(req.type)) {
             if (req.type === 'admin_ot_approve' && !isPrivileged) return alert("無權限核准單據"); 
             const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
@@ -602,18 +381,42 @@ export default function App() {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
             alert("已核准並寫入統計！");
         } 
+        // 🔴 V8.4: 完整 2 日換假與寫入紀錄邏輯
         else if (req.type === 'swap') {
-            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
-            const shiftSnap = await getDoc(shiftRef);
-            if (shiftSnap.exists() && Array.isArray(shiftSnap.data().assignments)) {
-                const assigns = [...shiftSnap.data().assignments];
-                const idxA = assigns.findIndex(a => a.uid === req.fromUid); const idxB = assigns.findIndex(a => a.uid === req.toUid);
-                if (idxA >= 0 && idxB >= 0) {
-                    const temp = { ...assigns[idxA], uid: req.toUid }; assigns[idxA] = { ...assigns[idxB], uid: req.fromUid }; assigns[idxB] = temp;
-                    await updateDoc(shiftRef, { assignments: assigns }); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-                    alert("換假成功！");
-                } else { alert("班表已變更，無法換假"); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id)); }
+            const processSwapForDate = async (targetDate) => {
+                if (!targetDate) return;
+                const ref = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', targetDate);
+                const snap = await getDoc(ref);
+                if (snap.exists() && Array.isArray(snap.data().assignments)) {
+                    const assigns = [...snap.data().assignments];
+                    const iA = assigns.findIndex(a => a.uid === req.fromUid); 
+                    const iB = assigns.findIndex(a => a.uid === req.toUid);
+                    if (iA >= 0 && iB >= 0) {
+                        const temp = { ...assigns[iA], uid: req.toUid }; 
+                        assigns[iA] = { ...assigns[iB], uid: req.fromUid }; 
+                        assigns[iB] = temp;
+                        await updateDoc(ref, { assignments: assigns });
+                    }
+                }
+            };
+
+            await processSwapForDate(req.date1); // 互換第一天
+            await processSwapForDate(req.date2); // 互換第二天
+
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+            
+            // 將換假事件寫入公司月曆
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), {
+                title: `🔄 換班紀錄: ${users[req.toUid]?.name || '員工'} 與 ${users[req.fromUid]?.name || '員工'}`,
+                startDate: req.date1,
+                time: '', repeatType: 'none',
+                note: `雙方同意互換 ${req.date1} 與 ${req.date2} 之班別。`
+            });
+
+            if (users[req.fromUid]?.lineUserId) {
+                sendLineNotification([users[req.fromUid].lineUserId], `✅ 【換班成功】\n您與 ${users[req.toUid]?.name} 的換班申請 (${req.date1} 互換 ${req.date2}) 對方已同意並生效！`);
             }
+            alert("換假成功！系統已互換兩天班別，並寫入月曆備忘錄留存。");
         }
     };
   
@@ -646,6 +449,7 @@ export default function App() {
                       <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
                       <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
                       <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
+                      
                       <div className="relative" ref={dropdownRef}>
                           <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold transition-colors ${['salary','attendance','payroll','settings','forms'].includes(view) ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
                               <Settings className="w-4 h-4" /> <span className="hidden xs:inline">管理</span><ChevronDown className="w-3 h-3" />
@@ -704,11 +508,12 @@ export default function App() {
                       myNotifications.map(req => (
                           <div key={req.id} className="bg-white p-4 rounded-xl border border-l-4 border-l-indigo-500 shadow-sm mb-3">
                               <h3 className="font-bold text-gray-800">單據審核</h3>
-                              <p className="text-sm">申請人：{users[req.uid || req.fromUid]?.name} | 日期：{req.date}</p>
-                              <div className="bg-gray-50 p-2 my-2 text-sm rounded font-bold text-indigo-800">{req.hours > 0 ? '加班' : '補休'} {Math.abs(req.hours)} 小時 ({req.reason})</div>
+                              {/* 🔴 V8.4 換班請求介面顯示優化 */}
+                              <p className="text-sm">申請人：{users[req.uid || req.fromUid]?.name} | {req.type === 'swap' ? <span className="font-mono bg-indigo-50 px-1 rounded text-indigo-700 font-bold ml-1">互換：{req.date1} ⇄ {req.date2}</span> : `日期：${req.date}`}</p>
+                              <div className="bg-gray-50 p-2 my-2 text-sm rounded font-bold text-indigo-800">{req.type === 'swap' ? '🔄 換班/換假請求' : `${req.hours > 0 ? '加班' : '補休'} ${Math.abs(req.hours)} 小時 (${req.reason})`}</div>
                               <div className="flex gap-2">
                                   <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border py-2 rounded-lg font-bold hover:bg-gray-50">駁回</button>
-                                  <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow hover:bg-indigo-700">核准</button>
+                                  <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow hover:bg-indigo-700">{req.type === 'swap' ? '同意換班' : '核准'}</button>
                               </div>
                           </div>
                       ))
@@ -719,220 +524,8 @@ export default function App() {
       </div>
     );
 }
-
 // ==========================================
-// 📦 庫存盤點頁面 (InventoryView)
-// ==========================================
-const InventoryView = ({ db, appId, inventoryItems }) => {
-    const items = Array.isArray(inventoryItems) && inventoryItems.length > 0 ? inventoryItems : [];
-    const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
-    const [activeTab, setActiveTab] = useState(categories[0] || '');
-    const [records, setRecords] = useState({});
-    
-    const filteredItems = items.filter(i => i.category === activeTab);
-    const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * item.price), 0), [items, records]);
-
-    if (items.length === 0) {
-        return (
-            <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
-                <Package size={64} className="mx-auto text-gray-300 mb-4" />
-                <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
-                <p className="text-gray-500 mt-2">請使用管理員帳號，前往「管理」➡️「系統設定」新增庫存品項。</p>
-            </div>
-        )
-    }
-
-    const handleCountChange = (id, delta) => { setRecords(prev => { const current = prev[id] || 0; return { ...prev, [id]: Math.max(0, current + delta) }; }); };
-    const handleInputChange = (id, val) => { const num = parseFloat(val); if(!isNaN(num) && num >= 0) { setRecords(prev => ({ ...prev, [id]: num })); } else if (val === '') { const newRecs = {...records}; delete newRecs[id]; setRecords(newRecs); } };
-
-    const handleSave = async () => {
-        if (Object.keys(records).length === 0) return alert("尚未填寫任何盤點數量！");
-        if (window.confirm("確定要送出今日盤點結果嗎？\n\n送出後畫面將自動重置為 0。")) {
-            const todayStr = new Date().toISOString().split('T')[0];
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', todayStr), { date: todayStr, timestamp: Date.now(), data: records }, { merge: true });
-            alert("✅ 盤點資料已成功儲存至雲端！"); setRecords({}); 
-        }
-    };
-
-    const handleExportCSV = () => {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
-        let exportTotal = 0;
-        items.forEach(item => { const qty = records[item.id] || 0; const subtotal = qty * item.price; exportTotal += subtotal; rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]); });
-        rows.push(['', '', '', '', '庫存總值:', exportTotal]);
-        exportToCSV(`盤點表_${todayStr}`, rows);
-    };
-
-    return (
-        <div className="max-w-2xl mx-auto pb-20">
-            <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row justify-between items-center mb-4 shadow-sm gap-3">
-                <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><Package/> 庫存盤點</h2>
-                <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
-                    <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${totalValue.toLocaleString()}</div>
-                    <div className="flex gap-2"><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button><button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> 送出</button></div>
-                </div>
-            </div>
-            <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
-                {categories.map(c => (<button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{c}</button>))}
-            </div>
-            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                {filteredItems.map((item, idx) => (
-                    <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                        <div><div className="font-bold text-gray-800 text-lg">{item.name}</div><div className="text-xs text-gray-400 font-mono">單價: ${item.price}</div></div>
-                        <div className="flex items-center gap-2 sm:gap-3">
-                            <span className="text-lg font-black text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 shadow-sm mr-1 sm:mr-3">{item.spec}</span>
-                            <button onClick={()=>handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
-                            <input type="number" value={records[item.id] !== undefined ? records[item.id] : ''} onChange={(e)=>handleInputChange(item.id, e.target.value)} placeholder="0" className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent" />
-                            <button onClick={()=>handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
-                        </div>
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
-};
-
-// ==========================================
-// 📍 GPS 打卡頁面 (ClockView)
-// ==========================================
-const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => {
-    const [currentTime, setCurrentTime] = useState(new Date());
-    const [location, setLocation] = useState(null);
-    const [distance, setDistance] = useState(null);
-    const [locError, setLocError] = useState('');
-    const [isPunching, setIsPunching] = useState(false);
-
-    useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 1000); return () => clearInterval(timer); }, []);
-    const fetchLocation = () => {
-        setLocError(''); setLocation(null); setDistance(null);
-        if (!navigator.geolocation) { setLocError('不支援定位'); return; }
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const lat = pos.coords.latitude; const lng = pos.coords.longitude; setLocation({ lat, lng });
-                if (storeConfig && storeConfig.lat && storeConfig.lng) { setDistance(getDistance(lat, lng, storeConfig.lat, storeConfig.lng)); }
-            },
-            (err) => { setLocError(err.code === 1 ? '請允許權限' : '定位失敗'); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-        );
-    };
-    useEffect(() => { fetchLocation(); }, [storeConfig]);
-
-    const handlePunch = async (type) => {
-        if (!storeConfig?.lat) return alert("管理員尚未設定座標！");
-        if (distance === null) return alert("定位中...");
-        if (distance > (storeConfig.radius || 50)) return alert("超出範圍！");
-        setIsPunching(true);
-        try {
-            const dateStr = `${currentTime.getFullYear()}-${String(currentTime.getMonth()+1).padStart(2,'0')}`;
-            const todayStr = `${currentTime.getFullYear()}-${String(currentTime.getMonth()+1).padStart(2,'0')}-${String(currentTime.getDate()).padStart(2,'0')}`;
-            const timeStr = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
-            const newRecord = { id: `${Date.now()}_${currentUser.uid}`, uid: currentUser.uid, name: currentUserInfo.name, type: type, date: todayStr, time: timeStr, timestamp: Date.now(), distance: distance };
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'clockRecords', dateStr);
-            const snap = await getDoc(docRef);
-            if (!snap.exists()) { await setDoc(docRef, { records: [newRecord] }); } else { await updateDoc(docRef, { records: arrayUnion(newRecord) }); }
-            alert(`${type === 'IN' ? '上班' : '下班'}打卡成功！`); fetchLocation(); 
-        } catch (e) { alert("打卡失敗"); }
-        setIsPunching(false);
-    };
-
-    const isWithinRange = distance !== null && storeConfig && distance <= (storeConfig.radius || 50);
-
-    return (
-        <div className="max-w-md mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 mt-4">
-            <div className="bg-indigo-600 p-6 text-center text-white relative">
-                <h2 className="text-xl font-bold opacity-90 mb-2">現在時間</h2>
-                <div className="text-5xl font-mono font-bold tracking-wider drop-shadow-md">
-                    {String(currentTime.getHours()).padStart(2,'0')}:{String(currentTime.getMinutes()).padStart(2,'0')}
-                    <span className="text-2xl ml-1 opacity-75">:{String(currentTime.getSeconds()).padStart(2,'0')}</span>
-                </div>
-                <div className="text-sm mt-2 opacity-80">{currentTime.toLocaleDateString()}</div>
-            </div>
-            <div className="p-6 space-y-6">
-                <div className="bg-gray-50 rounded-xl p-4 border relative">
-                    <div className="flex justify-between items-start mb-2"><h4 className="font-bold text-gray-700 flex items-center gap-1"><MapPin size={16}/> 定位狀態</h4><button onClick={fetchLocation} className="text-xs bg-white border px-2 py-1 rounded hover:bg-gray-100 shadow-sm font-bold text-indigo-600">重新定位</button></div>
-                    {!storeConfig?.lat ? (<p className="text-sm text-red-500 font-bold">⚠️ 管理員尚未設定店面座標</p>) : locError ? (<p className="text-sm text-red-500 font-bold">❌ {locError}</p>) : distance === null ? (<p className="text-sm text-gray-500 animate-pulse">正在獲取 GPS 訊號...</p>) : (
-                        <div className="space-y-1">
-                            <p className="text-sm text-gray-600">距離店面: <span className={`font-bold text-lg ${isWithinRange ? 'text-green-600' : 'text-red-500'}`}>{distance}</span> 公尺</p>
-                            <p className="text-xs text-gray-400">允許打卡範圍: {storeConfig.radius || 50} 公尺</p>
-                            {isWithinRange ? <div className="text-sm font-bold text-green-600 flex items-center gap-1 mt-1"><CheckCircle2 size={16}/> 在範圍內，可以打卡</div> : <div className="text-sm font-bold text-red-500 flex items-center gap-1 mt-1"><X size={16}/> 距離過遠，無法打卡</div>}
-                        </div>
-                    )}
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                    <button onClick={() => handlePunch('IN')} disabled={!isWithinRange || isPunching} className={`py-4 rounded-xl font-bold text-lg shadow-lg flex flex-col items-center gap-1 transition-all ${isWithinRange ? 'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><Clock size={24}/> 上班打卡</button>
-                    <button onClick={() => handlePunch('OUT')} disabled={!isWithinRange || isPunching} className={`py-4 rounded-xl font-bold text-lg shadow-lg flex flex-col items-center gap-1 transition-all ${isWithinRange ? 'bg-orange-500 text-white hover:bg-orange-600 active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><LogOut size={24}/> 下班打卡</button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// ==========================================
-// 📋 出勤明細頁面 (AttendanceView)
-// ==========================================
-const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) => {
-    const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
-    const [attendanceList, setAttendanceList] = useState([]);
-    const [loading, setLoading] = useState(false);
-
-    useEffect(() => {
-        setLoading(true);
-        const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'clockRecords', targetMonth), (snap) => {
-            if (snap.exists()) {
-                const records = snap.data().records || [];
-                const grouped = {};
-                records.forEach(r => {
-                    const key = `${r.date}_${r.uid}`;
-                    if (!grouped[key]) grouped[key] = { date: r.date, uid: r.uid, name: r.name, in: null, out: null };
-                    if (r.type === 'IN') { if (!grouped[key].in || r.time < grouped[key].in) grouped[key].in = r.time; }
-                    if (r.type === 'OUT') { if (!grouped[key].out || r.time > grouped[key].out) grouped[key].out = r.time; }
-                });
-
-                const processedList = Object.values(grouped).map(g => {
-                    const dayShift = shifts[g.date]?.assignments?.find(a => a.uid === g.uid);
-                    const shiftInfo = shiftTypes.find(st => st.id === dayShift?.shiftCode);
-                    let status = [];
-                    if (shiftInfo) {
-                        if (g.in && g.in > shiftInfo.start) status.push('遲到');
-                        if (g.out && g.out < shiftInfo.end) status.push('早退');
-                        if (!g.in) status.push('缺卡(上)');
-                        if (!g.out) status.push('缺卡(下)');
-                        if (status.length === 0) status.push('正常');
-                    } else if (dayShift?.type === 'LEAVE') { status.push('請假'); } else { status.push('未排班'); }
-                    return { ...g, shiftInfo, status };
-                });
-                processedList.sort((a, b) => b.date.localeCompare(a.date));
-                setAttendanceList(processedList);
-            } else { setAttendanceList([]); }
-            setLoading(false);
-        });
-        return () => unsub();
-    }, [targetMonth, db, appId, shifts, shiftTypes]);
-
-    const handleExportCSV = () => {
-        const rows = [['日期', '員工', '班別', '上班打卡', '下班打卡', '狀態']];
-        attendanceList.forEach(r => { const shiftStr = r.shiftInfo ? `${r.shiftInfo.start}~${r.shiftInfo.end}` : '-'; rows.push([r.date, r.name, shiftStr, r.in || '', r.out || '', r.status.join(', ')]); });
-        exportToCSV(`出勤紀錄_${targetMonth}`, rows);
-    };
-
-    return (
-        <div className="space-y-4 pb-20">
-            <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm"><h2 className="font-bold flex gap-2 text-indigo-700"><History/> 出勤結算</h2><div className="flex gap-2"><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 focus:outline-none"/><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button></div></div>
-            <div className="bg-white rounded-xl border overflow-hidden">
-                {loading ? <div className="p-8 text-center text-gray-400">載入中...</div> : attendanceList.length === 0 ? <div className="p-8 text-center text-gray-400">本月尚無打卡紀錄</div> : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">日期</th><th className="p-3">員工</th><th className="p-3 text-center">班別 (應到~應退)</th><th className="p-3 text-center">上班打卡</th><th className="p-3 text-center">下班打卡</th><th className="p-3">狀態</th></tr></thead><tbody>
-                                {attendanceList.map((r, i) => {
-                                    const isAbnormal = r.status.includes('遲到') || r.status.includes('早退') || r.status.includes('缺卡');
-                                    return (
-                                    <tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{r.date.substring(5)}</td><td className="p-3 font-bold">{r.name}</td><td className="p-3 text-center text-gray-500 text-xs">{r.shiftInfo ? <span className="bg-gray-100 px-2 py-0.5 rounded">{r.shiftInfo.label} ({r.shiftInfo.start}~{r.shiftInfo.end})</span> : <span className="text-gray-300">-</span>}</td><td className={`p-3 text-center font-bold ${r.in && r.shiftInfo && r.in > r.shiftInfo.start ? 'text-red-500' : 'text-gray-800'}`}>{r.in || '-'}</td><td className={`p-3 text-center font-bold ${r.out && r.shiftInfo && r.out < r.shiftInfo.end ? 'text-red-500' : 'text-gray-800'}`}>{r.out || '-'}</td><td className="p-3 font-bold">{isAbnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span>}</td></tr>
-                                )})}
-                    </tbody></table></div>
-                )}
-            </div>
-        </div>
-    );
-};
-// ==========================================
-// 📅 月曆排班模組 (CalendarView) - 🔴 取消存檔立即推播，改為每日早晨提醒
+// 📅 月曆排班模組 (CalendarView) 
 // ==========================================
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
@@ -946,7 +539,6 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
   
     const handleSaveEvent = async (eventData) => {
-        // 🔴 這裡拔掉了原本的 sendLineNotification，因為系統已經會在每天早上頭香登入時自動廣播了！
         if (eventData.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventData.id), eventData);
         else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), eventData);
         setEditingEvent(null);
@@ -955,14 +547,60 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const handleDeleteEvent = async (eventId) => {
         if(window.confirm("確定要刪除這個行程嗎？")) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId)); setEditingEvent(null); }
     };
+
+    // 🔴 V8.4: 一鍵自動排班邏輯 (依據職級與平假日)
+    const handleAutoSchedule = async () => {
+        if (!isSuperAdmin) return;
+        if(!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month+1}月」整個月，尚未排班的員工補上預設班別。\n\n(規則：主管一律 09O，員工平日 09A / 假日 09O)\n確定執行嗎？`)) return;
+        
+        for(let i=1; i<=days; i++) {
+            const dStr = `${year}-${String(month+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
+            const dayData = shifts[dStr] || { assignments: [] };
+            if (dayData.isClosed) continue;
+            
+            let changed = false;
+            const newAssigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+            const dObj = new Date(dStr);
+            const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+
+            Object.values(users).forEach(u => {
+                if (u.isResigned || u.isViewer) return; 
+                const exist = newAssigns.find(a => a.uid === u.uid);
+                
+                // 如果該日尚未被排入，或是已排入但沒有班別代號且不是休假狀態
+                if (!exist || (!exist.shiftCode && exist.type !== 'LEAVE')) {
+                    const isMgmt = u.isAdmin || u.isManager;
+                    const tShift = isMgmt ? '09O' : (isWeekend ? '09O' : '09A'); // 依據職級與平假日給班
+                    
+                    if(exist) {
+                        exist.shiftCode = tShift;
+                        exist.type = 'WORK';
+                    } else {
+                        newAssigns.push({ uid: u.uid, type: 'WORK', shiftCode: tShift });
+                    }
+                    changed = true;
+                }
+            });
+            if (changed) { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dStr), { ...dayData, assignments: newAssigns }, { merge: true }); }
+        }
+        alert("✅ 自動排班完成！未排班人員已全數補上預設班別。");
+    };
   
     return (
       <>
       <div className="space-y-4">
-         <div className="bg-white p-4 rounded-xl border shadow-sm flex justify-between items-center md:col-span-1">
-              <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft/></button>
-              <div className="font-bold text-xl">{year}年 {month+1}月</div>
-              <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronRight/></button>
+         <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row justify-between items-center gap-3">
+              <div className="flex items-center gap-3">
+                  <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft/></button>
+                  <div className="font-bold text-xl">{year}年 {month+1}月</div>
+                  <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronRight/></button>
+              </div>
+              {/* 🔴 V8.4 新增：一鍵排滿按鈕 */}
+              {!isReadOnly && isSuperAdmin && (
+                  <button onClick={handleAutoSchedule} className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded items-center gap-1 font-bold shadow-sm hover:bg-indigo-100 transition-colors flex">
+                      🤖 自動填補當月空班
+                  </button>
+              )}
          </div>
          <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
           {['日','一','二','三','四','五','六'].map(d=><div key={d} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{d}</div>)}
@@ -987,8 +625,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                     {Array.isArray(data.assignments) && data.assignments.map((a,ix)=>{ 
                         if (a.type === 'LEAVE') {
                             const pColor = getUserColor(a.uid); 
-                            const fullName = users[a.uid]?.name || '未知';
-                            const shortName = fullName.length > 2 ? fullName.slice(-2) : fullName;
+                            const shortName = users[a.uid]?.name ? (users[a.uid].name.length > 2 ? users[a.uid].name.slice(-2) : users[a.uid].name) : '未知';
                             const subNameFull = a.subUid ? users[a.subUid]?.name : null;
                             const subName = subNameFull ? (subNameFull.length > 2 ? subNameFull.slice(-2) : subNameFull) : null;
   
@@ -1013,8 +650,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
       </>
     );
 };
-
-// --- 排班細節 Modal ---
+// --- 排班細節 Modal (🔴 V8.4: 完整互換兩天班別) ---
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
     const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
@@ -1142,11 +778,25 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
       update({ assignments: next }); if (lType === 'rostered' || lType === 'official') onClose();
     };
   
-    const requestSwap = async (fromUid, toUid) => {
+    // 🔴 V8.4 完整雙日互換，加強 LINE 通知與輸入驗證
+    const requestSwap = async (fromUid, toUid, date1) => {
         const targetUser = safeUsers.find(u=>u.uid===toUid);
-        if (!confirm(`確定要向 ${targetUser?.name || '對方'} 申請換假嗎？`)) return;
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'swap', fromUid, toUid, date: dateStr, timestamp: new Date() });
-        alert("換假申請已送出！");
+        const date2 = prompt(`【🔄 換班 / 換假申請】\n您準備與 ${targetUser?.name || '對方'} 在 ${date1} 這天換班。\n\n👉 為了公平，請輸入您要「還給對方」的另一天日期 (格式: YYYY-MM-DD)：\n(也就是將這兩天的班別互換)`);
+        
+        if (date2 === null) return; // 使用者按取消
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date2)) {
+            return alert("🚨 日期格式錯誤！請務必輸入如 2026-10-15 的格式。");
+        }
+        if (!confirm(`確定要將您與 ${targetUser?.name} 在【${date1}】與【${date2}】這兩天的班別完全互換嗎？`)) return;
+        
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { 
+            type: 'swap', fromUid, toUid, date1, date2, timestamp: new Date() 
+        });
+        
+        if (targetUser?.lineUserId) {
+            sendLineNotification([targetUser.lineUserId], `🔄 【換班請求】\n${currentUserInfo.name} 想與您交換班別。\n互換日期：${date1} 與 ${date2}\n請登入系統「通知中心」審核。`);
+        }
+        alert("✅ 換假申請已送出！已透過 LINE 通知對方審核。");
     };
   
     const handleOTSave = async (numHours, remark) => {
@@ -1213,7 +863,9 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
               const isMe = u.uid === currentUserInfo.uid; 
               const canEdit = (isMe || isSuperAdmin) && !isReadOnly; 
   
-              const showSwapBtn = (Array.isArray(dayData.assignments) && dayData.assignments.some(a=>a.uid===currentUserInfo.uid && a.type==='LEAVE')) && !isMe && assign?.type === 'WORK' && !isReadOnly;
+              // 🔴 V8.4 放寬換假按鈕：只要不是唯讀者、且不是點自己，就能發出換假申請
+              const showSwapBtn = !isMe && !isReadOnly;
+              
               const hasOT = assign?.otHours !== undefined && assign?.otHours !== null && assign?.otHours !== "" && Number(assign?.otHours) !== 0;
               const otValue = Number(assign?.otHours);
               const isOT = otValue > 0;
@@ -1237,7 +889,8 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                                   </span>
                                   {assign.subUid && <span className="text-[11px] text-gray-600 font-bold flex items-center gap-1 bg-white/60 px-1 rounded"><ArrowRightLeft size={10}/> {users[assign.subUid]?.name} 代</span>}
                               </div>
-                              {!isReadOnly && isSuperAdmin && <button onClick={()=>cancelLeave(u.uid)} className="text-red-500 hover:text-red-700 bg-white/80 px-2 py-1 rounded text-xs font-bold shadow-sm border border-red-100 flex items-center gap-1"><Trash2 size={12}/> 取消</button>}
+                              {showSwapBtn && <button onClick={() => requestSwap(currentUserInfo.uid, u.uid, dateStr)} className="bg-white border border-indigo-200 text-indigo-600 px-2 py-1 rounded text-[10px] font-bold shadow-sm hover:bg-indigo-50 flex items-center gap-1"><ArrowRightLeft size={10}/> 換班</button>}
+                              {!isReadOnly && isSuperAdmin && <button onClick={()=>cancelLeave(u.uid)} className="text-red-500 hover:text-red-700 bg-white/80 px-2 py-1 rounded text-xs font-bold shadow-sm border border-red-100 flex items-center gap-1 ml-2"><Trash2 size={12}/> 取消</button>}
                           </div>
                       </div>
                   );
@@ -1259,7 +912,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                           <div className="font-bold text-gray-800 flex items-center gap-2">
                               <div className={`w-3 h-3 rounded-full ${userColor.split(' ')[0]} border-2 border-gray-400`}></div>{u.name}
                           </div>
-                          {showSwapBtn && <button onClick={() => requestSwap(currentUserInfo.uid, u.uid)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-xs font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft size={12}/> 換假</button>}
+                          {showSwapBtn && <button onClick={() => requestSwap(currentUserInfo.uid, u.uid, dateStr)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-xs font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft size={12}/> 換班</button>}
                       </div>
   
                       <div className="flex gap-2 w-full mt-2">
@@ -1349,9 +1002,8 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
       </>
     );
 };
-
 // ==========================================
-// 📊 統計明細 (SalaryView)
+// 📊 統計明細 (SalaryView) 
 // ==========================================
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
@@ -1559,6 +1211,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
       </div>
     );
 };
+
 // --- 薪資管理 (PayrollView) ---
 const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
