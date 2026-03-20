@@ -439,7 +439,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
     );
 };
 // ==========================================
-// 🌟 系統主程式 (Main App) 
+// 🌟 系統主程式 (Main App) - 🔴 修正資料讀取時間差跳轉問題
 // ==========================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -530,6 +530,9 @@ export default function App() {
     const { users, shifts, events, requests, leaves, shiftsDef, inventory, store, signatures, gasReceipts, insurances } = dbData;
     const currentUserInfo = users[user?.uid] || {};
     
+    // 🔴 關鍵修正：確認個人資料已從雲端載入完成 (有 uid 才算載入完)
+    const isDataLoading = !currentUserInfo.uid;
+    
     const isSuperAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
     const isManager = currentUserInfo.isManager || false;
     const isPrivileged = isSuperAdmin || isManager;
@@ -537,7 +540,8 @@ export default function App() {
     const isReadOnly = currentUserInfo.isResigned || currentUserInfo.isViewer;
     
     const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
-    const isLocked = !isPrivileged && !isReadOnly && !hasSignedContract;
+    // 🔴 關鍵修正：加入 !isDataLoading 條件，載入完畢前絕對不鎖定
+    const isLocked = !isDataLoading && !isPrivileged && !isReadOnly && !hasSignedContract;
 
     useEffect(() => {
         if (isLocked && view !== 'forms') {
