@@ -1833,23 +1833,61 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); 
       setEditingId(null); 
   };
-  const handleImageUpload = (e, fieldName) => { 
-      const file = e.target.files[0]; 
-      if (!file) return; 
-      if (file.size > 2 * 1024 * 1024) return alert("圖片過大 (請小於 2MB)"); 
-      const reader = new FileReader(); 
-      reader.onloadend = () => { setFormData(prev => ({ ...prev, [fieldName]: reader.result })); }; 
-      reader.readAsDataURL(file); 
+
+  // 🔴 智能影像壓縮引擎 (允許 10MB，壓至輕量級 JPEG)
+  const compressImage = (file, maxSizeMB = 10) => {
+      return new Promise((resolve, reject) => {
+          if (file.size > maxSizeMB * 1024 * 1024) {
+              alert(`🚨 圖片過大！請選擇小於 ${maxSizeMB}MB 的圖片。`);
+              return reject("File too large");
+          }
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = (event) => {
+              const img = new Image();
+              img.src = event.target.result;
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const MAX_WIDTH = 1200; // 限制圖片最大寬度
+                  const MAX_HEIGHT = 1200;
+                  let width = img.width;
+                  let height = img.height;
+
+                  if (width > height) {
+                      if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                  } else {
+                      if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                  }
+                  canvas.width = width;
+                  canvas.height = height;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0, width, height);
+                  
+                  // 壓縮成 JPEG，品質設定為 70%，大幅降低 Base64 容量
+                  resolve(canvas.toDataURL('image/jpeg', 0.7));
+              };
+          };
+      });
   };
 
-  const handleInsImageUpload = (e) => {
+  const handleImageUpload = async (e, fieldName) => { 
       const file = e.target.files[0]; 
       if (!file) return; 
-      if (file.size > 2 * 1024 * 1024) return alert("圖片過大 (請小於 2MB)"); 
-      const reader = new FileReader(); 
-      reader.onloadend = () => { setNewIns(prev => ({ ...prev, image: reader.result })); }; 
-      reader.readAsDataURL(file);
+      try {
+          const compressedBase64 = await compressImage(file, 10);
+          setFormData(prev => ({ ...prev, [fieldName]: compressedBase64 }));
+      } catch (err) { console.log(err); }
   };
+
+  const handleInsImageUpload = async (e) => {
+      const file = e.target.files[0]; 
+      if (!file) return; 
+      try {
+          const compressedBase64 = await compressImage(file, 10);
+          setNewIns(prev => ({ ...prev, image: compressedBase64 }));
+      } catch (err) { console.log(err); }
+  };
+
   const addInsurance = async () => {
       if (!newIns.name || !newIns.expiryDate) return alert("請填寫保險憑證名稱與到期日！");
       const items = [...safeInsurances, { ...newIns, id: `ins_${Date.now()}`, timestamp: Date.now() }];
@@ -2057,7 +2095,7 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                              <div>
                                  <label className="text-xs text-gray-500 block mb-2 font-bold flex items-center gap-1"><CreditCard size={12}/> 銀行存摺封面</label>
                                  <label className="cursor-pointer bg-gray-50 border border-gray-300 text-gray-600 px-3 py-2 rounded text-xs hover:bg-gray-100 flex justify-center items-center gap-1 font-bold transition-colors">
-                                     <Upload size={12}/> 上傳存摺圖片<input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'bankImage')} className="hidden" />
+                                     <Upload size={12}/> 上傳存摺圖片 (最高 10MB)<input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'bankImage')} className="hidden" />
                                  </label>
                                  {formData.bankImage && (
                                      <div className="mt-2 relative group">
@@ -2069,7 +2107,7 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
                              <div>
                                  <label className="text-xs text-gray-500 block mb-2 font-bold flex items-center gap-1"><FileText size={12}/> 供膳體檢報告</label>
                                  <label className="cursor-pointer bg-gray-50 border border-gray-300 text-gray-600 px-3 py-2 rounded text-xs hover:bg-gray-100 flex justify-center items-center gap-1 font-bold transition-colors">
-                                     <Upload size={12}/> 上傳體檢圖片<input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'healthCheckImage')} className="hidden" />
+                                     <Upload size={12}/> 上傳體檢圖片 (最高 10MB)<input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'healthCheckImage')} className="hidden" />
                                  </label>
                                  {formData.healthCheckImage && (
                                      <div className="mt-2 relative group">
@@ -2108,3 +2146,5 @@ const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventor
     </div>
   );
 };
+
+export { App as default };
