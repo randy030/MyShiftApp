@@ -814,14 +814,32 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 };
 
 // ==========================================
-// 📦 庫存盤點頁面 (InventoryView)
+// 📦 庫存盤點頁面 (InventoryView) - 🔴 V8.6 歷史紀錄查詢功能
 // ==========================================
 const InventoryView = ({ db, appId, inventoryItems }) => {
     const items = Array.isArray(inventoryItems) && inventoryItems.length > 0 ? inventoryItems : [];
     const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
+    
+    const [mode, setMode] = useState('count'); // 'count' 或 'history'
     const [activeTab, setActiveTab] = useState(categories[0] || '');
     const [records, setRecords] = useState({});
-    
+    const [historyList, setHistoryList] = useState([]);
+    const [selectedHistory, setSelectedHistory] = useState(null);
+
+    // 🔴 載入歷史紀錄
+    useEffect(() => {
+        if (mode === 'history') {
+            const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords'), (snap) => {
+                const list = [];
+                snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+                // 依日期由新到舊排序
+                list.sort((a, b) => b.date.localeCompare(a.date));
+                setHistoryList(list);
+            });
+            return () => unsub();
+        }
+    }, [mode, db, appId]);
+
     const filteredItems = items.filter(i => i.category === activeTab);
     const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * item.price), 0), [items, records]);
 
@@ -847,40 +865,118 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
         }
     };
 
+    // 匯出「當前填寫中」的報表
     const handleExportCSV = () => {
         const todayStr = new Date().toISOString().split('T')[0];
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
         let exportTotal = 0;
         items.forEach(item => { const qty = records[item.id] || 0; const subtotal = qty * item.price; exportTotal += subtotal; rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]); });
         rows.push(['', '', '', '', '庫存總值:', exportTotal]);
-        exportToCSV(`盤點表_${todayStr}`, rows);
+        exportToCSV(`當前盤點表_${todayStr}`, rows);
+    };
+
+    // 🔴 匯出「指定歷史紀錄」的報表
+    const handleExportHistoryCSV = (hist) => {
+        const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
+        let exportTotal = 0;
+        items.forEach(item => { 
+            const qty = hist.data[item.id] || 0; 
+            const subtotal = qty * item.price; 
+            exportTotal += subtotal; 
+            rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]); 
+        });
+        rows.push(['', '', '', '', '庫存總值:', exportTotal]);
+        exportToCSV(`歷史盤點紀錄_${hist.date}`, rows);
     };
 
     return (
         <div className="max-w-2xl mx-auto pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row justify-between items-center mb-4 shadow-sm gap-3">
                 <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><Package/> 庫存盤點</h2>
-                <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
-                    <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${totalValue.toLocaleString()}</div>
-                    <div className="flex gap-2"><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button><button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> 送出</button></div>
+                <div className="flex gap-2 bg-gray-100 p-1 rounded-lg w-full sm:w-auto">
+                    <button onClick={()=>{setMode('count'); setSelectedHistory(null);}} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode==='count'?'bg-white shadow text-indigo-600':'text-gray-500 hover:text-gray-700'}`}>新增盤點</button>
+                    <button onClick={()=>setMode('history')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode==='history'?'bg-white shadow text-indigo-600':'text-gray-500 hover:text-gray-700'}`}>歷史紀錄</button>
                 </div>
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
-                {categories.map(c => (<button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{c}</button>))}
-            </div>
-            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                {filteredItems.map((item, idx) => (
-                    <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                        <div><div className="font-bold text-gray-800 text-lg">{item.name}</div><div className="text-xs text-gray-400 font-mono">單價: ${item.price}</div></div>
-                        <div className="flex items-center gap-2 sm:gap-3">
-                            <span className="text-lg font-black text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 shadow-sm mr-1 sm:mr-3">{item.spec}</span>
-                            <button onClick={()=>handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
-                            <input type="number" value={records[item.id] !== undefined ? records[item.id] : ''} onChange={(e)=>handleInputChange(item.id, e.target.value)} placeholder="0" className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent" />
-                            <button onClick={()=>handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
-                        </div>
+
+            {mode === 'count' ? (
+                <>
+                    <div className="flex justify-between items-center mb-2 px-1">
+                        <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${totalValue.toLocaleString()}</div>
+                        <div className="flex gap-2"><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button><button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> 送出</button></div>
                     </div>
-                ))}
-            </div>
+                    <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
+                        {categories.map(c => (<button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{c}</button>))}
+                    </div>
+                    <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                        {filteredItems.map((item, idx) => (
+                            <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
+                                <div><div className="font-bold text-gray-800 text-lg">{item.name}</div><div className="text-xs text-gray-400 font-mono">單價: ${item.price}</div></div>
+                                <div className="flex items-center gap-2 sm:gap-3">
+                                    <span className="text-lg font-black text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 shadow-sm mr-1 sm:mr-3">{item.spec}</span>
+                                    <button onClick={()=>handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
+                                    <input type="number" value={records[item.id] !== undefined ? records[item.id] : ''} onChange={(e)=>handleInputChange(item.id, e.target.value)} placeholder="0" className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent" />
+                                    <button onClick={()=>handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            ) : (
+                <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                    {selectedHistory ? (
+                        <div className="p-4">
+                            <div className="flex justify-between items-center mb-4 border-b pb-3">
+                                <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Calendar size={18}/> {selectedHistory.date} 盤點明細</h3>
+                                <div className="flex gap-2">
+                                    <button onClick={()=>handleExportHistoryCSV(selectedHistory)} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={14}/> 匯出</button>
+                                    <button onClick={()=>setSelectedHistory(null)} className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded text-sm font-bold hover:bg-gray-200">返回列表</button>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                {items.map(item => {
+                                    const qty = selectedHistory.data[item.id];
+                                    if (qty === undefined || qty === 0) return null;
+                                    return (
+                                        <div key={item.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-100">
+                                            <div>
+                                                <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold mr-2">{item.category}</span>
+                                                <span className="font-bold text-gray-700 text-sm">{item.name}</span>
+                                            </div>
+                                            <div className="font-mono font-bold text-indigo-600 text-lg">{qty} <span className="text-xs text-gray-500">{item.spec}</span></div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    ) : (
+                        <div>
+                            <div className="bg-gray-50 p-3 border-b font-bold text-gray-700">歷次盤點紀錄清單</div>
+                            {historyList.length === 0 ? (
+                                <div className="p-8 text-center text-gray-400">目前尚無歷史紀錄</div>
+                            ) : (
+                                <div className="divide-y">
+                                    {historyList.map(hist => {
+                                        const totalCost = items.reduce((sum, item) => sum + ((hist.data[item.id] || 0) * item.price), 0);
+                                        return (
+                                            <div key={hist.id} onClick={()=>setSelectedHistory(hist)} className="p-4 hover:bg-indigo-50 cursor-pointer flex justify-between items-center transition-colors">
+                                                <div>
+                                                    <div className="font-bold text-gray-800 text-lg flex items-center gap-2"><Calendar size={16} className="text-indigo-500"/> {hist.date}</div>
+                                                    <div className="text-xs text-gray-400 mt-1">送出時間: {new Date(hist.timestamp).toLocaleString()}</div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-xs text-gray-500">當次庫存總值</div>
+                                                    <div className="font-bold text-red-600">${totalCost.toLocaleString()}</div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };
