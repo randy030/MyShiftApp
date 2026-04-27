@@ -432,7 +432,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
     );
 };
 // ==========================================
-// 🌟 系統主程式 (Main App) 
+// 🌟 系統主程式 (Main App) - 🔴 修復發票歸零與跨月讀取
 // ==========================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -463,7 +463,6 @@ export default function App() {
   
     useEffect(() => {
         if (!user) return;
-        const currentMonthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`;
         
         const unsub = [
             onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), snap => {
@@ -512,13 +511,15 @@ export default function App() {
                 const signatures = []; snap.forEach(doc => signatures.push({ id: doc.id, ...doc.data() })); 
                 setDbData(prev => ({...prev, signatures}));
             }),
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', currentMonthStr), snap => {
-                if(snap.exists()) setDbData(prev => ({...prev, gasReceipts: snap.data()}));
-                else setDbData(prev => ({...prev, gasReceipts: {}}));
+            // 🔴 修正處：監聽「整個發票集合」，讓系統可以正確分辨不同月份的發票！
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), snap => {
+                const receipts = {};
+                snap.forEach(doc => { receipts[doc.id] = doc.data(); });
+                setDbData(prev => ({...prev, gasReceipts: receipts}));
             })
         ];
         return () => unsub.forEach(fn => fn());
-    }, [user, currentDate]);
+    }, [user, currentDate]); // 保留 currentDate 確保重新觸發
   
     const { users, shifts, events, requests, leaves, shiftsDef, inventory, store, signatures, gasReceipts, insurances } = dbData;
     const currentUserInfo = users[user?.uid] || {};
