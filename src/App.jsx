@@ -434,7 +434,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 // ==========================================
 // 🌟 系統主程式 (Main App) - 🔴 修復發票歸零與跨月讀取
 // ==========================================
-export default function App() {
+function App() {
     const [user, setUser] = useState(null);
     const [view, setView] = useState('calendar'); 
     const [loading, setLoading] = useState(true);
