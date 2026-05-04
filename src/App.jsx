@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, FileSearch, Fuel, CreditCard, AlertTriangle
 } from 'lucide-react';
 
-const CURRENT_VERSION = "v8.9 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v9.1 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -1597,8 +1597,8 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
       </>
     );
 };
-// ==========================================
-// 📊 統計明細 (SalaryView)
+/// ==========================================
+// 📊 統計明細 (SalaryView) - 🔴 升級特休履歷明細表
 // ==========================================
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
@@ -1615,6 +1615,18 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
       const targetYear = targetMonth.substring(0, 4);
       const uObj = users[uid];
       const annualLimit = getAnnualLeaveDays(uObj?.startDate);
+
+      // 🔴 計算精確的系統年資，呈現給老闆與員工看
+      let tenureText = "資料未建檔";
+      if (uObj?.startDate) {
+          const start = new Date(uObj.startDate);
+          const now = new Date();
+          const diffDays = Math.ceil(Math.abs(now - start) / (1000 * 60 * 60 * 24));
+          const diffYears = diffDays / 365.25;
+          if (diffYears < 0.5) tenureText = "未滿半年";
+          else if (diffYears >= 0.5 && diffYears < 1) tenureText = "滿半年";
+          else tenureText = `滿 ${Math.floor(diffYears)} 年`;
+      }
 
       let monthStats = { ot: 0, leaves: {} };
       let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnual: 0 }; 
@@ -1666,7 +1678,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
       const gasTotal = userGasRecords.reduce((sum, r) => sum + r.amount, 0);
       const gasCapped = Math.min(gasTotal, 500);
 
-      return { monthStats, yearStats, balance, otHistory, targetYear, annualLimit, cashOut, gasTotal, gasCapped };
+      return { monthStats, yearStats, balance, otHistory, targetYear, annualLimit, cashOut, gasTotal, gasCapped, tenureText };
     };
   
     const handleExportCSV = () => {
@@ -1721,16 +1733,25 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                         {u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded border border-red-200 flex items-center gap-0.5"><UserX size={10}/> 已離職</span>}
                     </div>
                     <div className="text-right">
-                        <div className="text-xs text-gray-400">年度剩餘可休 (至 {s.targetYear}/12/31)</div>
+                        <div className="text-xs text-gray-400">年度剩餘加/補休 (至 {s.targetYear}/12/31)</div>
                         <div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{s.balance} <span className="text-xs">hr</span></div>
-                        {s.balance > 0 && <div className="text-[10px] text-green-700 font-bold">預估折現: ${s.cashOut}</div>}
+                        {s.balance > 0 && <div className="text-[10px] text-green-700 font-bold">預估補休折現: ${s.cashOut}</div>}
                     </div>
                 </div>
                 <div className="space-y-3 text-sm">
                   
-                  <div className="bg-indigo-50 p-2.5 rounded-lg border border-indigo-200 mt-2 flex justify-between items-center">
-                      <div className="text-[11px] font-bold text-indigo-800 flex items-center gap-1"><Gift size={12}/> 法定特休帳戶</div>
-                      <div className="text-xs font-bold text-indigo-700">總額: {s.annualLimit} 天 ｜ 已休: {s.yearStats.usedAnnual} 天 ｜ 剩餘: <span className="text-lg">{Math.max(0, s.annualLimit - s.yearStats.usedAnnual)}</span> 天</div>
+                  {/* 🔴 特休帳戶明細升級 */}
+                  <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200 mt-2 shadow-sm">
+                      <div className="flex justify-between items-center mb-2 border-b border-indigo-100 pb-2">
+                          <div className="text-xs font-bold text-indigo-900 flex items-center gap-1"><Gift size={14}/> 法定特休明細帳戶</div>
+                          <div className="text-xs font-bold text-indigo-700 bg-white px-2 py-0.5 rounded shadow-sm border border-indigo-100">剩餘可休: <span className="text-lg text-indigo-900">{Math.max(0, s.annualLimit - s.yearStats.usedAnnual)}</span> 天</div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-indigo-800">
+                          <div className="bg-white/60 p-1.5 rounded flex justify-between items-center shadow-sm"><span>📌 到職日</span><span className="font-bold">{u.startDate || '未設定'}</span></div>
+                          <div className="bg-white/60 p-1.5 rounded flex justify-between items-center shadow-sm"><span>⏳ 系統年資</span><span className="font-bold text-indigo-900">{s.tenureText}</span></div>
+                          <div className="bg-white/60 p-1.5 rounded flex justify-between items-center shadow-sm"><span>🎯 法定發放總額</span><span className="font-bold text-indigo-600">{s.annualLimit} 天</span></div>
+                          <div className="bg-white/60 p-1.5 rounded flex justify-between items-center shadow-sm"><span>🏃 本年度已休</span><span className="font-bold text-red-500">{s.yearStats.usedAnnual} 天</span></div>
+                      </div>
                   </div>
 
                   <div className="bg-blue-50 p-2.5 rounded-lg border border-blue-200 mt-2">
@@ -1805,6 +1826,440 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
         {gasModalData && <GasReceiptModal isOpen={!!gasModalData} onClose={()=>setGasModalData(null)} user={gasModalData.user} monthStr={gasModalData.monthStr} db={db} appId={appId} currentRecords={gasReceipts[gasModalData.monthStr] || {}} />}
       </div>
     );
+};
+
+// --- 薪資管理 (PayrollView) ---
+const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
+    const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
+    const [payrollData, setPayrollData] = useState({});
+    const [showResigned, setShowResigned] = useState(false);
+    
+    useEffect(() => { 
+        const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => { 
+            if (docSnap.exists()) setPayrollData(docSnap.data().records || {}); else setPayrollData({}); 
+        }); 
+        return () => unsub(); 
+    }, [targetMonth, db, appId]);
+
+    const updatePayroll = async (uid, field, value) => { 
+        const newData = { ...payrollData, [uid]: { ...(payrollData[uid] || {}), [field]: value } }; 
+        setPayrollData(newData); 
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true }); 
+    };
+
+    const visibleUsers = users.filter(u => showResigned ? true : !u.isResigned);
+
+    return (
+        <div className="space-y-4 pb-20">
+            <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
+                <h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資與福利管理 (機密)</h2>
+                <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
+                    <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
+                        <input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} className="accent-indigo-600" />
+                        顯示已離職
+                    </label>
+                    <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none"/>
+                </div>
+            </div>
+            
+            <div className="bg-white rounded-xl border overflow-x-auto shadow-sm">
+                <table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">姓名</th><th className="p-3 w-24">本薪</th><th className="p-3 w-20 bg-teal-50 text-teal-700 text-center">油資核銷<br/><span className="text-[10px] font-normal">(自動計算)</span></th><th className="p-3 w-24">補助/津貼</th><th className="p-3 w-24 bg-pink-50 text-pink-700">生日禮金</th><th className="p-3 w-24 bg-purple-50 text-purple-700">三節獎金</th><th className="p-3 w-24 bg-yellow-50 text-yellow-700">年終獎金</th><th className="p-3">備註</th></tr></thead>
+                <tbody>{visibleUsers.map(u => { 
+                    const record = payrollData[u.uid] || {}; 
+                    const userGasRecords = gasReceipts?.[targetMonth]?.[u.uid] || [];
+                    const gasTotal = userGasRecords.reduce((sum, r) => sum + r.amount, 0);
+                    const gasCapped = Math.min(gasTotal, 500);
+
+                    return (
+                        <tr key={u.uid} className={`border-b hover:bg-gray-50 ${u.isResigned ? 'opacity-60 bg-gray-50' : ''}`}>
+                            <td className="p-3 font-bold flex items-center gap-1 mt-1">
+                                {u.name}
+                                {u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1 py-0.5 rounded ml-1 border border-red-200">離職</span>}
+                            </td>
+                            <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.base || ''} onChange={e=>updatePayroll(u.uid, 'base', e.target.value)}/></td>
+                            <td className="p-3 bg-teal-50 text-center font-bold text-teal-800">${gasCapped}</td>
+                            <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={e=>updatePayroll(u.uid, 'subsidy', e.target.value)}/></td>
+                            <td className="p-3 bg-pink-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_bday || ''} onChange={e=>updatePayroll(u.uid, 'bonus_bday', e.target.value)}/></td>
+                            <td className="p-3 bg-purple-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_festival || ''} onChange={e=>updatePayroll(u.uid, 'bonus_festival', e.target.value)}/></td>
+                            <td className="p-3 bg-yellow-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_year || ''} onChange={e=>updatePayroll(u.uid, 'bonus_year', e.target.value)}/></td>
+                            <td className="p-3"><input type="text" placeholder="..." className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={e=>updatePayroll(u.uid, 'note', e.target.value)}/></td>
+                        </tr>
+                    ); 
+                })}
+                {visibleUsers.length === 0 && <tr><td colSpan="8" className="p-8 text-center text-gray-400">目前無員工資料</td></tr>}
+                </tbody></table>
+            </div>
+        </div>
+    );
+};
+
+// --- Settings View ---
+const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin, insurances }) => {
+  const userList = Object.values(users);
+  
+  const [newLeave, setNewLeave] = useState({ label: '', note: '', color: 'bg-gray-100 text-gray-700' });
+  const [newShift, setNewShift] = useState({ id: '', label: '', start: '09:00', end: '18:00' });
+  const [newInvItem, setNewInvItem] = useState({ category: '茶葉類', name: '', spec: '', price: '' });
+  const [editingInvId, setEditingInvId] = useState(null);
+
+  const [editingId, setEditingId] = useState(null);
+  const [formData, setFormData] = useState({});
+  const [showResigned, setShowResigned] = useState(false);
+
+  const [locConfig, setLocConfig] = useState(storeConfig || { lat: '', lng: '', radius: 50 });
+  useEffect(() => { if (storeConfig) setLocConfig(storeConfig); }, [storeConfig]);
+  
+  const safeInsurances = Array.isArray(insurances) ? insurances : [];
+  const [newIns, setNewIns] = useState({ name: '', expiryDate: '', image: '' });
+
+  const handleGetLocation = () => {
+      if (!navigator.geolocation) return alert("不支援定位功能");
+      navigator.geolocation.getCurrentPosition((pos) => setLocConfig({ ...locConfig, lat: pos.coords.latitude, lng: pos.coords.longitude }), (err) => alert("無法獲取定位。"), { enableHighAccuracy: true });
+  };
+  const handleSaveLocation = async () => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), locConfig); alert("打卡座標設定已儲存！"); };
+
+  const addLeave = async () => { if(!newLeave.label) return; const types = [...leaveTypes, { ...newLeave, id: Math.random().toString(36).substr(2,9) }]; await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), { types }); setNewLeave({ label: '', note: '', color: 'bg-gray-100 text-gray-700' }); };
+  const addShiftType = async () => { 
+      if(!newShift.label || !newShift.start || !newShift.end) return alert("請填寫完整班別資訊"); 
+      const id = newShift.label.trim();
+      if (shiftTypes.find(st => st.id === id)) return alert("班別代號已存在");
+      const types = [...shiftTypes, { ...newShift, id }]; 
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftTypes'), { types }); 
+      setNewShift({ id: '', label: '', start: '09:00', end: '18:00' }); 
+  };
+  const deleteShiftType = async (idToDelete) => { const types = shiftTypes.filter(t => t.id !== idToDelete); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftTypes'), { types }); };
+
+  const handleEditInventoryItem = (item) => { setNewInvItem(item); setEditingInvId(item.id); };
+  const addOrUpdateInventoryItem = async () => {
+      if (!newInvItem.name || !newInvItem.spec) return alert("請填寫品名與單位");
+      const price = parseFloat(newInvItem.price) || 0;
+      let items;
+      if (editingInvId) { items = inventoryItems.map(i => i.id === editingInvId ? { ...newInvItem, price } : i); } 
+      else { const newItem = { ...newInvItem, id: `i_${Date.now()}`, price }; items = [...inventoryItems, newItem]; }
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items });
+      setNewInvItem({ category: newInvItem.category || '茶葉類', name: '', spec: '', price: '' });
+      setEditingInvId(null);
+  };
+  const deleteInventoryItem = async (idToDelete) => {
+      if(!window.confirm("確定刪除此盤點品項？")) return;
+      const items = inventoryItems.filter(i => i.id !== idToDelete);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items });
+  };
+
+  const saveUser = async () => { 
+      if (isSuperAdmin && !formData.startDate && !formData.isViewer) return alert("請務必填寫員工的「到職日」，否則系統無法計算特休！");
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); 
+      setEditingId(null); 
+  };
+
+  const compressImage = (file, maxSizeMB = 10) => {
+      return new Promise((resolve, reject) => {
+          if (file.size > maxSizeMB * 1024 * 1024) {
+              alert(`🚨 圖片過大！請選擇小於 ${maxSizeMB}MB 的圖片。`);
+              return reject("File too large");
+          }
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = (event) => {
+              const img = new Image();
+              img.src = event.target.result;
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const MAX_WIDTH = 1200; 
+                  const MAX_HEIGHT = 1200;
+                  let width = img.width;
+                  let height = img.height;
+
+                  if (width > height) {
+                      if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                  } else {
+                      if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                  }
+                  canvas.width = width;
+                  canvas.height = height;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0, width, height);
+                  resolve(canvas.toDataURL('image/jpeg', 0.7));
+              };
+          };
+      });
+  };
+
+  const handleImageUpload = async (e, fieldName) => { 
+      const file = e.target.files[0]; 
+      if (!file) return; 
+      try {
+          const compressedBase64 = await compressImage(file, 10);
+          setFormData(prev => ({ ...prev, [fieldName]: compressedBase64 }));
+      } catch (err) { console.log(err); }
+  };
+
+  const handleInsImageUpload = async (e) => {
+      const file = e.target.files[0]; 
+      if (!file) return; 
+      try {
+          const compressedBase64 = await compressImage(file, 10);
+          setNewIns(prev => ({ ...prev, image: compressedBase64 }));
+      } catch (err) { console.log(err); }
+  };
+
+  const addInsurance = async () => {
+      if (!newIns.name || !newIns.expiryDate) return alert("請填寫保險憑證名稱與到期日！");
+      const items = [...safeInsurances, { ...newIns, id: `ins_${Date.now()}`, timestamp: Date.now() }];
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'insurances'), { items });
+      setNewIns({ name: '', expiryDate: '', image: '' });
+  };
+  const deleteInsurance = async (idToDelete) => {
+      if(!window.confirm("確定刪除此保險憑證？")) return;
+      const items = safeInsurances.filter(i => i.id !== idToDelete);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'insurances'), { items });
+  };
+
+  const visibleUsers = useMemo(() => { 
+      let list = userList; 
+      if (!isSuperAdmin) list = list.filter(u => u.uid === currentUserInfo.uid); 
+      else if (!showResigned) list = list.filter(u => !u.isResigned); 
+      return list; 
+  }, [userList, currentUserInfo, isSuperAdmin, showResigned]);
+
+  return (
+    <div className="space-y-6 pb-20">
+      <div className="bg-white p-6 rounded-xl border shadow-sm text-center">
+        <h2 className="font-bold text-xl">{currentUserInfo.name}</h2>
+        <div className="mt-4 bg-green-50 p-3 rounded-lg border border-green-100 text-left">
+            <h4 className="text-sm font-bold text-green-800 flex items-center gap-2"><Smartphone size={16}/> LINE 通知綁定</h4>
+            <p className="text-xs text-gray-600 mb-2">請輸入 <span className="font-bold text-red-500">查ID</span> 的回傳代碼：</p>
+            {editingId === currentUserInfo.uid ? (
+                <div className="flex gap-2">
+                    <input value={formData.lineUserId || ''} onChange={e=>setFormData({...formData, lineUserId: e.target.value})} placeholder="Uxxxxxxxx..." className="border rounded px-2 py-1 text-xs flex-1 focus:outline-none"/>
+                    <button onClick={saveUser} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-green-700">儲存</button>
+                </div>
+            ) : (
+                <div className="flex justify-between items-center">
+                    <span className="text-xs font-mono bg-white px-2 py-1 rounded border shadow-sm">{currentUserInfo.lineUserId ? '✅ 已綁定' : '❌ 未綁定'}</span>
+                    <button onClick={()=>{setEditingId(currentUserInfo.uid); setFormData(currentUserInfo)}} className="text-green-600 text-xs font-bold underline">修改</button>
+                </div>
+            )}
+        </div>
+      </div>
+
+      {isSuperAdmin && (
+          <div className="bg-white p-4 rounded-xl border shadow-sm">
+              <h3 className="font-bold mb-3 flex gap-2 text-indigo-700"><ShieldAlert size={18}/> 公司重要保險與檔案櫃</h3>
+              <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200 mb-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                      <div><label className="text-xs font-bold text-gray-700 mb-1">憑證名稱 (例如: 公共意外責任險)</label><input type="text" value={newIns.name} onChange={e=>setNewIns({...newIns, name: e.target.value})} className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none"/></div>
+                      <div><label className="text-xs font-bold text-gray-700 mb-1">保單到期日</label><input type="date" value={newIns.expiryDate} onChange={e=>setNewIns({...newIns, expiryDate: e.target.value})} className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none"/></div>
+                  </div>
+                  <div className="flex items-center gap-2 justify-between border-t border-indigo-100 pt-2">
+                      <label className="cursor-pointer bg-white border border-gray-300 text-gray-600 px-3 py-1.5 rounded text-xs hover:bg-gray-50 flex items-center gap-1 font-bold shadow-sm transition-colors">
+                          <Upload size={12}/> 拍照上傳保單憑證<input type="file" accept="image/*" onChange={handleInsImageUpload} className="hidden" />
+                      </label>
+                      <button onClick={addInsurance} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1 text-sm"><Save size={16}/> 儲存歸檔</button>
+                  </div>
+                  {newIns.image && <div className="text-xs text-green-600 font-bold flex items-center gap-1 mt-1"><CheckCircle2 size={12}/> 圖片已選取，請點擊儲存歸檔。</div>}
+              </div>
+
+              <div className="space-y-2">
+                  {safeInsurances.length === 0 ? <div className="text-sm text-gray-400 text-center py-4">保險櫃目前為空</div> : 
+                      safeInsurances.sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate)).map(ins => {
+                          const isExpired = new Date(ins.expiryDate) < new Date();
+                          return (
+                              <div key={ins.id} className={`p-3 rounded-lg border flex flex-col gap-2 shadow-sm ${isExpired ? 'bg-red-50 border-red-200' : 'bg-white hover:border-indigo-300'}`}>
+                                  <div className="flex justify-between items-center">
+                                      <div className="font-bold text-gray-800">{ins.name}</div>
+                                      <div className="flex items-center gap-3">
+                                          <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${isExpired ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>到期: {ins.expiryDate}</span>
+                                          <button onClick={()=>deleteInsurance(ins.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
+                                      </div>
+                                  </div>
+                                  {ins.image && <img src={ins.image} alt={ins.name} className="w-full max-h-32 object-contain bg-gray-50 rounded border" />}
+                              </div>
+                          )
+                      })
+                  }
+              </div>
+          </div>
+      )}
+
+      {isSuperAdmin && (
+        <div className="bg-white p-4 rounded-xl border shadow-sm">
+            <h3 className="font-bold mb-3 flex gap-2"><Package size={18}/> 庫存盤點品項管理</h3>
+            <div className={`grid grid-cols-5 gap-2 mb-4 p-2 rounded border ${editingInvId ? 'bg-indigo-50 border-indigo-200' : 'bg-gray-50'}`}>
+                <select value={newInvItem.category} onChange={e=>setNewInvItem({...newInvItem, category: e.target.value})} className="col-span-2 sm:col-span-1 border rounded px-2 py-1.5 text-sm bg-white focus:outline-none"><option value="茶葉類">茶葉類</option><option value="果汁與糖漿">果汁與糖漿</option><option value="奶與粉類">奶與粉類</option><option value="配料類">配料類</option><option value="包材類">包材類</option><option value="五金與其他">五金與其他</option></select>
+                <input placeholder="品名 (如: 珍珠)" value={newInvItem.name} onChange={e=>setNewInvItem({...newInvItem, name:e.target.value})} className="col-span-3 sm:col-span-2 border rounded px-2 py-1.5 text-sm focus:outline-none"/>
+                <input placeholder="單位 (包/斤)" value={newInvItem.spec} onChange={e=>setNewInvItem({...newInvItem, spec:e.target.value})} className="col-span-2 sm:col-span-1 border rounded px-2 py-1.5 text-sm focus:outline-none"/>
+                <div className="col-span-3 sm:col-span-1 flex gap-2">
+                    <input type="number" placeholder="單價" value={newInvItem.price} onChange={e=>setNewInvItem({...newInvItem, price:e.target.value})} className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none"/>
+                    {editingInvId ? (
+                        <><button onClick={addOrUpdateInventoryItem} className="bg-green-600 text-white rounded px-3 flex justify-center items-center shrink-0 hover:bg-green-700"><CheckCircle2 size={18}/></button><button onClick={()=>{setEditingInvId(null); setNewInvItem({category:'茶葉類',name:'',spec:'',price:''});}} className="bg-gray-400 text-white rounded px-3 flex justify-center items-center shrink-0"><X size={18}/></button></>
+                    ) : (<button onClick={addOrUpdateInventoryItem} className="bg-indigo-600 text-white rounded px-3 flex justify-center items-center shrink-0 hover:bg-indigo-700"><Plus size={18}/></button>)}
+                </div>
+            </div>
+            <div className="max-h-64 overflow-y-auto space-y-1 pr-1 border-t pt-2">
+                {inventoryItems.map(item => (
+                    <div key={item.id} className="flex justify-between items-center bg-white p-2 rounded border border-gray-100 hover:bg-gray-50 transition-colors">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3"><span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold w-max">{item.category}</span><span className="font-bold text-gray-700 text-sm">{item.name}</span><span className="text-xs text-gray-500">({item.spec})</span></div>
+                        <div className="flex items-center gap-3"><span className="text-xs font-mono text-gray-400">${item.price}</span><button onClick={()=>handleEditInventoryItem(item)} className="text-indigo-400 hover:text-indigo-600"><Edit size={16}/></button><button onClick={()=>deleteInventoryItem(item.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></div>
+                    </div>
+                ))}
+            </div>
+        </div>
+      )}
+      
+      {isSuperAdmin && (
+          <div className="bg-white p-4 rounded-xl border shadow-sm">
+              <h3 className="font-bold mb-3 flex gap-2 text-indigo-700"><Map size={18}/> 打卡定位設定 (GPS防作弊)</h3>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div><label className="block text-xs font-bold text-gray-700 mb-1">緯度 (Latitude)</label><input type="number" value={locConfig.lat} onChange={e=>setLocConfig({...locConfig, lat: parseFloat(e.target.value)})} className="w-full border rounded px-3 py-2 text-sm bg-gray-50 focus:outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-gray-700 mb-1">經度 (Longitude)</label><input type="number" value={locConfig.lng} onChange={e=>setLocConfig({...locConfig, lng: parseFloat(e.target.value)})} className="w-full border rounded px-3 py-2 text-sm bg-gray-50 focus:outline-none"/></div>
+              </div>
+              <div className="mb-4"><label className="block text-xs font-bold text-gray-700 mb-1">允許打卡半徑 (公尺)</label><input type="number" value={locConfig.radius} onChange={e=>setLocConfig({...locConfig, radius: parseInt(e.target.value)})} className="w-full border rounded px-3 py-2 text-sm focus:outline-none" placeholder="建議設定 50~100 公尺"/></div>
+              <div className="flex gap-2"><button onClick={handleGetLocation} className="flex-1 bg-white border border-indigo-200 text-indigo-600 font-bold py-2 rounded shadow-sm hover:bg-indigo-50 flex items-center justify-center gap-1 transition-colors"><MapPin size={16}/> 獲取目前位置</button><button onClick={handleSaveLocation} className="flex-1 bg-indigo-600 text-white font-bold py-2 rounded shadow hover:bg-indigo-700 flex items-center justify-center gap-1 transition-colors"><Save size={16}/> 儲存設定</button></div>
+          </div>
+      )}
+
+      {isSuperAdmin && (
+        <div className="bg-white p-4 rounded-xl border shadow-sm">
+            <h3 className="font-bold mb-3 flex gap-2"><Clock size={18}/> 班別管理 (排班與遲到結算用)</h3>
+            <div className="grid grid-cols-4 gap-2 mb-3"><input placeholder="代號 (如 09A)" value={newShift.label} onChange={e=>setNewShift({...newShift, label:e.target.value})} className="border rounded px-2 text-sm focus:outline-none"/><input type="time" value={newShift.start} onChange={e=>setNewShift({...newShift, start:e.target.value})} className="border rounded px-2 text-sm focus:outline-none"/><input type="time" value={newShift.end} onChange={e=>setNewShift({...newShift, end:e.target.value})} className="border rounded px-2 text-sm focus:outline-none"/><button onClick={addShiftType} className="bg-indigo-600 text-white rounded flex justify-center items-center hover:bg-indigo-700"><Plus size={18}/></button></div>
+            <div className="space-y-2">{shiftTypes.map(st => (<div key={st.id} className="flex justify-between items-center bg-gray-50 p-2 rounded border border-gray-100"><div><span className="font-bold text-gray-700 mr-2">{st.label}</span><span className="text-xs text-gray-500 font-mono bg-white px-1 rounded border">{st.start} ~ {st.end}</span></div><button onClick={()=>deleteShiftType(st.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={16}/></button></div>))}</div>
+        </div>
+      )}
+
+      {isSuperAdmin && (
+        <div className="bg-white p-4 rounded-xl border shadow-sm"><h3 className="font-bold mb-3 flex gap-2"><BookOpen size={18}/> 假別管理</h3><div className="flex gap-2 mb-3"><input placeholder="名稱" value={newLeave.label} onChange={e=>setNewLeave({...newLeave, label:e.target.value})} className="border rounded px-2 w-20 focus:outline-none"/><input placeholder="說明" value={newLeave.note} onChange={e=>setNewLeave({...newLeave, note:e.target.value})} className="border rounded px-2 flex-1 focus:outline-none"/><button onClick={addLeave} className="bg-indigo-600 text-white px-3 rounded hover:bg-indigo-700"><Plus/></button></div><div className="space-y-2">{leaveTypes.filter(lt=>lt.id!=='comp').map(l => (<div key={l.id} className="flex justify-between items-center bg-gray-50 p-2 rounded"><span className={`text-xs px-2 py-1 rounded font-bold ${l.color}`}>{l.label}</span><span className="text-xs text-gray-500 truncate flex-1 mx-2">{l.note}</span><button onClick={async()=>{ const types = leaveTypes.filter(t=>t.id!==l.id); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), { types }); }} className="text-gray-400 hover:text-red-500"><Trash2 size={14}/></button></div>))}</div></div>
+      )}
+      
+      <div className="bg-white p-4 rounded-xl border shadow-sm">
+         <div className="flex justify-between items-center mb-3"><h3 className="font-bold flex gap-2"><Users size={18}/> 員工角色與資料</h3>{isSuperAdmin && (<label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold"><input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} />顯示已離職</label>)}</div>
+         {visibleUsers.map(u => (
+           <div key={u.uid} className={`border-b py-3 last:border-0 ${u.isResigned ? 'opacity-50 bg-gray-50' : ''}`}>
+             {editingId === u.uid ? (
+               <div className="space-y-3 p-3 bg-gray-50 rounded">
+                 <div className="grid grid-cols-2 gap-2">
+                     <div><label className="text-[10px] font-bold text-gray-500 mb-0.5 block">員工姓名</label><input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/></div>
+                     {isSuperAdmin && (<div><label className="text-[10px] font-bold text-gray-500 mb-0.5 block">在職狀態</label><select value={formData.isResigned ? 'true' : 'false'} onChange={e=>setFormData({...formData, isResigned: e.target.value === 'true'})} className="w-full border p-1.5 rounded text-sm bg-white focus:outline-none"><option value="false">在職中</option><option value="true">已離職 (權限將降為唯讀)</option></select></div>)}
+                 </div>
+
+                 {isSuperAdmin && (
+                      <div className="p-3 bg-indigo-50 rounded border border-indigo-100 mt-2">
+                          <label className="text-xs font-bold text-indigo-700 mb-2 block">系統角色指派 (RBAC)</label>
+                          <select value={formData.isAdmin ? 'admin' : (formData.isManager ? 'manager' : (formData.isViewer ? 'viewer' : 'employee'))} onChange={e=>{
+                              const val = e.target.value;
+                              setFormData({...formData, isAdmin: val==='admin', isManager: val==='manager', isViewer: val==='viewer'});
+                          }} className="w-full border-2 border-indigo-200 p-2 rounded bg-white font-bold text-indigo-800 focus:outline-none">
+                              <option value="employee">一般員工 (強制簽約鎖定、可打卡排班)</option>
+                              <option value="viewer">純觀看權限 (免簽約、僅能查看班表)</option>
+                              <option value="manager">主管 Manager (豁免鎖定、可看報表核銷與審核)</option>
+                              <option value="admin">最高管理員 Admin (豁免鎖定、擁有全系統權限)</option>
+                          </select>
+                      </div>
+                 )}
+
+                 {isSuperAdmin && (
+                     <div className="space-y-3 border-t pt-3 mt-3">
+                         <div className="text-xs font-bold text-indigo-600 flex items-center gap-1"><FileSignature size={12}/> 勞動契約專屬設定 (將帶入員工合約)</div>
+                         <div className="grid grid-cols-2 gap-2 bg-white p-2 rounded border shadow-sm">
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">約定工作地點</label>
+                                 <input type="text" placeholder="例:台中市西屯區..." value={formData.workLocation || ''} onChange={e=>setFormData({...formData, workLocation:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">約定月薪 (新台幣)</label>
+                                 <input type="number" placeholder="例:35000" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">契約起始日</label>
+                                 <input type="date" value={formData.contractStart || ''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <div className="flex justify-between items-center mb-0.5">
+                                     <label className="text-[10px] font-bold text-gray-500">契約迄日</label>
+                                     <label className="text-[10px] flex items-center gap-0.5 text-indigo-600 font-bold cursor-pointer"><input type="checkbox" checked={formData.isIndefinite || false} onChange={e=>setFormData({...formData, isIndefinite:e.target.checked})}/>不定期契約</label>
+                                 </div>
+                                 <input type="date" value={formData.contractEnd || ''} disabled={formData.isIndefinite} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className={`w-full border p-1.5 rounded text-sm focus:outline-none ${formData.isIndefinite?'bg-gray-100 text-gray-400':''}`}/>
+                             </div>
+                         </div>
+                     </div>
+                 )}
+
+                 {isSuperAdmin && (
+                     <div className="space-y-3 border-t pt-3 mt-3">
+                         <div className="text-xs font-bold text-indigo-600 flex items-center gap-1"><Lock size={10}/> 敏感資料與到職日 (特休計算依據)</div>
+                         <div className="grid grid-cols-2 gap-2 bg-white p-2 rounded border shadow-sm">
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">到職日 (計算特休用)</label>
+                                 <input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none focus:border-indigo-500"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">聯絡電話</label>
+                                 <input placeholder="輸入電話..." value={formData.phone || ''} onChange={e=>setFormData({...formData, phone:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">出生年月日</label>
+                                 <input type="date" value={formData.birthday || ''} onChange={e=>setFormData({...formData, birthday:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/>
+                             </div>
+                             <div>
+                                 <label className="text-[10px] font-bold text-gray-500 mb-0.5 block">身分證字號</label>
+                                 <input placeholder="輸入身分證字號..." value={formData.nationalId || ''} onChange={e=>setFormData({...formData, nationalId:e.target.value})} className="w-full border p-1.5 rounded text-sm focus:outline-none"/>
+                             </div>
+                         </div>
+                         
+                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-3 rounded border">
+                             <div>
+                                 <label className="text-xs text-gray-500 block mb-2 font-bold flex items-center gap-1"><CreditCard size={12}/> 銀行存摺封面</label>
+                                 <label className="cursor-pointer bg-gray-50 border border-gray-300 text-gray-600 px-3 py-2 rounded text-xs hover:bg-gray-100 flex justify-center items-center gap-1 font-bold transition-colors">
+                                     <Upload size={12}/> 上傳存摺圖片 (最高 10MB)<input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'bankImage')} className="hidden" />
+                                 </label>
+                                 {formData.bankImage && (
+                                     <div className="mt-2 relative group">
+                                         <img src={formData.bankImage} alt="Bank" className="h-24 w-full object-cover border rounded shadow-sm" />
+                                         <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded"><span className="text-white text-xs font-bold flex items-center gap-1"><CheckCircle2 size={12}/> 已上傳</span></div>
+                                     </div>
+                                 )}
+                             </div>
+                             <div>
+                                 <label className="text-xs text-gray-500 block mb-2 font-bold flex items-center gap-1"><FileText size={12}/> 供膳體檢報告</label>
+                                 <label className="cursor-pointer bg-gray-50 border border-gray-300 text-gray-600 px-3 py-2 rounded text-xs hover:bg-gray-100 flex justify-center items-center gap-1 font-bold transition-colors">
+                                     <Upload size={12}/> 上傳體檢圖片 (最高 10MB)<input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'healthCheckImage')} className="hidden" />
+                                 </label>
+                                 {formData.healthCheckImage && (
+                                     <div className="mt-2 relative group">
+                                         <img src={formData.healthCheckImage} alt="Health Check" className="h-24 w-full object-cover border rounded shadow-sm" />
+                                         <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded"><span className="text-white text-xs font-bold flex items-center gap-1"><CheckCircle2 size={12}/> 已上傳</span></div>
+                                     </div>
+                                 )}
+                             </div>
+                         </div>
+                     </div>
+                 )}
+                 <div className="flex gap-2 justify-end mt-2"><button onClick={()=>setEditingId(null)} className="px-3 py-1 bg-gray-200 text-gray-600 rounded font-bold hover:bg-gray-300 transition-colors">取消</button><button onClick={saveUser} className="px-3 py-1 bg-indigo-600 text-white rounded font-bold shadow-sm hover:bg-indigo-700 transition-colors">儲存資料</button></div>
+               </div>
+             ) : (
+               <div className="flex justify-between items-center">
+                   <div>
+                       <div className="font-bold flex items-center gap-2">
+                           {u.name}
+                           {u.isAdmin ? <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded border border-red-200">管理員</span> : u.isManager ? <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">主管</span> : u.isViewer ? <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200">觀看者</span> : <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">一般員工</span>}
+                           {u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-red-200"><UserX size={10}/> 已離職</span>}
+                       </div>
+                       {isSuperAdmin && (
+                           <div className="text-xs text-gray-500 mt-1 font-mono flex gap-2">
+                               <span>到職日: <span className={u.startDate ? 'text-gray-700' : 'text-red-500 font-bold'}>{u.startDate || '未填寫'}</span></span>
+                               {u.healthCheckImage && <span className="text-green-600 font-bold flex items-center gap-0.5"><CheckCircle2 size={10}/> 體檢</span>}
+                               {u.salaryAmount ? <span className="text-indigo-600 font-bold flex items-center gap-0.5"><FileSignature size={10}/> 合約OK</span> : <span className="text-red-500 font-bold flex items-center gap-0.5"><FileSignature size={10}/> 缺合約資料</span>}
+                           </div>
+                       )}
+                   </div>
+                   {(isSuperAdmin || u.uid === currentUserInfo.uid) && <button onClick={()=>{setEditingId(u.uid);setFormData(u)}} className="text-indigo-600 text-sm font-bold bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100 transition-colors">編輯資料</button>}
+               </div>
+             )}
+           </div>
+         ))}
+      </div>
+    </div>
+  );
 };
 
 // --- 薪資管理 (PayrollView) ---
