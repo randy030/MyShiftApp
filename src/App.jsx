@@ -436,11 +436,11 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
     <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
         {/* 🔴 修正：移除 isPrivileged 限制，讓所有人都能進入看自己的統計 */}
         <DropdownItem 
-            onClick={()=>{setView('salary'); setMenuOpen(false);}} 
-            icon={FileBarChart} 
-            label="統計明細" 
-            active={view==='salary'} 
-        />
+    onClick={()=>{setView('salary'); setMenuOpen(false);}} 
+    icon={FileBarChart} 
+    label="統計明細" 
+    active={view==='salary'} 
+/>
         
         {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
         {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
@@ -448,8 +448,9 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
         <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
         <div className="border-t my-1 border-gray-100"></div>
         <DropdownItem onClick={()=>{setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定" active={view==='settings'} />
-    </div>
-)}
+    </div> 
+    ); // 關閉 return (
+}; // 🔴 正式關閉 App 主程式，解決 "App is not declared" 報錯
 // ==========================================
 // 📝 表單簽署中心 (FormsView) 
 // ==========================================
