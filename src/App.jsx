@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, FileSearch, Fuel, CreditCard, AlertTriangle
 } from 'lucide-react';
 
-const CURRENT_VERSION = "v9.3 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v9.4 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
