@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, FileSearch, Fuel, CreditCard, AlertTriangle
 } from 'lucide-react';
 
-const CURRENT_VERSION = "v9.2 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v9.3 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -431,297 +431,25 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
         </div>
     );
 };
-// ==========================================
-// 🌟 系統主程式 (Main App) - 🔴 修復發票歸零與跨月讀取
-// ==========================================
-function App() {
-    const [user, setUser] = useState(null);
-    const [view, setView] = useState('calendar'); 
-    const [loading, setLoading] = useState(true);
-    const [dbData, setDbData] = useState({ 
-        users: {}, shifts: {}, events: [], requests: [], 
-        leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES, 
-        inventory: DEFAULT_INVENTORY_ITEMS, store: null, signatures: [], gasReceipts: {}, insurances: []
-    });
-    
-    const [currentDate, setCurrentDate] = useState(new Date());
-    const [menuOpen, setMenuOpen] = useState(false);
-    const dropdownRef = useRef(null);
-  
-    useEffect(() => {
-        const handleClickOutside = (e) => { 
-            if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setMenuOpen(false); 
-        };
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, []);
-  
-    useEffect(() => {
-        if ('Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
-        return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
-    }, []);
-  
-    useEffect(() => {
-        if (!user) return;
+// ... 找到 menuOpen && ( ... 這裡
+{menuOpen && (
+    <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
+        {/* 🔴 修正：移除 isPrivileged 限制，讓所有人都能進入看自己的統計 */}
+        <DropdownItem 
+            onClick={()=>{setView('salary'); setMenuOpen(false);}} 
+            icon={FileBarChart} 
+            label="統計明細" 
+            active={view==='salary'} 
+        />
         
-        const unsub = [
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), snap => {
-                const users = {}; 
-                snap.forEach(doc => users[doc.id] = doc.data());
-                if (!users[user.uid]) {
-                    setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), { 
-                        uid: user.uid, name: user.displayName || `員工`, email: user.email, isAdmin: false, isManager: false, isViewer: false, isResigned: false
-                    });
-                }
-                setDbData(prev => ({...prev, users}));
-            }),
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), snap => {
-                const shifts = {}; snap.forEach(doc => shifts[doc.id] = doc.data()); 
-                setDbData(prev => ({...prev, shifts}));
-            }),
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), snap => {
-                const requests = []; let newCount = 0;
-                snap.forEach(doc => { 
-                    const d = doc.data(); requests.push({ id: doc.id, ...d }); 
-                    if (d.timestamp && (new Date() - d.timestamp.toDate()) < 10000) newCount++; 
-                });
-                if (newCount > 0 && Notification.permission === 'granted' && document.hidden) new Notification("通知", { body: `您有 ${newCount} 筆新申請待處理！` });
-                setDbData(prev => ({...prev, requests}));
-            }),
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'leaves'), snap => { 
-                if(snap.exists() && snap.data().types) setDbData(prev => ({...prev, leaves: snap.data().types})); 
-            }),
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftTypes'), snap => { 
-                if(snap.exists() && snap.data().types) setDbData(prev => ({...prev, shiftsDef: snap.data().types})); 
-            }),
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), snap => { 
-                if(snap.exists() && snap.data().items) setDbData(prev => ({...prev, inventory: snap.data().items})); 
-            }),
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), snap => { 
-                if(snap.exists()) setDbData(prev => ({...prev, store: snap.data()})); 
-            }),
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'insurances'), snap => { 
-                if(snap.exists() && snap.data().items) setDbData(prev => ({...prev, insurances: snap.data().items})); 
-            }),
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), snap => {
-                const events = []; snap.forEach(doc => events.push({ id: doc.id, ...doc.data() })); 
-                setDbData(prev => ({...prev, events}));
-            }),
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), snap => {
-                const signatures = []; snap.forEach(doc => signatures.push({ id: doc.id, ...doc.data() })); 
-                setDbData(prev => ({...prev, signatures}));
-            }),
-            // 🔴 修正處：監聽「整個發票集合」，讓系統可以正確分辨不同月份的發票！
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), snap => {
-                const receipts = {};
-                snap.forEach(doc => { receipts[doc.id] = doc.data(); });
-                setDbData(prev => ({...prev, gasReceipts: receipts}));
-            })
-        ];
-        return () => unsub.forEach(fn => fn());
-    }, [user, currentDate]); // 保留 currentDate 確保重新觸發
-  
-    const { users, shifts, events, requests, leaves, shiftsDef, inventory, store, signatures, gasReceipts, insurances } = dbData;
-    const currentUserInfo = users[user?.uid] || {};
-    const isDataLoading = !currentUserInfo.uid;
-    
-    const isSuperAdmin = currentUserInfo.isAdmin || user?.email === ADMIN_EMAIL;
-    const isManager = currentUserInfo.isManager || false;
-    const isPrivileged = isSuperAdmin || isManager;
-    const isReadOnly = currentUserInfo.isResigned || currentUserInfo.isViewer;
-    
-    const hasSignedContract = signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
-    const isLocked = !isDataLoading && !isPrivileged && !isReadOnly && !hasSignedContract;
-
-    useEffect(() => {
-        if (isDataLoading || Object.keys(users).length === 0 || events.length === 0) return;
-        const checkAndSendDailyEvents = async () => {
-            const today = new Date();
-            const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-            const todaysEvents = events.filter(e => checkEventOnDate(e, todayStr));
-            if (todaysEvents.length === 0) return;
-            const notifRef = doc(db, 'artifacts', appId, 'public', 'data', 'dailyNotifications', todayStr);
-            const snap = await getDoc(notifRef);
-            
-            if (!snap.exists()) {
-                await setDoc(notifRef, { triggeredAt: Date.now(), triggeredBy: currentUserInfo.name });
-                let msg = `🔔 【今日重點行程與備忘錄】\n日期：${todayStr}\n\n`;
-                todaysEvents.forEach((e, idx) => { msg += `${idx + 1}. ${e.time ? e.time + ' ' : ''}${e.title}\n`; if (e.note) msg += `   備註：${e.note}\n`; });
-                msg += `\n祝大家工作順利！`;
-                const targetLineIds = Object.values(users).filter(u => !u.isResigned && u.lineUserId).map(u => u.lineUserId);
-                if (targetLineIds.length > 0) sendLineNotification(targetLineIds, msg);
-            }
-        };
-        const timer = setTimeout(checkAndSendDailyEvents, 3000);
-        return () => clearTimeout(timer);
-    }, [isDataLoading, events, users, db, currentUserInfo.name]);
-
-    useEffect(() => {
-        if (isLocked && view !== 'forms') { setView('forms'); } 
-        else if (isReadOnly && view !== 'calendar') { setView('calendar'); }
-    }, [isLocked, isReadOnly, view]);
-
-    const myNotifications = requests.filter(r => r.toUid === user?.uid || (r.type === 'ot_confirm' && r.uid === user?.uid) || (r.type === 'admin_ot_approve' && isPrivileged));
-  
-    const handleRequest = async (req, action) => {
-        const targetUser = users[req.uid || req.fromUid]; 
-        if (action === 'reject') {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 申請已被駁回。`);
-            return;
-        }
-
-        if (['ot_confirm', 'admin_ot_approve'].includes(req.type)) {
-            if (req.type === 'admin_ot_approve' && !isPrivileged) return alert("無權限核准單據"); 
-            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
-            const shiftSnap = await getDoc(shiftRef);
-            let assigns = shiftSnap.exists() && Array.isArray(shiftSnap.data().assignments) ? [...shiftSnap.data().assignments] : [];
-            const idx = assigns.findIndex(a => a.uid === (req.uid || req.fromUid));
-            const newEntry = { otHours: req.hours, otReason: req.reason, otConfirmed: true };
-            if(idx >= 0) assigns[idx] = { ...assigns[idx], ...newEntry }; else assigns.push({ uid: (req.uid || req.fromUid), type: 'WORK', ...newEntry });
-            await setDoc(shiftRef, { ...(shiftSnap.exists() ? shiftSnap.data() : {}), assignments: assigns }, { merge: true });
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            alert("已核准並寫入統計！");
-        } 
-        else if (req.type === 'swap') {
-            const processSwapForDate = async (targetDate) => {
-                if (!targetDate) return;
-                const ref = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', targetDate);
-                const snap = await getDoc(ref);
-                if (snap.exists() && Array.isArray(snap.data().assignments)) {
-                    const assigns = [...snap.data().assignments];
-                    const iA = assigns.findIndex(a => a.uid === req.fromUid); 
-                    const iB = assigns.findIndex(a => a.uid === req.toUid);
-                    if (iA >= 0 && iB >= 0) {
-                        const temp = { ...assigns[iA], uid: req.toUid }; 
-                        assigns[iA] = { ...assigns[iB], uid: req.fromUid }; 
-                        assigns[iB] = temp;
-                        await updateDoc(ref, { assignments: assigns });
-                    }
-                }
-            };
-            await processSwapForDate(req.date1); 
-            await processSwapForDate(req.date2); 
-
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), {
-                title: `🔄 換班紀錄: ${users[req.toUid]?.name || '員工'} 與 ${users[req.fromUid]?.name || '員工'}`,
-                startDate: req.date1, time: '', repeatType: 'none',
-                note: `雙方同意互換 ${req.date1} 與 ${req.date2} 之班別。`
-            });
-
-            if (users[req.fromUid]?.lineUserId) {
-                sendLineNotification([users[req.fromUid].lineUserId], `✅ 【換班成功】\n您與 ${users[req.toUid]?.name} 的換班申請 (${req.date1} 互換 ${req.date2}) 對方已同意並生效！`);
-            }
-            alert("換假成功！系統已互換兩天班別，並寫入月曆備忘錄留存。");
-        }
-    };
-  
-    if (loading) return <div className="flex h-screen items-center justify-center">載入中...</div>;
-    
-    if (!user) return (
-        <div className="flex h-screen items-center justify-center bg-gray-50">
-            <div className="bg-white p-8 rounded-xl shadow-lg text-center">
-                <h1 className="text-2xl font-bold mb-4 text-indigo-600">TeamShift 雲端系統</h1>
-                <button onClick={()=>signInWithPopup(auth, new GoogleAuthProvider())} className="border px-6 py-2 rounded shadow hover:bg-gray-50 font-bold">Google 登入</button>
-            </div>
-        </div>
-    );
-  
-    return (
-      <div className="min-h-screen bg-gray-50 font-sans text-slate-800 pb-20 sm:pb-0">
-        <nav className="bg-white shadow-sm border-b sticky top-0 z-20 print:hidden">
-          <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center gap-2 font-bold text-xl text-indigo-600">
-              <Calendar className="w-6 h-6" /> <span className="hidden sm:inline">TeamShift</span>
-              <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1 hidden md:inline">{CURRENT_VERSION}</span>
-            </div>
-            
-            <div className="flex gap-1 sm:gap-2 items-center">
-              {isReadOnly ? (
-                  <div className="text-gray-500 font-bold text-sm bg-gray-100 px-3 py-1.5 rounded-full border border-gray-200 flex items-center gap-1">
-                      <Eye size={16}/> 唯讀模式
-                  </div>
-              ) : !isLocked ? (
-                  <>
-                      <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="月曆" />
-                      <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
-                      <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
-                      
-                      <div className="relative" ref={dropdownRef}>
-                          <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold transition-colors ${['salary','attendance','payroll','settings','forms'].includes(view) ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
-                              <Settings className="w-4 h-4" /> <span className="hidden xs:inline">管理</span><ChevronDown className="w-3 h-3" />
-                          </button>
-                          {menuOpen && (
-                              <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
-                                  {isPrivileged && <DropdownItem onClick={()=>{setView('salary'); setMenuOpen(false);}} icon={FileBarChart} label="統計明細" active={view==='salary'} />}
-                                  {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
-                                  {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
-                                  <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
-                                  <div className="border-t my-1 border-gray-100"></div>
-                                  <DropdownItem onClick={()=>{setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定" active={view==='settings'} />
-                              </div>
-                          )}
-                      </div>
-                      <button onClick={()=>setView('inbox')} className={`p-2 relative rounded-lg transition-colors ${view==='inbox'?'bg-indigo-50 text-indigo-600':'text-gray-500 hover:text-indigo-600'}`}>
-                          <Bell className="w-5 h-5" />{myNotifications.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border border-white rounded-full"></span>}
-                      </button>
-                  </>
-              ) : (
-                  <div className="text-red-600 font-bold flex items-center gap-2 text-sm bg-red-50 px-3 py-1.5 rounded-full border border-red-200">
-                      <AlertTriangle size={16}/> 系統功能已鎖定
-                  </div>
-              )}
-              <button onClick={()=>window.confirm("確定登出？")&&signOut(auth)} className="p-2 text-gray-400 hover:text-red-500 ml-1"><LogOut className="w-5 h-5"/></button>
-            </div>
-          </div>
-        </nav>
-  
-        <main className="max-w-6xl mx-auto p-3 sm:p-4">
-          {isLocked && (
-              <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg shadow-sm animate-fade-in">
-                  <h3 className="text-red-800 font-bold flex items-center gap-2"><AlertTriangle size={18}/> 員工報到強制簽署提醒</h3>
-                  <p className="text-red-700 text-sm mt-1">您尚未簽署《員工勞動契約暨保密與工作守則同意書》。請先閱讀並完成下方合約之「親筆簽名」，方可解鎖打卡、看班表與其他系統功能！</p>
-              </div>
-          )}
-
-          {isReadOnly && view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />}
-
-          {!isLocked && !isReadOnly && view === 'calendar' && <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={false} />}
-          {!isLocked && !isReadOnly && view === 'clock' && <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={store} db={db} appId={appId} />}
-          {!isLocked && !isReadOnly && view === 'inventory' && <InventoryView inventoryItems={inventory} db={db} appId={appId} />}
-          {!isLocked && !isReadOnly && view === 'attendance' && isPrivileged && <AttendanceView users={users} currentDate={currentDate} shifts={shifts} shiftTypes={shiftsDef} db={db} appId={appId} />}
-          {!isLocked && !isReadOnly && view === 'salary' && isPrivileged && <SalaryView users={users} shifts={shifts} currentDate={currentDate} leaveTypes={leaves} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} gasReceipts={gasReceipts} db={db} appId={appId} />}
-          {!isLocked && !isReadOnly && view === 'payroll' && isSuperAdmin && <PayrollView users={Object.values(users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={gasReceipts} />}
-          {!isLocked && !isReadOnly && view === 'settings' && <SettingsView users={users} currentUserInfo={currentUserInfo} leaveTypes={leaves} shiftTypes={shiftsDef} inventoryItems={inventory} storeConfig={store} db={db} appId={appId} isSuperAdmin={isSuperAdmin} insurances={insurances} />}
-          
-          {(!isReadOnly && view === 'forms') && <FormsView users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />}
-          
-          {!isLocked && !isReadOnly && view === 'inbox' && (
-              <div className="max-w-md mx-auto space-y-4">
-                  <div className="bg-white p-4 rounded-xl border flex items-center gap-2"><Bell className="text-indigo-600"/><h2 className="font-bold text-lg">通知中心</h2></div>
-                  {myNotifications.length === 0 ? (
-                      <div className="text-center py-10 text-gray-400">目前沒有通知</div>
-                  ) : (
-                      myNotifications.map(req => (
-                          <div key={req.id} className="bg-white p-4 rounded-xl border border-l-4 border-l-indigo-500 shadow-sm mb-3">
-                              <h3 className="font-bold text-gray-800">單據審核</h3>
-                              <p className="text-sm">申請人：{users[req.uid || req.fromUid]?.name} | {req.type === 'swap' ? <span className="font-mono bg-indigo-50 px-1 rounded text-indigo-700 font-bold ml-1">互換：{req.date1} ⇄ {req.date2}</span> : `日期：${req.date}`}</p>
-                              <div className="bg-gray-50 p-2 my-2 text-sm rounded font-bold text-indigo-800">{req.type === 'swap' ? '🔄 換班/換假請求' : `${req.hours > 0 ? '加班' : '補休'} ${Math.abs(req.hours)} 小時 (${req.reason})`}</div>
-                              <div className="flex gap-2">
-                                  <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-white border py-2 rounded-lg font-bold hover:bg-gray-50">駁回</button>
-                                  <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow hover:bg-indigo-700">{req.type === 'swap' ? '同意換班' : '核准'}</button>
-                              </div>
-                          </div>
-                      ))
-                  )}
-              </div>
-          )}
-        </main>
-      </div>
-    );
-}
+        {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
+        {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
+        
+        <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
+        <div className="border-t my-1 border-gray-100"></div>
+        <DropdownItem onClick={()=>{setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定" active={view==='settings'} />
+    </div>
+)}
 // ==========================================
 // 📝 表單簽署中心 (FormsView) 
 // ==========================================
