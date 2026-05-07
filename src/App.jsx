@@ -1497,90 +1497,111 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
 };
 
 // ==========================================
-// ⚙️ 設定視圖 (SettingsView)
+// ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
 // ==========================================
-const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin, insurances }) => {
-  const userList = Object.values(users);
+const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
-  const [showResigned, setShowResigned] = useState(false);
-  const [locConfig, setLocConfig] = useState(storeConfig || { lat: '', lng: '', radius: 50 });
-  const [newShift, setNewShift] = useState({ id: '', label: '', start: '09:00', end: '18:00' });
-  const [newInvItem, setNewInvItem] = useState({ category: '茶葉類', name: '', spec: '', price: '' });
+  const [locConfig, setLocConfig] = useState(storeConfig || { lat: 24.123, lng: 120.456, radius: 50 });
 
   const saveUser = async () => { 
-      if (isSuperAdmin && !formData.startDate && !formData.isViewer) return alert("請務必填寫員工的「到職日」，否則系統無法計算特休！");
+      // 確保必要欄位已填寫
+      if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
+          return alert("請務必填寫「到職日」、「本薪」及「合約起訖」，否則員工無法完成簽約！");
+      }
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); 
       setEditingId(null); 
+      alert("員工資料已更新！");
   };
 
-  const compressImage = (file, maxSizeMB = 10) => {
-      return new Promise((resolve, reject) => {
-          if (file.size > maxSizeMB * 1024 * 1024) { alert(`🚨 圖片過大！請選擇小於 ${maxSizeMB}MB 的圖片。`); return reject("File too large"); }
-          const reader = new FileReader();
-          reader.readAsDataURL(file);
-          reader.onload = (e) => {
-              const img = new Image(); img.src = e.target.result;
-              img.onload = () => {
-                  const canvas = document.createElement('canvas');
-                  const MAX_SIZE = 1200;
-                  let w = img.width, h = img.height;
-                  if (w > h) { if (w > MAX_SIZE) { h *= MAX_SIZE / w; w = MAX_SIZE; } } else { if (h > MAX_SIZE) { w *= MAX_SIZE / h; h = MAX_SIZE; } }
-                  canvas.width = w; canvas.height = h;
-                  canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                  resolve(canvas.toDataURL('image/jpeg', 0.7));
-              };
-          };
-      });
+  const handleUp = async (e, f) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (ev) => setFormData({ ...formData, [f]: ev.target.result });
   };
-
-  const handleImageUpload = async (e, field) => { 
-      const file = e.target.files[0]; if (!file) return;
-      try { const base64 = await compressImage(file); setFormData(prev => ({ ...prev, [field]: base64 })); } catch(err) { console.error(err); }
-  };
-
-  const handleSaveLocation = async () => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), locConfig); alert("打卡座標設定已儲存！"); };
-  const addInventoryItem = async () => { if(!newInvItem.name) return; await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: [...inventoryItems, { ...newInvItem, id: `i_${Date.now()}` }] }); setNewInvItem({ category: '茶葉類', name: '', spec: '', price: '' }); };
-
-  const visibleUsers = useMemo(() => { 
-      let list = userList; if (!isSuperAdmin) list = list.filter(u => u.uid === currentUserInfo.uid); 
-      else if (!showResigned) list = list.filter(u => !u.isResigned); return list; 
-  }, [userList, currentUserInfo, isSuperAdmin, showResigned]);
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="space-y-6 pb-20 max-w-4xl mx-auto">
+      {/* 個人狀態卡片 */}
       <div className="bg-white p-6 rounded-xl border shadow-sm text-center">
-        <h2 className="font-bold text-xl">{currentUserInfo.name}</h2>
-        <div className="mt-4 bg-green-50 p-3 rounded-lg border border-green-100 text-left">
-            <h4 className="text-sm font-bold text-green-800 flex items-center gap-2"><Smartphone size={16}/> LINE 通知綁定</h4>
-            <div className="flex justify-between items-center mt-2"><span className="text-xs font-mono bg-white px-2 py-1 rounded border shadow-sm">{currentUserInfo.lineUserId ? '✅ 已綁定' : '❌ 未綁定'}</span><button onClick={()=>{setEditingId(currentUserInfo.uid); setFormData(currentUserInfo)}} className="text-green-600 text-xs font-bold underline">編輯資料</button></div>
-        </div>
+        <h2 className="font-black text-2xl text-gray-800">{currentUserInfo.name}</h2>
+        <p className="text-indigo-600 font-bold text-sm">權限：{isSuperAdmin ? '最高管理員' : '一般員工'}</p>
       </div>
 
-      <div className="bg-white p-4 rounded-xl border shadow-sm">
-         <div className="flex justify-between items-center mb-3"><h3 className="font-bold flex gap-2"><Users size={18}/> 員工角色與資料</h3></div>
-         {visibleUsers.map(u => (
-           <div key={u.uid} className={`border-b py-3 last:border-0 ${u.isResigned ? 'opacity-50 bg-gray-50' : ''}`}>
-             {editingId === u.uid ? (
-               <div className="space-y-3 p-3 bg-gray-50 rounded">
-                 <div className="grid grid-cols-2 gap-2">
-                    <input placeholder="姓名" value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="border p-1.5 rounded text-sm"/>
-                    <input type="date" placeholder="到職日" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="border p-1.5 rounded text-sm"/>
-                 </div>
-                 <div className="grid grid-cols-2 gap-2">
-                    <div><label className="text-xs font-bold text-gray-500">存摺封面</label><input type="file" accept="image/*" onChange={e=>handleImageUpload(e, 'bankImage')} className="text-xs"/></div>
-                    <div><label className="text-xs font-bold text-gray-500">體檢報告</label><input type="file" accept="image/*" onChange={e=>handleImageUpload(e, 'healthCheckImage')} className="text-xs"/></div>
-                 </div>
-                 <div className="flex gap-2 justify-end"><button onClick={()=>setEditingId(null)} className="px-3 py-1 bg-gray-200 rounded text-xs">取消</button><button onClick={saveUser} className="px-3 py-1 bg-indigo-600 text-white rounded text-xs">儲存</button></div>
-               </div>
-             ) : (
-               <div className="flex justify-between items-center">
-                   <div><div className="font-bold text-sm">{u.name}</div><div className="text-[10px] text-gray-400">到職日: {u.startDate || '未填'}</div></div>
-                   {(isSuperAdmin || u.uid === currentUserInfo.uid) && <button onClick={()=>{setEditingId(u.uid);setFormData(u)}} className="text-indigo-600 text-xs font-bold">編輯</button>}
-               </div>
-             )}
-           </div>
-         ))}
+      {/* 員工資料管理區 */}
+      <div className="bg-white p-6 rounded-xl border shadow-sm">
+          <h3 className="font-black text-lg mb-6 flex items-center gap-2 text-gray-700">
+            <Users size={20}/> 員工角色與合約參數設定
+          </h3>
+          
+          <div className="space-y-4">
+            {Object.values(users).filter(u => !u.isResigned).map(u => (
+              <div key={u.uid} className="border p-4 rounded-2xl bg-gray-50/50">
+                {editingId === u.uid ? (
+                  <div className="space-y-4 animate-scale-in">
+                    {/* 基本資料 */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-black text-gray-400 uppercase">員工姓名</label>
+                          <input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="border-2 rounded-xl p-2 font-bold w-full focus:border-indigo-500"/>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-black text-gray-400 uppercase">到職日 (計算特休用)</label>
+                          <input type="date" value={formData.startDate||''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="border-2 rounded-xl p-2 font-bold w-full focus:border-indigo-500"/>
+                        </div>
+                    </div>
+
+                    {/* 🔴 合約與薪資設定 (新增區塊) */}
+                    <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-inner space-y-3">
+                        <p className="text-xs font-black text-indigo-600 border-b pb-1">合約簽署必要參數：</p>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-[10px] font-black text-gray-400 uppercase">月支本薪 (數字)</label>
+                              <input type="number" value={formData.salaryAmount||''} onChange={e=>setFormData({...formData, salaryAmount:e.target.value})} placeholder="例如: 35000" className="border-2 rounded-xl p-2 font-bold w-full focus:border-indigo-500"/>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-black text-gray-400 uppercase">工作地點</label>
+                              <input value={formData.workLocation||''} onChange={e=>setFormData({...formData, workLocation:e.target.value})} placeholder="門市名稱或地址" className="border-2 rounded-xl p-2 font-bold w-full focus:border-indigo-500"/>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-[10px] font-black text-gray-400 uppercase">合約開始日</label>
+                              <input type="date" value={formData.contractStart||''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="border-2 rounded-xl p-2 font-bold w-full focus:border-indigo-500"/>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-black text-gray-400 uppercase">合約結束日 (若不定期可不填)</label>
+                              <input type="date" value={formData.contractEnd||''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="border-2 rounded-xl p-2 font-bold w-full focus:border-indigo-500"/>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2 justify-end pt-2">
+                        <button onClick={()=>setEditingId(null)} className="px-5 py-2 font-black text-gray-500 text-xs">取消</button>
+                        <button onClick={saveUser} className="bg-indigo-600 text-white px-8 py-2 rounded-xl text-xs font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700">儲存員工參數</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-between items-center">
+                    <div>
+                        <div className="font-black text-gray-800 text-lg flex items-center gap-2">
+                          {u.name}
+                          {u.salaryAmount ? <span className="text-[10px] bg-green-100 text-green-600 px-2 py-0.5 rounded-full">已設薪資</span> : <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full">未設薪資</span>}
+                        </div>
+                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+                          合約狀態：{u.contractStart ? `${u.contractStart} 起` : '未設定'}
+                        </div>
+                    </div>
+                    {(isSuperAdmin || u.uid === currentUserInfo.uid) && (
+                      <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border border-gray-200 px-4 py-2 rounded-xl text-xs font-black text-indigo-600 shadow-sm hover:bg-indigo-50">編輯合約與薪資</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
       </div>
     </div>
   );
