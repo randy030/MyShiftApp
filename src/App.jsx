@@ -1499,55 +1499,121 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
 // ==========================================
 // ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
 // ==========================================
-const SettingsView = ({ users, currentUserInfo, leaveTypes, shiftTypes, inventoryItems, appId, storeConfig, db, isSuperAdmin }) => {
+ const SettingsView = ({ users, currentUserInfo, inventoryItems, appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
+  const [locConfig, setLocConfig] = useState(storeConfig || { lat: 24.123, lng: 120.456, radius: 50 });
+  
+  // 🟢 新增品項用的暫存狀態
+  const [newItem, setNewItem] = useState({ category: '茶葉類', name: '', spec: '', price: '' });
 
   const saveUser = async () => { 
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
-          return alert("🚨 錯誤：請務必填寫「到職日」、「本薪」及「合約起點」，否則員工無法簽約！");
+          return alert("🚨 請務必填寫「到職日」、「本薪」及「合約起點」！");
       }
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); 
-      setEditingId(null); 
-      alert("✅ 員工合約參數已更新！");
+      setEditingId(null); alert("✅ 員工資料已更新！");
   };
 
-  const handleUp = async (e, f) => {
-      const file = e.target.files[0]; if (!file) return;
-      const reader = new FileReader(); reader.readAsDataURL(file);
-      reader.onload = (ev) => setFormData({ ...formData, [f]: ev.target.result });
+  // 🟢 儲存庫存品項到雲端
+  const handleAddInventory = async () => {
+      if (!newItem.name || !newItem.spec) return alert("請填寫品名與單位");
+      const updatedList = [...(inventoryItems || []), { ...newItem, id: `i_${Date.now()}` }];
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: updatedList });
+      setNewItem({ category: '茶葉類', name: '', spec: '', price: '' });
+      alert("✅ 品項已新增！");
+  };
+
+  const handleDeleteInventory = async (id) => {
+      if (!confirm("確定刪除此品項？")) return;
+      const updatedList = inventoryItems.filter(item => item.id !== id);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: updatedList });
   };
 
   return (
-    <div className="space-y-6 pb-20 max-w-4xl mx-auto">
-      <div className="bg-white p-6 rounded-xl border shadow-sm">
-          <h3 className="font-black text-lg mb-6 flex items-center gap-2"><Users size={20}/> 員工合約與參數設定</h3>
-          <div className="space-y-4">
+    <div className="space-y-8 pb-20 max-w-4xl mx-auto animate-fade-in">
+      {/* 💳 頂部個人卡片 - 超圓潤設計 */}
+      <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+        <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo.name}</h2>
+        <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">System Controller</p>
+      </div>
+
+      {/* 📦 庫存品項管理區 - 圓潤質感 */}
+      {isSuperAdmin && (
+        <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg space-y-6">
+          <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+            <Package className="text-indigo-600" size={24}/> 盤點品項後台設定
+          </h3>
+          
+          {/* 新增品項輸入區 */}
+          <div className="bg-gray-50 p-6 rounded-3xl border border-dashed border-gray-200 grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <select value={newItem.category} onChange={e=>setNewItem({...newItem, category:e.target.value})} className="rounded-xl border-0 bg-white shadow-sm font-bold text-sm">
+              <option>茶葉類</option><option>果汁與糖漿</option><option>奶與粉類</option><option>配料與包材</option>
+            </select>
+            <input placeholder="品名 (如: 高山青)" value={newItem.name} onChange={e=>setNewItem({...newItem, name:e.target.value})} className="rounded-xl border-0 bg-white shadow-sm font-bold text-sm px-4"/>
+            <input placeholder="單位 (如: 斤/包)" value={newItem.spec} onChange={e=>setNewItem({...newItem, spec:e.target.value})} className="rounded-xl border-0 bg-white shadow-sm font-bold text-sm px-4"/>
+            <button onClick={handleAddInventory} className="bg-indigo-600 text-white font-black rounded-xl shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">新增品項</button>
+          </div>
+
+          {/* 現有品項列表 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {inventoryItems?.map(item => (
+              <div key={item.id} className="flex justify-between items-center p-4 bg-white border border-gray-100 rounded-2xl shadow-sm group hover:border-indigo-200 transition-all">
+                <div>
+                  <span className="text-[9px] bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded-full font-black uppercase">{item.category}</span>
+                  <div className="font-bold text-gray-700">{item.name} ({item.spec})</div>
+                </div>
+                <button onClick={()=>handleDeleteInventory(item.id)} className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><Trash2 size={16}/></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 👥 員工資料管理區 */}
+      <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
+          <h3 className="font-black text-xl text-gray-800 mb-8 flex items-center gap-3">
+            <Users className="text-indigo-600" size={24}/> 員工合約與權限檔案庫
+          </h3>
+          
+          <div className="grid gap-4">
             {Object.values(users).filter(u => !u.isResigned).map(u => (
-              <div key={u.uid} className="border p-4 rounded-2xl bg-gray-50/50">
+              <div key={u.uid} className="group border border-gray-50 p-6 rounded-[2rem] bg-gray-50/50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50 transition-all duration-300">
                 {editingId === u.uid ? (
-                  <div className="space-y-4">
+                  <div className="space-y-4 animate-scale-in">
                     <div className="grid grid-cols-2 gap-3">
-                        <input placeholder="姓名" value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="border-2 rounded-xl p-2 font-bold"/>
-                        <input type="date" value={formData.startDate||''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="border-2 rounded-xl p-2 font-bold"/>
+                        <input value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="rounded-2xl border-gray-100 bg-white p-3 font-bold w-full focus:ring-4 focus:ring-indigo-50 outline-none"/>
+                        <input type="date" value={formData.startDate||''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="rounded-2xl border-gray-100 bg-white p-3 font-bold w-full focus:ring-4 focus:ring-indigo-50 outline-none"/>
                     </div>
-                    <div className="bg-white p-4 rounded-xl border border-indigo-100 space-y-3">
-                        <p className="text-xs font-black text-indigo-600 border-b pb-1">合約必要參數 (簽署時自動帶入)：</p>
-                        <div className="grid grid-cols-2 gap-3">
-                            <input type="number" value={formData.salaryAmount||''} onChange={e=>setFormData({...formData, salaryAmount:e.target.value})} placeholder="月支本薪 (數字)" className="border-2 rounded-xl p-2 font-bold w-full"/>
-                            <input value={formData.workLocation||''} onChange={e=>setFormData({...formData, workLocation:e.target.value})} placeholder="工作地點 (門市)" className="border-2 rounded-xl p-2 font-bold w-full"/>
+                    <div className="bg-indigo-50/50 p-6 rounded-[1.5rem] space-y-4 border border-indigo-100/50">
+                        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Contract Parameters</p>
+                        <div className="grid grid-cols-2 gap-4">
+                            <input type="number" value={formData.salaryAmount||''} onChange={e=>setFormData({...formData, salaryAmount:e.target.value})} placeholder="月支本薪" className="rounded-xl border-0 p-3 font-black text-indigo-600 shadow-sm"/>
+                            <input value={formData.workLocation||''} onChange={e=>setFormData({...formData, workLocation:e.target.value})} placeholder="工作地點" className="rounded-xl border-0 p-3 font-bold shadow-sm"/>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div><label className="text-[10px] text-gray-400 font-bold">合約開始日</label><input type="date" value={formData.contractStart||''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="border-2 rounded-xl p-2 font-bold w-full"/></div>
-                            <div><label className="text-[10px] text-gray-400 font-bold">合約結束日</label><input type="date" value={formData.contractEnd||''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="border-2 rounded-xl p-2 font-bold w-full"/></div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-[9px] font-black text-gray-400 ml-2">合約起日</label><input type="date" value={formData.contractStart||''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="rounded-xl border-0 p-3 font-bold w-full shadow-sm"/></div>
+                            <div><label className="text-[9px] font-black text-gray-400 ml-2">合約訖日</label><input type="date" value={formData.contractEnd||''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="rounded-xl border-0 p-3 font-bold w-full shadow-sm"/></div>
                         </div>
                     </div>
-                    <div className="flex gap-2 justify-end"><button onClick={()=>setEditingId(null)} className="px-4 py-2 font-bold text-gray-400">取消</button><button onClick={saveUser} className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-bold">儲存設定</button></div>
+                    <div className="flex gap-3 justify-end pt-2">
+                        <button onClick={()=>setEditingId(null)} className="px-6 py-2 font-black text-gray-400">取消</button>
+                        <button onClick={saveUser} className="bg-indigo-600 text-white px-10 py-3 rounded-2xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">更新檔案</button>
+                    </div>
                   </div>
                 ) : (
                   <div className="flex justify-between items-center">
-                    <div><div className="font-black text-gray-800">{u.name}</div><div className="text-[10px] text-gray-400 uppercase">本薪: ${u.salaryAmount || '未設'} | 地點: {u.workLocation || '未設'}</div></div>
-                    <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border px-4 py-2 rounded-xl text-xs font-black text-indigo-600 shadow-sm">編輯合約參數</button>
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center font-black text-indigo-600 shadow-sm border border-gray-50">{u.name.slice(0,1)}</div>
+                        <div>
+                            <div className="font-black text-gray-800 text-lg">{u.name}</div>
+                            <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+                              Salary: ${u.salaryAmount || '0'} | {u.workLocation || 'Location TBD'}
+                            </div>
+                        </div>
+                    </div>
+                    <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-indigo-50 px-6 py-2.5 rounded-2xl text-xs font-black text-indigo-600 shadow-sm group-hover:bg-indigo-600 group-hover:text-white transition-all">編輯參數</button>
                   </div>
                 )}
               </div>
@@ -1572,7 +1638,6 @@ function App() {
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
 
-    // 1. 監聽登入狀態
     useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
             if (u) {
@@ -1589,87 +1654,75 @@ function App() {
         return () => unsubAuth();
     }, []);
 
-    // 2. 監聽雲端資料 (確保資料不消失的管線)
     useEffect(() => {
         if (!user) return;
         const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, users: map })); });
         const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, shifts: map })); });
-        const unsubEvents = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, events: list })); });
         const unsubSigs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, signatures: list })); });
         const unsubGas = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, gasReceipts: map })); });
         const unsubLoc = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => setDbData(prev => ({ ...prev, storeLocation: snap.data() })));
-        return () => { unsubUsers(); unsubShifts(); unsubEvents(); unsubSigs(); unsubGas(); unsubLoc(); };
+        
+        // 🟢 關鍵：監聽雲端庫存品項設定
+        const unsubInv = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), (snap) => {
+            if (snap.exists() && snap.data().items) setDbData(prev => ({ ...prev, inventoryItems: snap.data().items }));
+        });
+
+        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubGas(); unsubLoc(); unsubInv(); };
     }, [user]);
 
     const isSuperAdmin = currentUserInfo?.isAdmin === true;
-    const isPrivileged = isSuperAdmin || currentUserInfo?.isManager === true;
     const hasSignedContract = dbData.signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isSuperAdmin && !hasSignedContract;
 
-    // 3. 視圖切換器 (修復 Props 傳遞，解決資料看不到的問題)
-    
-        const renderView = () => {
-        // 如果沒簽約且不是看表單，就強行擋住 (老闆除外)
-        if (isLocked && view !== 'forms') return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
-
+    const renderView = () => {
+        if (isLocked && view !== 'forms') return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
         switch (view) {
-            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={false} />;
-            case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.store} db={db} appId={appId} />;
-            
-            // 🟢 修正：盤點加上 db, appId
-            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventory} />;
-            
-            // 🟢 修正：表單加上 db, appId
-            case 'forms': return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
-            
-            // 🟢 修正：統計明細加上 leaveTypes 與 db/appId
-            case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={dbData.leaves} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
-            
+            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
+            case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
+            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} />;
+            case 'forms': return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+            case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
             case 'payroll': return <PayrollView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
-            case 'attendance': return <AttendanceView users={dbData.users} currentDate={currentDate} shifts={dbData.shifts} shiftTypes={dbData.shiftsDef} db={db} appId={appId} />;
-            case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} leaveTypes={dbData.leaves} shiftTypes={dbData.shiftsDef} inventoryItems={dbData.inventory} appId={appId} storeConfig={dbData.store} db={db} isSuperAdmin={isSuperAdmin} />;
+            case 'attendance': return <AttendanceView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
+            case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
             default: return null;
         }
     };
 
-    if (loading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse">系統啟動中...</div>;
-    if (!user) return <div className="h-screen flex flex-col items-center justify-center p-6 bg-gray-50"><h1 className="text-3xl font-black text-indigo-600 mb-8">排班薪資系統 V10</h1><button onClick={() => signInWithPopup(auth, new GoogleAuthProvider())} className="bg-white border-2 border-indigo-600 text-indigo-600 px-8 py-4 rounded-2xl font-bold shadow-xl hover:bg-indigo-50 flex items-center gap-3 transition-all"><Fingerprint size={24}/> Google 帳號登入</button></div>;
+    if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
+    if (!user) return <div className="h-screen flex flex-col items-center justify-center p-6 bg-gray-50"><h1 className="text-4xl font-black text-indigo-600 mb-8 tracking-tighter italic">TEAMSHIFT V10</h1><button onClick={() => signInWithPopup(auth, new GoogleAuthProvider())} className="bg-white border-2 border-indigo-600 text-indigo-600 px-10 py-5 rounded-[2rem] font-black shadow-2xl hover:bg-indigo-50 transition-all active:scale-95 flex items-center gap-4">GOOGLE SSO LOGIN</button></div>;
 
     return (
-        <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
-            <header className="bg-white border-b shadow-sm sticky top-0 z-40 px-4 py-3 flex justify-between items-center">
-                <div className="flex items-center gap-2"><div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg"><Calendar className="text-white w-5 h-5"/></div><h1 className="font-black text-gray-800 tracking-tight hidden xs:block">排班薪資系統 <span className="text-[10px] text-indigo-400 ml-1">V10.0</span></h1></div>
-                <nav className="flex items-center gap-1">
+        <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-indigo-100">
+            <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 px-6 py-4 flex justify-between items-center backdrop-blur-md">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-100"><Calendar className="text-white w-5 h-5"/></div>
+                    <div className="hidden xs:block"><h1 className="font-black text-gray-800 tracking-tighter leading-none text-xl">SHIFTER</h1><span className="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em]">Full Edition V10</span></div>
+                </div>
+                <nav className="flex items-center gap-2">
                     <NavBtn active={view==='calendar'} onClick={()=>setView('calendar')} icon={Calendar} label="班表" />
                     <NavBtn active={view==='clock'} onClick={()=>setView('clock')} icon={Fingerprint} label="打卡" />
                     <NavBtn active={view==='inventory'} onClick={()=>setView('inventory')} icon={Package} label="盤點" />
                     <div className="relative">
-                        <button onClick={()=>setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold transition-colors ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-50 text-indigo-700':'text-gray-500 hover:bg-gray-100'}`}><Settings className="w-4 h-4"/><span className="hidden xs:inline">管理</span><ChevronDown size={14}/></button>
+                        <button onClick={()=>setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs transition-all ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-200':'text-gray-400 hover:bg-gray-100'}`}><Settings className="w-4 h-4"/><ChevronDown size={14}/></button>
                         {menuOpen && (
-                            <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-fade-in">
-                                {/* 🟢 移出權限限制：所有人都能看 */}
-                                <DropdownItem 
-                                    onClick={()=>{setView('salary'); setMenuOpen(false);}} 
-                                    icon={FileBarChart} 
-                                    label="統計明細" 
-                                    active={view==='salary'} 
-                                />
-                                
-                                {isPrivileged && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="出勤結算" active={view==='attendance'} />}
+                            <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-50 rounded-[2rem] shadow-2xl z-50 overflow-hidden py-2 animate-scale-in origin-top-right">
+                                <DropdownItem onClick={()=>{setView('salary'); setMenuOpen(false);}} icon={FileBarChart} label="統計明細 (特休)" active={view==='salary'} />
+                                {isSuperAdmin && <DropdownItem onClick={()=>{setView('attendance'); setMenuOpen(false);}} icon={History} label="全員出勤結算" active={view==='attendance'} />}
                                 {isSuperAdmin && <DropdownItem onClick={()=>{setView('payroll'); setMenuOpen(false);}} icon={DollarSign} label="薪資管理" active={view==='payroll'} />}
-                                
                                 <DropdownItem onClick={()=>{setView('forms'); setMenuOpen(false);}} icon={FileSignature} label="表單與簽署" active={view==='forms'} />
-                                <div className="border-t my-1 border-gray-100"></div>
-                                <DropdownItem onClick={()=>{setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定" active={view==='settings'} />
-                                <button onClick={()=>signOut(auth)} className="w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 text-red-500 hover:bg-red-50 font-bold border-t"><LogOut size={14}/> 登出系統</button>
+                                <div className="border-t my-2 border-gray-50"></div>
+                                <DropdownItem onClick={()=>{setView('settings'); setMenuOpen(false);}} icon={Users} label="系統設定中心" active={view==='settings'} />
+                                <button onClick={()=>signOut(auth)} className="w-full text-left px-5 py-4 text-xs flex items-center gap-2 text-red-500 hover:bg-red-50 font-black border-t border-gray-50 transition-colors uppercase tracking-widest"><LogOut size={14}/> 登出系統</button>
                             </div>
                         )}
                     </div>
                 </nav>
             </header>
-            <main className="flex-1 p-4 max-w-7xl mx-auto w-full">{renderView()}</main>
-            {isLocked && <div className="fixed top-14 left-0 right-0 bg-red-600 text-white text-[10px] sm:text-xs py-1.5 px-4 z-30 flex items-center justify-center gap-2 font-bold shadow-xl animate-pulse"><Lock size={12}/> 系統鎖定中：請完成員工合約簽署！</div>}
+            <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">{renderView()}</main>
+            {isLocked && <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center justify-center gap-3 font-black shadow-2xl animate-bounce"><Lock size={16}/> 請先至「管理 > 表單與簽署」完成合約！</div>}
         </div>
     );
 }
+
 export { App as default };
