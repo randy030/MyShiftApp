@@ -1661,9 +1661,26 @@ function App() {
         return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubGas(); unsubLoc(); unsubInv(); };
     }, [user]);
 
-    const isSuperAdmin = currentUserInfo?.isAdmin === true;
-    const hasSignedContract = dbData.signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
-    const isLocked = !isSuperAdmin && !hasSignedContract;
+    // 1. 讓 currentUserInfo 與雲端資料即時同步
+    const currentUserInfo = useMemo(() => {
+        return (user && dbData.users) ? dbData.users[user.uid] : null;
+    }, [user, dbData.users]);
+
+    // 2. 判斷權限（老闆或設為 isAdmin 的主管）
+    const isSuperAdmin = currentUserInfo?.role === 'boss' || currentUserInfo?.isAdmin === true;
+
+    // 3. 判斷是否已經完成合約簽署
+    const hasSignedContract = useMemo(() => {
+        return dbData.signatures?.some(s => s.uid === user?.uid) || false;
+    }, [user, dbData.signatures]);
+
+    // 4. 關鍵鎖定邏輯：若沒設薪資、沒設日期，或是還沒簽約，且不是老闆，就鎖定
+    const isLocked = useMemo(() => {
+        if (!currentUserInfo || isSuperAdmin) return false;
+        
+        const infoNotSet = !currentUserInfo.salaryAmount || !currentUserInfo.contractStart;
+        return infoNotSet || !hasSignedContract;
+    }, [currentUserInfo, isSuperAdmin, hasSignedContract]);
 // 🟢 手術二：處理核准的「大腦」邏輯
 // 🟢 請貼在這裡 (handleRequest 的上方)
 const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
