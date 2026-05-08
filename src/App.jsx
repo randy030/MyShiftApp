@@ -1629,32 +1629,7 @@ function App() {
         gasReceipts: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS 
     });
 
-    // 2. 【核心大腦】定義CurrentUser資訊 (必須放在權限判斷之前)
-    const currentUserInfo = useMemo(() => {
-        return (user && dbData.users) ? dbData.users[user.uid] : null;
-    }, [user, dbData.users]);
-
-    // 3. 權限判斷 (老闆/主管/觀察者)
-    const isSuperAdmin = currentUserInfo?.role === 'boss' || currentUserInfo?.isAdmin === true;
-    const isPrivileged = isSuperAdmin || currentUserInfo?.role === 'supervisor';
-    const isReadOnly = currentUserInfo?.role === 'observer';
-
-    // 4. 合約與鎖定邏輯
-    const hasSignedContract = useMemo(() => {
-        return dbData.signatures?.some(s => s.uid === user?.uid && s.formType === 'contract') || false;
-    }, [user, dbData.signatures]);
-
-    const isLocked = useMemo(() => {
-        if (!currentUserInfo || isSuperAdmin) return false;
-        const infoNotSet = !currentUserInfo.salaryAmount || !currentUserInfo.contractStart;
-        return infoNotSet || !hasSignedContract;
-    }, [currentUserInfo, isSuperAdmin, hasSignedContract]);
-
-    const needsSetupCount = Object.values(dbData.users || {}).filter(u => 
-        !u.isResigned && (!u.salaryAmount || !u.contractStart)
-    ).length;
-
-    // 5. 資料連動監聽
+    // 2. 登入狀態監聽 (只負責設定 User，不設定 Info)
     useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
             setUser(u);
@@ -1670,6 +1645,7 @@ function App() {
         return () => unsubAuth();
     }, []);
 
+    // 3. 雲端資料即時監聽 (確保即時連動)
     useEffect(() => {
         if (!user) return;
         const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { 
@@ -1684,36 +1660,66 @@ function App() {
             const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); 
             setDbData(prev => ({ ...prev, signatures: list })); 
         });
+        const unsubGas = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), (snap) => { 
+            const map = {}; snap.forEach(d => map[d.id] = d.data()); 
+            setDbData(prev => ({ ...prev, gasReceipts: map })); 
+        });
         const unsubLoc = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => 
             setDbData(prev => ({ ...prev, storeLocation: snap.data() }))
         );
-        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubLoc(); };
+        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubGas(); unsubLoc(); };
     }, [user]);
 
-    // 6. 視圖切換
+    // 🧠 4. 【核心大腦】定義 CurrentUserInfo (解決白屏的關鍵順序)
+    const currentUserInfo = useMemo(() => {
+        return (user && dbData.users) ? dbData.users[user.uid] : null;
+    }, [user, dbData.users]);
+
+    // 5. 基於資料定義權限
+    const isSuperAdmin = currentUserInfo?.role === 'boss' || currentUserInfo?.isAdmin === true;
+    const isPrivileged = isSuperAdmin || currentUserInfo?.role === 'supervisor';
+    const isReadOnly = currentUserInfo?.role === 'observer';
+
+    // 6. 合約鎖定邏輯
+    const hasSignedContract = useMemo(() => {
+        return dbData.signatures?.some(s => s.uid === user?.uid && s.formType === 'contract') || false;
+    }, [user, dbData.signatures]);
+
+    const isLocked = useMemo(() => {
+        if (!currentUserInfo || isSuperAdmin) return false;
+        const infoNotSet = !currentUserInfo.salaryAmount || !currentUserInfo.contractStart;
+        return infoNotSet || !hasSignedContract;
+    }, [currentUserInfo, isSuperAdmin, hasSignedContract]);
+
+    const needsSetupCount = Object.values(dbData.users || {}).filter(u => 
+        !u.isResigned && (!u.salaryAmount || !u.contractStart)
+    ).length;
+
+    // 📺 7. 視圖渲染器
     const renderView = () => {
         if (loading) return <div className="p-8 text-center text-gray-400">系統載入中...</div>;
         switch(view) {
             case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
+            case 'attendance': return isPrivileged ? <AttendanceView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} /> : null;
+            case 'salary': return isPrivileged ? <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={true} gasReceipts={dbData.gasReceipts} db={db} appId={appId} /> : null;
             case 'forms': return <FormsView users={dbData.users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
-            case 'salary': return isPrivileged ? <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={true} db={db} appId={appId} /> : null;
             case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} db={db} isSuperAdmin={isSuperAdmin} />;
             default: return null;
         }
     };
 
-    // 7. 橘色專屬歡迎介面 (當 user 不存在時)
+    // 🟠 8. TEATOP 橘色專屬門面 (已移除 T Logo 與小字，修正地雷字元)
     if (!user) return (
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 relative overflow-hidden">
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50 pointer-events-none"></div>
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40 pointer-events-none"></div>
             <div className="w-full max-w-md space-y-12 text-center relative z-50">
-                <div className="flex flex-col items-center gap-3">
+                <div className="flex flex-col items-center">
                     <h1 className="font-black text-6xl text-[#F26F21] tracking-tighter">TEATOP</h1>
-                    <h2 className="font-extrabold text-4xl text-gray-800 tracking-tight mt-2">台中東山店</h2>
+                    <h2 className="font-extrabold text-4xl text-gray-800 tracking-tight mt-3">台中東山店</h2>
                 </div>
-                <div className="bg-white/80 backdrop-blur-sm border border-gray-100 p-10 rounded-[3rem] shadow-2xl shadow-orange-200/50">
+                <div className="bg-white/90 backdrop-blur-sm border border-gray-100 p-10 rounded-[3rem] shadow-2xl shadow-orange-200/50">
                     <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]"><Fingerprint size={32} /><h3 className="font-black text-2xl text-gray-800">身分驗證</h3></div>
                     <button onClick={() => signInWithPopup(auth, provider)} className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] shadow-xl transition-all active:scale-95 cursor-pointer relative z-50">
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" className="w-6 h-6" /><span className="text-xl">使用 Google 帳號登入</span>
@@ -1724,7 +1730,7 @@ function App() {
         </div>
     );
 
-    // 8. 主要系統外殼
+    // 🔵 9. 主要系統介面 (修正標籤錯誤)
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
@@ -1760,7 +1766,7 @@ function App() {
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full">{renderView()}</main>
             {isLocked && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
-                    <Lock size={16}/><span>請點擊「管理 - 系統設定」完成員工合約！</span>
+                    <Lock size={16}/><span>請點擊「管理 → 系統設定」完成員工合約！</span>
                 </div>
             )}
         </div>
