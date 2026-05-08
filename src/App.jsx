@@ -1488,21 +1488,23 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [formData, setFormData] = useState({});
   const [showResigned, setShowResigned] = useState(false);
   
-  // 🟢 安全計數：加上 ?. 與 || [] 防止白屏
   const userList = Object.values(users || {});
+  // 🟢 提醒邏輯：若沒設「薪資」或「合約起始日」就視為待辦
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
 
   const saveUser = async () => { 
+      // 🟢 強制驗證：確保合約起始日有填寫
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
-          return alert("🚨 請務必填寫「到職日」、「本薪」及「合約起點」！");
+          return alert("🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！");
       }
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); 
-      setEditingId(null); alert("✅ 員工資料已更新！");
+      setEditingId(null); 
+      alert("✅ 員工資料與合約日期已更新！");
   };
 
   return (
     <div className="space-y-8 pb-20 max-w-4xl mx-auto animate-fade-in">
-      {/* 💳 頂部個人卡片 */}
+      {/* 💳 頂端資訊卡片 */}
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
         <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '使用者'}</h2>
@@ -1515,17 +1517,17 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
         )}
       </div>
 
-      {/* 👥 員工資料管理區 */}
+      {/* 👥 員工資料與合約管理區 */}
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
           <div className="flex justify-between items-center mb-8">
               <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
-                <Users className="text-indigo-600" size={24}/> 員工檔案與合約管理
+                <Users className="text-indigo-600" size={24}/> 員工檔案與合約庫
               </h3>
               <button 
                 onClick={() => setShowResigned(!showResigned)}
-                className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-gray-100 text-gray-400'}`}
               >
-                {showResigned ? '顯示中：包含離職員工' : '隱藏中：離職員工'}
+                {showResigned ? '顯示中：包含離職' : '隱藏中：離職人員'}
               </button>
           </div>
           
@@ -1536,39 +1538,66 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
               .map(u => {
                 const needsSetup = !u?.salaryAmount || !u?.contractStart;
                 const userName = u?.name || '未命名員工';
+                
                 return (
                   <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u?.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50/50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
                     {editingId === u.uid ? (
-                      <div className="space-y-4">
-                        {/* 這裡放您原本的編輯欄位 */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <div><label className="text-[10px] font-bold text-gray-400 ml-2">到職日期</label><input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold mt-1 shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
-                            <div><label className="text-[10px] font-bold text-gray-400 ml-2">本薪設定</label><input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold mt-1 shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+                      <div className="space-y-6 animate-scale-in">
+                        {/* 📅 第一排：基本日期與薪資 */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-gray-400 ml-2 uppercase">Arrival Date 到職日</label>
+                                <input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-gray-400 ml-2 uppercase">Base Salary 本薪</label>
+                                <input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" />
+                            </div>
                         </div>
+
+                        {/* 📅 第二排：合約起訖日 (您要的設定) */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-indigo-400 ml-2 uppercase">Contract Start 合約起點</label>
+                                <input type="date" value={formData.contractStart || ''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="w-full bg-indigo-50/30 border-2 border-indigo-100 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-purple-400 ml-2 uppercase">Contract End 合約到期</label>
+                                <input type="date" value={formData.contractEnd || ''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="w-full bg-purple-50/30 border-2 border-purple-100 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-purple-500" />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={formData.isResigned || false} onChange={e=>setFormData({...formData, isResigned: e.target.checked})} className="rounded-full text-indigo-600" />
+                                <span className="text-xs font-black text-gray-500">標記為離職員工</span>
+                            </label>
+                        </div>
+
                         <div className="flex gap-3 justify-end pt-2">
                             <button onClick={()=>setEditingId(null)} className="px-6 py-2 font-black text-gray-400 text-xs">取消</button>
-                            <button onClick={saveUser} className="bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-xs shadow-lg">更新資料</button>
+                            <button onClick={saveUser} className="bg-indigo-600 text-white px-10 py-4 rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 hover:scale-105 transition-all">儲存合約設定</button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-4">
-                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black shadow-sm border ${u?.isResigned ? 'bg-gray-200 text-gray-400' : needsSetup ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-white text-indigo-600'}`}>
+                            <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center font-black shadow-sm border ${u?.isResigned ? 'bg-gray-200 text-gray-400' : needsSetup ? 'bg-red-100 text-red-600 animate-pulse border-red-200' : 'bg-white text-indigo-600 border-gray-100'}`}>
                                 {userName.slice(0,1)}
                             </div>
                             <div>
                                 <div className="font-black text-gray-800 text-lg flex items-center gap-2">
                                   {userName}
-                                  {u?.isResigned && <span className="text-[9px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full">已離職</span>}
-                                  {!u?.isResigned && needsSetup && <span className="text-[9px] bg-red-500 text-white px-2 py-0.5 rounded-full animate-bounce">待設定</span>}
+                                  {u?.isResigned && <span className="text-[9px] bg-gray-200 text-gray-500 px-2 py-1 rounded-lg">RESIGNED</span>}
+                                  {!u?.isResigned && needsSetup && <span className="text-[9px] bg-red-500 text-white px-2 py-1 rounded-lg animate-bounce">PENDING</span>}
                                 </div>
-                                <div className="text-[10px] text-gray-400 font-bold tracking-widest uppercase">
-                                  {u?.isResigned ? '已封存' : `Salary: ${u?.salaryAmount ? '$'+u.salaryAmount : '未設定'}`}
+                                <div className="text-[10px] text-gray-400 font-bold tracking-widest uppercase mt-0.5">
+                                  {u?.isResigned ? '系統封存中' : `合約: ${u?.contractStart || '未設定'} ~ ${u?.contractEnd || '長期'}`}
                                 </div>
                             </div>
                         </div>
-                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border px-6 py-2.5 rounded-2xl text-xs font-black text-indigo-600">
-                            編輯
+                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-gray-50 px-6 py-3 rounded-2xl text-xs font-black text-gray-600 shadow-sm hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all">
+                            編輯參數
                         </button>
                       </div>
                     )}
