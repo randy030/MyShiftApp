@@ -834,17 +834,20 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     return (
       <>
       <div className="space-y-4">
-         <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row justify-between items-center gap-3">
-              <div className="flex items-center gap-3">
+         <div className="bg-white p-4 rounded-xl border shadow-sm grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-3">
+              <div className="hidden sm:block"></div>
+              <div className="flex items-center justify-center gap-3 sm:justify-self-center">
                   <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft/></button>
-                  <div className="font-bold text-xl">{year}年 {month+1}月</div>
+                  <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month+1}月</div>
                   <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronRight/></button>
               </div>
+              <div className="flex justify-center sm:justify-end">
               {!isReadOnly && isSuperAdmin && (
                   <button onClick={handleAutoSchedule} className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded items-center gap-1 font-bold shadow-sm hover:bg-indigo-100 transition-colors flex">
                       🤖 自動填補當月空班
                   </button>
               )}
+              </div>
          </div>
          <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
           {['日','一','二','三','四','五','六'].map(d=><div key={d} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{d}</div>)}
@@ -855,7 +858,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             const todaysEvents = events.filter(e => checkEventOnDate(e, dateStr));
   
             return (
-              <div key={d} onClick={()=>setSelectedDate(dateStr)} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
+              <div key={d} onClick={()=>setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
                 <div className="flex justify-between mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{d}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent"></div>}</div>
                 
                 {todaysEvents.map(e => (
@@ -1153,6 +1156,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                           {!isReadOnly && (
                               <>
                                 {otButtonUi}
+                                {!hasLeave && isSuperAdmin && <button onClick={async () => { await toggle(u.uid,'LEAVE','official',null); onClose(); }} disabled={!canEditLeave} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold'}`}>排休</button>}
                                 <button onClick={() => canEditLeave ? setExpanded(expanded===u.uid?null:u.uid) : alert("無權限或已鎖定。")} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50 font-bold'}`}>請休假 ▼</button>
                               </>
                           )}
@@ -1167,7 +1171,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                           </div>
                           <div className="grid grid-cols-3 gap-2">
                               {leaves.map(lt => {
-                                  if (lt.id === 'official' && !isSuperAdmin) return null;
+                                  if (lt.id === 'official') return null;
                                   let limitReached = false; let limitMsg = "";
                                   
                                   const getLeaveCount = (leaveId, prefix) => {
@@ -1257,6 +1261,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
         let monthStats = { ot: 0, leaves: {} };
         let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnual: 0 }; 
         let otHistory = []; 
+        let monthOtHistory = [];
   
         Object.keys(shifts).forEach(date => {
             if (!date.startsWith(targetYear)) return; 
@@ -1274,6 +1279,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                 if ((assign.useComp || lType === 'annual') && hrs > 0 && lType !== 'menstrual') {
                     if (lType !== 'annual') yearStats.compHoursUsed += hrs;
                     otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
+                    if (date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
                 }
                 if(date.startsWith(targetMonth)) {
                     if(!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
@@ -1288,18 +1294,20 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                 if (hrs < 0) yearStats.compHoursUsed += Math.abs(hrs);
                 if(date.startsWith(targetMonth) && hrs > 0) monthStats.ot += hrs;
                 otHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
+                if(date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
             }
         });
   
         otHistory.sort((a, b) => b.date.localeCompare(a.date));
+        monthOtHistory.sort((a, b) => b.date.localeCompare(a.date));
         const balance = yearStats.otEarned - yearStats.compHoursUsed;
         const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
-        return { monthStats, yearStats, balance, otHistory, targetYear, annualLimit, gasTotal, tenureText };
+        return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimit, gasTotal, tenureText };
     };
     return (
         <div className="space-y-4 pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
-                <h2 className="font-bold flex gap-2 text-indigo-700"><ListFilter /> 統計明細</h2>
+                <h2 className="font-bold flex gap-2 text-indigo-700"><ListFilter /> 時數結算 / 統計明細</h2>
                 <div className="flex gap-2">
                     <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none"/>
                 </div>
@@ -1330,6 +1338,22 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                         <div className="bg-teal-50 p-2 rounded-lg border border-teal-200 flex justify-between items-center text-xs">
                             <span className="font-bold text-teal-800"><Fuel className="w-3 h-3 inline mr-1"/> 本月油資核銷: ${Math.min(s.gasTotal, 500)}</span>
                             <span className="text-[10px] text-teal-600">實報實銷 (上限500)</span>
+                        </div>
+                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                            <div className="font-bold text-blue-900 mb-2">本月時數結算明細</div>
+                            {s.monthOtHistory.length === 0 ? (
+                                <div className="text-xs text-blue-500">本月尚無加減時數紀錄</div>
+                            ) : (
+                                <div className="space-y-1">
+                                    {s.monthOtHistory.map((h, i) => (
+                                        <div key={i} className="flex items-center justify-between text-xs bg-white/80 border border-blue-100 rounded px-2 py-1">
+                                            <span className="font-mono text-gray-500">{h.date}</span>
+                                            <span className={`font-bold ${h.hours > 0 ? 'text-orange-600' : 'text-green-600'}`}>{h.hours > 0 ? `+${h.hours}` : h.hours} hr</span>
+                                            <span className="text-gray-600 text-right ml-2 flex-1 truncate">{h.reason}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                         {s.otHistory.length > 0 && (
                             <div className="text-[10px] bg-gray-50 p-2 rounded border">
@@ -1730,7 +1754,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                             </button>
                             {menuOpen && (
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
-                                    {isSuperAdmin && <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
+                                    <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false)}} icon={Wallet} label={isSuperAdmin ? "薪資結算" : "時數結算"} />
                                     {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
                                     <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
                                     <div className="border-t my-2 border-gray-50"></div>
