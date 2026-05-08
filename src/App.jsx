@@ -210,12 +210,13 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
         </div>
     );
 };
-const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) => {
+const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, storeConfig }) => {
     const [agree, setAgree] = useState(false);
     const [origDate, setOrigDate] = useState('');
     const [newDate, setNewDate] = useState('');
     
     const { workLocation, salaryAmount, contractStart, contractEnd, isIndefinite } = currentUserInfo;
+    const resolvedWorkLocation = workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
     const canvasRef = useRef(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [hasSigned, setHasSigned] = useState(false);
@@ -255,7 +256,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) =
             formName = '國定假日調移同意書'; customData = { origDate, newDate };
         } else if (formType === 'contract') {
             formName = '員工勞動契約暨保密與工作守則同意書'; 
-            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation, salaryAmount };
+            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount };
         }
         
         const signatureImage = canvasRef.current.toDataURL('image/png');
@@ -296,7 +297,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView }) =
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第一條：契約起訖與工作場所</p>
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
                                     <li>契約期間：自 <span className="text-indigo-600 font-bold">{contractStart}</span> 起至 <span className="text-indigo-600 font-bold">{isIndefinite ? '不定期契約' : contractEnd}</span> 止。</li>
-                                    <li>工作地點：乙方應於甲方指定地點（<span className="text-indigo-600 font-bold">{workLocation}</span>）提供勞務，負責相關門市工作。</li>
+                                    <li>工作地點：乙方應於甲方指定地點（<span className="text-indigo-600 font-bold">{resolvedWorkLocation}</span>）提供勞務，負責相關門市工作。</li>
                                 </ol>
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第二條：出勤、請假與排班制度</p>
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
@@ -398,16 +399,20 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 // ==========================================
 // 📝 表單簽署中心 (FormsView) 
 // ==========================================
-const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked, setView, isSuperAdmin }) => {
+const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked, setView, isSuperAdmin, storeConfig }) => {
     const [activeTab, setActiveTab] = useState('fill'); 
     const [signModal, setSignModal] = useState(null); 
     const [viewData, setViewData] = useState(null);
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
     const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
     const handleSignContract = () => {
-        const isContractReady = currentUserInfo.workLocation && currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
+        const resolvedWorkLocation = currentUserInfo.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
+        const isContractReady = currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
         if (!isContractReady) {
             return alert("🚨 管理員尚未設定您的「約定薪資」與「合約日期」！\n\n請先通知店長至【系統設定】完成您的合約基本資料設定，才能進行簽署。");
+        }
+        if (!resolvedWorkLocation) {
+            return alert("🚨 尚未設定工作地點，請先補上門市資訊後再簽署。");
         }
         setSignModal('contract');
     };
@@ -474,7 +479,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
                 </div>
             )}
             
-            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} />}
+            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
             {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
         </div>
     );
@@ -971,17 +976,19 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                         date: dateStr,
                         leaveType: lType,
                         leaveLabel: leaveLabel,
+                        subUid: subUid || null,
+                        subName: subUid ? (users[subUid]?.name || '') : '',
                         timestamp: new Date(),
                         status: 'pending'
                     });
-                    // 🟢 補強：自動找出所有管理員並傳送 LINE 通知
-                const adminLineIds = Object.values(users)
-                    .filter(u => u.isAdmin && u.lineUserId)
-                    .map(u => u.lineUserId);
-                if (adminLineIds.length > 0) {
-                    await sendLineNotification(adminLineIds, `🔔 【新假單申請】\n申請人：${currentUserInfo.name}\n日期：${dateStr}\n類別：${leaveLabel}\n請至系統「通知中心」進行審核。`);
-                }
-                    alert(`✅ ${leaveLabel} 申請已送出！\n請等候主管簽核，核准後才會出現在班表上。`);
+                    const approverLineIds = [...new Set(Object.values(users)
+                        .filter(u => !u.isResigned && (u.role === 'boss' || u.role === 'supervisor' || u.isAdmin || u.isManager) && u.lineUserId)
+                        .map(u => u.lineUserId)
+                        .filter(Boolean))];
+                    if (approverLineIds.length > 0) {
+                        await sendLineNotification(approverLineIds, `🔔 【新假單申請】\n申請人：${currentUserInfo.name}\n日期：${dateStr}\n類別：${leaveLabel}${subUid ? `\n代理人：${users[subUid]?.name || '已填寫'}` : ''}\n請至系統「通知中心」進行審核。`);
+                    }
+                    alert(`✅ ${leaveLabel} 申請已送出！\n不論是否填寫代理人，皆需主管或管理員審核後才會上班表。`);
                     setExpanded(null);
                     onClose(); // 申請完自動關閉彈窗
                 } catch (e) {
@@ -1417,6 +1424,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       const updatedData = {
           ...formData,
           isAdmin: ['boss', 'supervisor'].includes(formData.role), // 自動判斷是否具備管理權限
+          workLocation: formData.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店',
       };
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), updatedData); 
       setEditingId(null); 
@@ -1558,77 +1566,69 @@ function App() {
         const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, users: map })); });
         const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, shifts: map })); });
         const unsubSigs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, signatures: list })); });
+        const unsubReqs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, requests: list })); });
+        const unsubEvents = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, events: list })); });
         const unsubGas = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, gasReceipts: map })); });
         const unsubLoc = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => setDbData(prev => ({ ...prev, storeLocation: snap.data() })));
-        
-        // 🟢 關鍵：監聽雲端庫存品項設定
         const unsubInv = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), (snap) => {
-            if (snap.exists() && snap.data().items) setDbData(prev => ({ ...prev, inventoryItems: snap.data().items }));
+            setDbData(prev => ({ ...prev, inventoryItems: snap.exists() && snap.data().items ? snap.data().items : DEFAULT_INVENTORY_ITEMS }));
         });
-        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubGas(); unsubLoc(); unsubInv(); };
+        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); };
     }, [user]);
     const isSuperAdmin = currentUserInfo?.isAdmin === true;
+    const canApproveLeaveRequests = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true;
     const hasSignedContract = dbData.signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isSuperAdmin && !hasSignedContract;
 // 🟢 手術二：處理核准的「大腦」邏輯
 // 🟢 請貼在這裡 (handleRequest 的上方)
 const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
     const handleRequest = async (req, action) => {
+        if (!canApproveLeaveRequests) return alert("您沒有審核權限");
+        const requestRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id);
         const targetUser = dbData.users[req.uid || req.fromUid]; 
         if (action === 'reject') {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 您的申請已被駁回。`);
+            await deleteDoc(requestRef);
+            if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `❌ 您於 ${req.date} 送出的${req.leaveLabel || '申請'}未通過審核。`);
+            alert("✅ 已駁回申請，並通知員工。");
             return;
         }
-        // 🌴 處理特休/請假簽核
         if (req.type === 'leave_request') {
             const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
             const shiftSnap = await getDoc(shiftRef);
-            let dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
-            let assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            
+            const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+            const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
             const idx = assigns.findIndex(a => a.uid === req.uid);
-            // 格式必須與班表 LEAVE 結構一致
             const leaveEntry = { 
                 uid: req.uid, 
                 type: 'LEAVE', 
                 leaveType: req.leaveType, 
                 leaveHours: 8, 
+                subUid: req.subUid || null,
                 timestamp: Date.now() 
             };
-            
-            if(idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
-            
+            if (idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
             await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            // 🔔 補強：核准後通知員工 LINE
-            if (targetUser?.lineUserId) {
-                await sendLineNotification(
-                    [targetUser.lineUserId], 
-                    `✅ 您的 ${req.leaveLabel} 申請 (${req.date}) 已核准！\n班表已自動更新，祝您有美好的一天！`
-                );
-            }
-            alert("✅ 假單已核准並通知員工！");
-            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `✅ 您的 ${req.leaveLabel} 申請已核准！`);
-            alert("✅ 假單已核准並自動寫入班表！");
+            await deleteDoc(requestRef);
+            if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。`);
+            alert("✅ 假單已核准，班表已更新，並已通知員工。");
         }
     };
     
     // 🔔 計算主管需要看到的通知數量
     const myNotifications = dbData.requests?.filter(r => 
-        (r.type === 'leave_request' && isSuperAdmin) || 
-        (r.type === 'admin_ot_approve' && isSuperAdmin)
+        (r.type === 'leave_request' && canApproveLeaveRequests) || 
+        (r.type === 'admin_ot_approve' && canApproveLeaveRequests)
     ) || [];
     const renderView = () => {
         // 如果還沒簽約，強制跳轉到表單頁
         if (isLocked && view !== 'forms') {
-            return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+            return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
         }
         switch (view) {
             case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} />;
-            case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+            case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
             case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
             case 'payroll': return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
             case 'attendance': return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
