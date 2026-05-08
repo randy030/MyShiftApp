@@ -11,7 +11,7 @@ import {
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
 
-const CURRENT_VERSION = "v9.2 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v11 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 
@@ -1617,29 +1617,64 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
 // ==========================================
 // 🌟 系統主程式 (Main App) - V10.0 完整核心
 // ==========================================
-function App() {
-    const [user, setUser] = useState(null);
-    const [currentUserInfo, setCurrentUserInfo] = useState(null);
-    const [dbData, setDbData] = useState({ 
-        users: {}, shifts: {}, events: [], requests: [], signatures: [], 
-        gasReceipts: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS 
-    });
-    const [view, setView] = useState('calendar');
+const App = () => {
     const [loading, setLoading] = useState(true);
+    const [user, setUser] = useState(null);
+    const [view, setView] = useState('calendar');
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
+    const [dbData, setDbData] = useState({
+        users: {},
+        shifts: {},
+        signatures: [],
+        gasReceipts: {},
+        storeLocation: null,
+        inventoryItems: DEFAULT_INVENTORY_ITEMS,
+        leaveTypes: DEFAULT_LEAVE_TYPES,
+        shiftTypes: DEFAULT_SHIFT_TYPES,
+        requests: [],
+        events: [],
+        leaves: [],
+        shiftsDef: DEFAULT_SHIFT_TYPES,
+    });
 
-    useEffect(() => {
+    const isPrivileged = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true;
+    const isReadOnly = currentUserInfo?.role === 'observer';
+    const myNotifications = [];
+
+    const renderView = () => {
+        if (loading) return <div className="p-8 text-center text-gray-400">載入中...</div>;
+        switch (view) {
+            case 'calendar':
+                return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />;
+            case 'clock':
+                return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation || {}} db={db} appId={appId} />;
+            case 'attendance':
+                return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts || {}} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} />;
+            case 'salary':
+                return <SalaryView users={dbData.users || {}} shifts={dbData.shifts || {}} currentDate={currentDate} leaveTypes={dbData.leaveTypes || DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} gasReceipts={dbData.gasReceipts || {}} db={db} appId={appId} />;
+            case 'payroll':
+                return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts || {}} />;
+            case 'forms':
+                return <FormsView users={dbData.users || {}} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={dbData.signatures || []} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+            case 'settings':
+                return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || DEFAULT_INVENTORY_ITEMS} appId={appId} storeConfig={dbData.storeLocation || {}} db={db} isSuperAdmin={isSuperAdmin} />;
+            case 'inbox':
+                return <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 font-bold">通知中心功能尚未補回，已先保留入口。</div>;
+            default:
+                return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />;
+        }
+    };
+useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
+            setUser(u);
             if (u) {
-                setUser(u);
                 const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.uid));
                 if (!userDoc.exists()) {
-                    const initial = { uid: u.uid, name: u.displayName || '新員工', email: u.email, isAdmin: u.email === ADMIN_EMAIL, isManager: false, isResigned: false, startDate: '' };
+                    const initial = { uid: u.uid, name: u.displayName || '新員工', role: 'employee', isAdmin: false };
                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.uid), initial);
-                    setCurrentUserInfo(initial);
-                } else { setCurrentUserInfo(userDoc.data()); }
-            } else { setUser(null); setCurrentUserInfo(null); }
+                }
+            }
             setLoading(false);
         });
         return () => unsubAuth();
@@ -1661,231 +1696,97 @@ function App() {
         return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubGas(); unsubLoc(); unsubInv(); };
     }, [user]);
 
-    // 1. 讓 currentUserInfo 與雲端資料即時同步
+    // 🧠 1. 核心邏輯：讓資料即時連動，解決員工無法簽名、沒反應的問題
     const currentUserInfo = useMemo(() => {
         return (user && dbData.users) ? dbData.users[user.uid] : null;
     }, [user, dbData.users]);
 
-    // 2. 判斷權限（老闆或設為 isAdmin 的主管）
     const isSuperAdmin = currentUserInfo?.role === 'boss' || currentUserInfo?.isAdmin === true;
 
-    // 3. 判斷是否已經完成合約簽署
     const hasSignedContract = useMemo(() => {
         return dbData.signatures?.some(s => s.uid === user?.uid) || false;
     }, [user, dbData.signatures]);
 
-    // 4. 關鍵鎖定邏輯：若沒設薪資、沒設日期，或是還沒簽約，且不是老闆，就鎖定
     const isLocked = useMemo(() => {
         if (!currentUserInfo || isSuperAdmin) return false;
-        
         const infoNotSet = !currentUserInfo.salaryAmount || !currentUserInfo.contractStart;
         return infoNotSet || !hasSignedContract;
     }, [currentUserInfo, isSuperAdmin, hasSignedContract]);
-// 🟢 手術二：處理核准的「大腦」邏輯
-// 🟢 請貼在這裡 (handleRequest 的上方)
-const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
-    const handleRequest = async (req, action) => {
-        const targetUser = dbData.users[req.uid || req.fromUid]; 
-        if (action === 'reject') {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 您的申請已被駁回。`);
-            return;
-        }
 
-        // 🌴 處理特休/請假簽核
-        if (req.type === 'leave_request') {
-            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
-            const shiftSnap = await getDoc(shiftRef);
-            let dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
-            let assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            
-            const idx = assigns.findIndex(a => a.uid === req.uid);
-            // 格式必須與班表 LEAVE 結構一致
-            const leaveEntry = { 
-                uid: req.uid, 
-                type: 'LEAVE', 
-                leaveType: req.leaveType, 
-                leaveHours: 8, 
-                timestamp: Date.now() 
-            };
-            
-            if(idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
-            
-            await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
-            // 🔔 補強：核准後通知員工 LINE
-            if (targetUser?.lineUserId) {
-                await sendLineNotification(
-                    [targetUser.lineUserId], 
-                    `✅ 您的 ${req.leaveLabel} 申請 (${req.date}) 已核准！\n班表已自動更新，祝您有美好的一天！`
-                );
-            }
-            alert("✅ 假單已核准並通知員工！");
-            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `✅ 您的 ${req.leaveLabel} 申請已核准！`);
-            alert("✅ 假單已核准並自動寫入班表！");
-        }
-    };
-    
-    // 🔔 計算主管需要看到的通知數量
-    const myNotifications = dbData.requests?.filter(r => 
-        (r.type === 'leave_request' && isSuperAdmin) || 
-        (r.type === 'admin_ot_approve' && isSuperAdmin)
-    ) || [];
-    const renderView = () => {
-        // 如果還沒簽約，強制跳轉到表單頁
-        if (isLocked && view !== 'forms') {
-            return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
-        }
+    const needsSetupCount = Object.values(dbData.users || {}).filter(u => 
+        !u.isResigned && (!u.salaryAmount || !u.contractStart)
+    ).length;
 
-        switch (view) {
-            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
-            case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
-            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} />;
-            case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
-            case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
-            case 'payroll': return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
-            case 'attendance': return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
-            
-            // 🟢 修正：只保留一個 settings，並加上空值保護
-            case 'settings': return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || []} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
-            
-            case 'inbox': return (
-                <div className="max-w-md mx-auto space-y-4">
-                    <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex items-center gap-3">
-                        <Bell className="text-indigo-600"/><h2 className="font-black text-xl">通知中心</h2>
-                    </div>
-                    {/* 🟢 修正：確保 myNotifications 存在 */}
-                    {(!myNotifications || myNotifications.length === 0) ? (
-                        <div className="text-center py-20 text-gray-300 font-bold uppercase tracking-widest">No Notifications</div>
-                    ) : (
-                        myNotifications.map(req => (
-                            <div key={req.id} className="bg-white p-6 rounded-[2rem] border border-l-8 border-l-indigo-500 shadow-xl animate-scale-in">
-                                <h3 className="font-black text-gray-800">{req.type === 'leave_request' ? '🌴 請假申請' : '單據審核'}</h3>
-                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{dbData.users?.[req.uid]?.name || '未知員工'} | 日期：{req.date}</p>
-                                <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700">
-                                    {req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}
-                                </div>
-                                <div className="flex gap-3">
-                                    <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-400 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">駁回</button>
-                                    <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">核准</button>
-                                </div>
-                            </div>
-                        ))
-                    )}
-                </div>
-            );
-            default: return null;
-        }
-    };
-
-    if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
-    // 🟠 1. TEATOP 台中東山店：最終純淨版大門 (已移除 T 與小字，修復點擊)
+    // 🟠 2. TEATOP 歡迎大門：已移除 T Logo、移除多餘文字、修復點擊
     if (!user) return (
-        <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
-            {/* 背景裝飾 */}
+        <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 relative overflow-hidden">
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50 pointer-events-none"></div>
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40 pointer-events-none"></div>
 
-            <div className="w-full max-w-md space-y-12 text-center relative z-10">
+            <div className="w-full max-w-md space-y-12 text-center relative z-50">
                 <div className="flex flex-col items-center gap-3">
                     <h1 className="font-black text-6xl text-[#F26F21] tracking-tighter">TEATOP</h1>
                     <h2 className="font-extrabold text-4xl text-gray-800 tracking-tight mt-2">台中東山店</h2>
                 </div>
 
                 <div className="bg-white/80 backdrop-blur-sm border border-gray-100 p-10 rounded-[3rem] shadow-2xl shadow-orange-200/50">
-                    <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]">
-                        <Fingerprint size={32} />
-                        <h3 className="font-black text-2xl text-gray-800">身分驗證</h3>
-                    </div>
-                    
-                    {/* 🟢 修復後的按鈕：加上 cursor-pointer 與 z-50 確保可點擊 */}
+                    <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]"><Fingerprint size={32} /><h3 className="font-black text-2xl text-gray-800">身分驗證</h3></div>
                     <button 
                         onClick={() => signInWithPopup(auth, provider)} 
-                        className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 shadow-xl shadow-gray-100/50 transition-all duration-300 active:scale-95 cursor-pointer relative z-50"
+                        className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] shadow-xl transition-all active:scale-95 cursor-pointer relative z-50"
                     >
-                        <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
-                        <span className="text-xl">使用 Google 帳號登入</span>
+                        <img src="https://auth.firebase.com/v2/images/google_logo.svg" className="w-6 h-6" /><span className="text-xl">使用 Google 帳號登入</span>
                     </button>
-                    
-                    <p className="text-[11px] font-bold text-gray-400 mt-10 leading-relaxed">
-                        請使用東山店內部授權帳號登入系統<br/>
-                        若無法登入請聯繫管理人員
-                    </p>
+                    <p className="text-[11px] font-bold text-gray-400 mt-10 leading-relaxed">請使用東山店授權帳號登入<br/>若無法登入請聯繫管理人員</p>
                 </div>
-            </div>
-
-            <div className="absolute bottom-8 text-center text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">
-                TEATOP DONGSHAN © 2026
             </div>
         </div>
     );
 
-    // 🔵 2. 主要系統架構 (地雷字元全面清除)
+    // 🔵 3. 主要系統架構
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
                 <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-[#F26F21] rounded-2xl flex items-center justify-center shadow-lg shadow-orange-100">
-                            <Calendar className="text-white" size={20} />
-                        </div>
+                        <div className="w-10 h-10 bg-[#F26F21] rounded-2xl flex items-center justify-center shadow-lg shadow-orange-100"><Calendar className="text-white" size={20} /></div>
                         <h1 className="font-black text-xl text-gray-800 hidden xs:block tracking-tight">TEATOP 東山店</h1>
                     </div>
-
                     <nav className="flex items-center gap-2">
                         <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
                         <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
-                        
                         <div className="relative">
-                            <button 
-                                onClick={() => setMenuOpen(!menuOpen)} 
-                                className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs relative transition-all ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-100':'text-gray-400 hover:bg-gray-100'}`}
-                            >
-                                <Settings size={16}/>
-                                <ChevronDown size={14}/>
-                                {needsSetupCount > 0 && isSuperAdmin && (
-                                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></span>
-                                )}
+                            <button onClick={() => setMenuOpen(!menuOpen)} className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs relative transition-all ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-100':'text-gray-400 hover:bg-gray-100'}`}>
+                                <Settings size={16}/><ChevronDown size={14}/>
+                                {needsSetupCount > 0 && isSuperAdmin && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></span>}
                             </button>
-
                             {menuOpen && (
-                                <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
-                                    {isSuperAdmin && <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
-                                    {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
-                                    <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
+                                <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50">
+                                    {isSuperAdmin && <DropdownItem onClick={()=>{setView('salary');setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
+                                    {isSuperAdmin && <DropdownItem onClick={()=>{setView('attendance');setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
+                                    <DropdownItem onClick={()=>{setView('forms');setMenuOpen(false)}} icon={FileText} label="表單簽署" />
                                     <div className="border-t my-2 border-gray-50"></div>
-                                    <DropdownItem onClick={() => {setView('settings'); setMenuOpen(false)}} icon={Settings} label="系統設定" />
+                                    <DropdownItem onClick={()=>{setView('settings');setMenuOpen(false)}} icon={Settings} label="系統設定" />
                                     <button onClick={() => signOut(auth)} className="w-full text-left px-6 py-3 text-red-500 text-xs font-black hover:bg-red-50">登出系統</button>
                                 </div>
                             )}
                         </div>
-
-                        <button 
-                            onClick={() => setView('inbox')} 
-                            className={`p-2.5 relative rounded-xl transition-all ${view === 'inbox' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-100'}`}
-                        >
-                            <Bell size={20} />
-                            {myNotifications.length > 0 && (
-                                <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>
-                            )}
+                        <button onClick={() => setView('inbox')} className={`p-2.5 relative rounded-xl ${view === 'inbox' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-100'}`}>
+                            <Bell size={20} />{myNotifications.length > 0 && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>}
                         </button>
                     </nav>
                 </div>
             </header>
 
-            <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">
-                {renderView()}
-            </main>
+            <main className="flex-1 p-6 max-w-7xl mx-auto w-full">{renderView()}</main>
 
             {isLocked && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
-                    <Lock size={16}/> 
-                    {/* 🟢 安全寫法：用 → 取代 > */}
-                    <span>請點擊「管理 → 系統設定」完成員工合約！</span>
+                    <Lock size={16}/><span>請點擊「管理 → 系統設定」完成員工合約！</span>
                 </div>
             )}
         </div>
     );
-}
+} // <--- 關閉 App 函數
 
 export { App as default };
