@@ -7,7 +7,8 @@ import {
     BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, 
     FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, 
     Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Map, Package, 
-    Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, FileSearch, Fuel, CreditCard, AlertTriangle
+    Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
+    FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
 
 const CURRENT_VERSION = "v9.2 (Master Integration Edition)"; 
@@ -1482,16 +1483,14 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
 // ==========================================
 // ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
 // ==========================================
-const SettingsView = ({ users, currentUserInfo, inventoryItems, appId, storeConfig, db, isSuperAdmin }) => {
+const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
-  // 🟢 離職人員顯示開關
   const [showResigned, setShowResigned] = useState(false);
   
-  const [newItem, setNewItem] = useState({ category: '茶葉類', name: '', spec: '', price: '' });
-
-  // 判斷哪些員工需要設定 (新加入的人)
-  const pendingUsersCount = Object.values(users).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
+  // 🟢 安全計數：加上 ?. 與 || [] 防止白屏
+  const userList = Object.values(users || {});
+  const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
 
   const saveUser = async () => { 
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
@@ -1501,17 +1500,14 @@ const SettingsView = ({ users, currentUserInfo, inventoryItems, appId, storeConf
       setEditingId(null); alert("✅ 員工資料已更新！");
   };
 
-  // ... (handleAddInventory 與 handleDeleteInventory 邏輯維持不變) ...
-
   return (
     <div className="space-y-8 pb-20 max-w-4xl mx-auto animate-fade-in">
       {/* 💳 頂部個人卡片 */}
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
-        <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo.name}</h2>
+        <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '使用者'}</h2>
         <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">System Controller</p>
         
-        {/* 🟢 新進人員警告橫幅 (僅限管理員看見) */}
         {isSuperAdmin && pendingUsersCount > 0 && (
           <div className="mt-4 bg-red-50 border border-red-100 text-red-600 py-2 px-4 rounded-2xl text-xs font-black animate-pulse">
             ⚠️ 偵測到 {pendingUsersCount} 位新進員工尚未設定薪資與合約！
@@ -1519,15 +1515,12 @@ const SettingsView = ({ users, currentUserInfo, inventoryItems, appId, storeConf
         )}
       </div>
 
-      {/* 📦 庫存品項管理區 (略，維持原樣) */}
-
       {/* 👥 員工資料管理區 */}
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
           <div className="flex justify-between items-center mb-8">
               <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
                 <Users className="text-indigo-600" size={24}/> 員工檔案與合約管理
               </h3>
-              {/* 🟢 離職人員顯示開關按鈕 */}
               <button 
                 onClick={() => setShowResigned(!showResigned)}
                 className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
@@ -1537,40 +1530,45 @@ const SettingsView = ({ users, currentUserInfo, inventoryItems, appId, storeConf
           </div>
           
           <div className="grid gap-4">
-            {Object.values(users)
-              .filter(u => showResigned ? true : !u.isResigned) // 🟢 套用過濾邏輯
-              .sort((a, b) => (a.isResigned === b.isResigned ? 0 : a.isResigned ? 1 : -1)) // 離職排後面
+            {userList
+              .filter(u => showResigned ? true : !u?.isResigned)
+              .sort((a, b) => (a?.isResigned === b?.isResigned ? 0 : a?.isResigned ? 1 : -1))
               .map(u => {
-                const needsSetup = !u.salaryAmount || !u.contractStart;
+                const needsSetup = !u?.salaryAmount || !u?.contractStart;
+                const userName = u?.name || '未命名員工';
                 return (
-                  <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50/50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
+                  <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u?.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50/50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
                     {editingId === u.uid ? (
-                      <div className="space-y-4 animate-scale-in">
-                        {/* ... (編輯表單維持原本內容) ... */}
+                      <div className="space-y-4">
+                        {/* 這裡放您原本的編輯欄位 */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-[10px] font-bold text-gray-400 ml-2">到職日期</label><input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold mt-1 shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+                            <div><label className="text-[10px] font-bold text-gray-400 ml-2">本薪設定</label><input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold mt-1 shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+                        </div>
                         <div className="flex gap-3 justify-end pt-2">
-                            <button onClick={()=>setEditingId(null)} className="px-6 py-2 font-black text-gray-400">取消</button>
-                            <button onClick={saveUser} className="bg-indigo-600 text-white px-10 py-3 rounded-2xl font-black shadow-lg">更新檔案</button>
+                            <button onClick={()=>setEditingId(null)} className="px-6 py-2 font-black text-gray-400 text-xs">取消</button>
+                            <button onClick={saveUser} className="bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-xs shadow-lg">更新資料</button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-4">
-                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black shadow-sm border ${u.isResigned ? 'bg-gray-200 text-gray-400' : needsSetup ? 'bg-red-100 text-red-600 animate-pulse border-red-200' : 'bg-white text-indigo-600 border-gray-50'}`}>
-                                {u.name.slice(0,1)}
+                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black shadow-sm border ${u?.isResigned ? 'bg-gray-200 text-gray-400' : needsSetup ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-white text-indigo-600'}`}>
+                                {userName.slice(0,1)}
                             </div>
                             <div>
                                 <div className="font-black text-gray-800 text-lg flex items-center gap-2">
-                                  {u.name}
-                                  {u.isResigned && <span className="text-[9px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full uppercase">已離職</span>}
-                                  {!u.isResigned && needsSetup && <span className="text-[9px] bg-red-500 text-white px-2 py-0.5 rounded-full uppercase animate-bounce">待設定</span>}
+                                  {userName}
+                                  {u?.isResigned && <span className="text-[9px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full">已離職</span>}
+                                  {!u?.isResigned && needsSetup && <span className="text-[9px] bg-red-500 text-white px-2 py-0.5 rounded-full animate-bounce">待設定</span>}
                                 </div>
-                                <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
-                                  {u.isResigned ? '已於系統封存' : `Salary: ${u.salaryAmount ? '$'+u.salaryAmount : '未設定'} | Start: ${u.startDate || '未設定'}`}
+                                <div className="text-[10px] text-gray-400 font-bold tracking-widest uppercase">
+                                  {u?.isResigned ? '已封存' : `Salary: ${u?.salaryAmount ? '$'+u.salaryAmount : '未設定'}`}
                                 </div>
                             </div>
                         </div>
-                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-indigo-50 px-6 py-2.5 rounded-2xl text-xs font-black text-indigo-600 shadow-sm group-hover:bg-indigo-600 group-hover:text-white transition-all">
-                            {u.isResigned ? '編輯封存資料' : '編輯參數'}
+                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border px-6 py-2.5 rounded-2xl text-xs font-black text-indigo-600">
+                            編輯
                         </button>
                       </div>
                     )}
@@ -1683,32 +1681,36 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         (r.type === 'admin_ot_approve' && isSuperAdmin)
     ) || [];
     const renderView = () => {
-        if (isLocked && view !== 'forms') return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+        // 如果還沒簽約，強制跳轉到表單頁
+        if (isLocked && view !== 'forms') {
+            return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+        }
+
         switch (view) {
             case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} />;
-            case 'forms': return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+            case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
             case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
-            case 'payroll': return <PayrollView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
-            case 'attendance': return <AttendanceView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
-            case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
-            // 🟢 在 settings 下方補上 inbox 分支
-            case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            case 'payroll': return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
+            case 'attendance': return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
             
-            // 🌴 這是手術三：通知中心 (收件匣)
+            // 🟢 修正：只保留一個 settings，並加上空值保護
+            case 'settings': return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || []} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            
             case 'inbox': return (
                 <div className="max-w-md mx-auto space-y-4">
                     <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex items-center gap-3">
                         <Bell className="text-indigo-600"/><h2 className="font-black text-xl">通知中心</h2>
                     </div>
-                    {myNotifications.length === 0 ? (
+                    {/* 🟢 修正：確保 myNotifications 存在 */}
+                    {(!myNotifications || myNotifications.length === 0) ? (
                         <div className="text-center py-20 text-gray-300 font-bold uppercase tracking-widest">No Notifications</div>
                     ) : (
                         myNotifications.map(req => (
                             <div key={req.id} className="bg-white p-6 rounded-[2rem] border border-l-8 border-l-indigo-500 shadow-xl animate-scale-in">
                                 <h3 className="font-black text-gray-800">{req.type === 'leave_request' ? '🌴 請假申請' : '單據審核'}</h3>
-                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{dbData.users[req.uid]?.name} | 日期：{req.date}</p>
+                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{dbData.users?.[req.uid]?.name || '未知員工'} | 日期：{req.date}</p>
                                 <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700">
                                     {req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}
                                 </div>
@@ -1721,7 +1723,6 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                     )}
                 </div>
             );
-
             default: return null;
         }
     };
