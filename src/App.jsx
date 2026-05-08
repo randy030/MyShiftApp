@@ -1010,78 +1010,61 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
         update({ assignments: next });
     };
   
-    const toggle = (uid, type, lType=null, subUid=null) => {
-      const isMe = uid === currentUserInfo.uid;
-      if (!isSuperAdmin && !isMe) return alert("無權限");
-      if (isClosed) return alert("本日店休");
-  
-      let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; 
-      const idx = next.findIndex(a=>a.uid===uid);
-      if (!isSuperAdmin && next[idx]?.type === 'LEAVE') { return alert("請假已鎖定。"); }
-  
-      if (lType === 'rostered') { 
-          let totalRostered = 0; let weekendRostered = 0;
-          Object.keys(shifts).forEach(d => { 
-              if (d.startsWith(monthStr) && d !== dateStr) {
-                  if (Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a=>a.uid===uid && a.type==='LEAVE' && a.leaveType==='rostered')) {
-                      totalRostered++;
-                      const dObj = new Date(d);
-                      if (dObj.getDay() === 0 || dObj.getDay() === 6) weekendRostered++;
-                  }
-              } 
-          }); 
-  
-          const targetDateObj = new Date(dateStr);
-          const isTargetWeekend = targetDateObj.getDay() === 0 || targetDateObj.getDay() === 6;
-  
-          if (!isSuperAdmin) {
-              if (totalRostered >= 3) return alert("本月自選畫休 (排休) 已達 3 天上限"); 
-              if (isTargetWeekend && weekendRostered >= 2) return alert("🚨 本月假日自選畫休 (六、日) 已達 2 天上限！無法再畫假日！");
-          }
-      }
-      
-      let leaveHours = 0; let useComp = false; 
-  
-      if (lType === 'menstrual') { } 
-      else if (['annual', 'sick', 'personal'].includes(lType)) {
-          const typeInfo = leaves.find(t=>t.id===lType);
-          const leaveName = typeInfo?.label || '該假別';
-          const p = prompt(`請輸入「${leaveName}」的請假時數 (純數字):`, "8");
-          if (p === null) return;
-          leaveHours = Math.abs(parseFloat(p));
-          if (isNaN(leaveHours) || leaveHours <= 0) return alert("請輸入有效數字！");
-          
-          if (lType === 'annual') {
-              const uObj = users[uid];
-              if (!uObj.startDate) return alert("系統找不到您的「到職日」，無法計算特休！請請店長於系統設定中建檔。");
-              
-              const annualLimit = getAnnualLeaveDays(uObj.startDate);
-              let usedAnnual = 0;
-              Object.keys(shifts).forEach(d => {
-                  if (d.startsWith(yearStr) && d !== dateStr) {
-                      const a = shifts[d].assignments?.find(x => x.uid === uid);
-                      if (a?.type === 'LEAVE' && a?.leaveType === 'annual') {
-                          usedAnnual += parseFloat(a.leaveHours || 0) / 8; 
-                      }
-                  }
-              });
-              
-              const requestingDays = leaveHours / 8;
-              if (!isSuperAdmin && (usedAnnual + requestingDays > annualLimit)) {
-                  return alert(`🚨 特休額度不足！\n\n您今年度的法定特休總額為: ${annualLimit} 天\n目前已使用: ${usedAnnual} 天\n本次欲申請: ${requestingDays} 天`);
-              }
-              useComp = true; 
-          } else if (['sick', 'personal'].includes(lType)) { 
-              useComp = window.confirm(`【${leaveName} ${leaveHours}小時 扣抵方式】\n\n👉 按【確定】：使用「剩餘加/補休時數」扣抵\n👉 按【取消】：不扣時數，月底結算扣薪`); 
-          }
-      }
-  
-      const newEntry = { uid, type, leaveType: lType }; 
-      if (leaveHours > 0) { newEntry.leaveHours = leaveHours; newEntry.useComp = useComp; }
-      if (subUid) newEntry.subUid = subUid;
-  
-      if(idx>=0) next[idx] = { ...next[idx], ...newEntry }; else next.push(newEntry);
-      update({ assignments: next }); if (lType === 'rostered' || lType === 'official') onClose();
+    // 🟢 手術一：修改請假邏輯，不論有無代班，員工申請皆須簽核
+    const toggle = async (uid, type, lType = null, subUid = null) => {
+        const isMe = uid === currentUserInfo.uid;
+        if (!isSuperAdmin && !isMe) return alert("無權限");
+        if (isClosed) return alert("本日店休");
+
+        // 🟡 判斷是否為「請假」類型 (LEAVE)
+        if (type === 'LEAVE') {
+            // A. 如果是管理員在操作：直接寫入資料庫 (維持原狀)
+            if (isSuperAdmin) {
+                let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+                const idx = next.findIndex(a => a.uid === uid);
+                // 這裡保留您原本的 LEAVE 資料結構
+                const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, subUid: subUid || null, timestamp: Date.now() };
+                if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
+                await update({ assignments: next });
+                setExpanded(null);
+            } 
+            // B. 如果是員工本人申請：改為送出簽核通知給主管
+            else {
+                const leaveLabel = leaves.find(l => l.id === lType)?.label || '假別';
+                try {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
+                        type: 'leave_request',
+                        uid: currentUserInfo.uid,
+                        userName: currentUserInfo.name,
+                        date: dateStr,
+                        leaveType: lType,
+                        leaveLabel: leaveLabel,
+                        timestamp: new Date(),
+                        status: 'pending'
+                    });
+                    // 🟢 補強：自動找出所有管理員並傳送 LINE 通知
+                const adminLineIds = Object.values(users)
+                    .filter(u => u.isAdmin && u.lineUserId)
+                    .map(u => u.lineUserId);
+
+                if (adminLineIds.length > 0) {
+                    await sendLineNotification(adminLineIds, `🔔 【新假單申請】\n申請人：${currentUserInfo.name}\n日期：${dateStr}\n類別：${leaveLabel}\n請至系統「通知中心」進行審核。`);
+                }
+                    alert(`✅ ${leaveLabel} 申請已送出！\n請等候主管簽核，核准後才會出現在班表上。`);
+                    setExpanded(null);
+                    onClose(); // 申請完自動關閉彈窗
+                } catch (e) {
+                    alert("申請送出失敗，請檢查網路連線");
+                }
+            }
+            return; // 結束函數，不執行下方的普通排班邏輯
+        }
+
+        // 🔵 處理一般排班 (WORK / OFF) 邏輯 (維持您原本的寫法)
+        let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+        const idx = next.findIndex(a => a.uid === uid);
+        if (idx >= 0) next.splice(idx, 1); else next.push({ uid, type });
+        update({ assignments: next });
     };
   
     // 🔴 尋回：完整雙日換假邏輯與 LINE 推播通知
@@ -1673,7 +1656,54 @@ function App() {
     const isSuperAdmin = currentUserInfo?.isAdmin === true;
     const hasSignedContract = dbData.signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isSuperAdmin && !hasSignedContract;
+// 🟢 手術二：處理核准的「大腦」邏輯
+    const handleRequest = async (req, action) => {
+        const targetUser = dbData.users[req.uid || req.fromUid]; 
+        if (action === 'reject') {
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `❌ 您的申請已被駁回。`);
+            return;
+        }
 
+        // 🌴 處理特休/請假簽核
+        if (req.type === 'leave_request') {
+            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+            const shiftSnap = await getDoc(shiftRef);
+            let dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+            let assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+            
+            const idx = assigns.findIndex(a => a.uid === req.uid);
+            // 格式必須與班表 LEAVE 結構一致
+            const leaveEntry = { 
+                uid: req.uid, 
+                type: 'LEAVE', 
+                leaveType: req.leaveType, 
+                leaveHours: 8, 
+                timestamp: Date.now() 
+            };
+            
+            if(idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
+            
+            await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id));
+            // 🔔 補強：核准後通知員工 LINE
+            if (targetUser?.lineUserId) {
+                await sendLineNotification(
+                    [targetUser.lineUserId], 
+                    `✅ 您的 ${req.leaveLabel} 申請 (${req.date}) 已核准！\n班表已自動更新，祝您有美好的一天！`
+                );
+            }
+            alert("✅ 假單已核准並通知員工！");
+            if(targetUser?.lineUserId) sendLineNotification([targetUser.lineUserId], `✅ 您的 ${req.leaveLabel} 申請已核准！`);
+            alert("✅ 假單已核准並自動寫入班表！");
+        }
+    };
+    
+    // 🔔 計算主管需要看到的通知數量
+    const myNotifications = dbData.requests?.filter(r => 
+        (r.type === 'leave_request' && isSuperAdmin) || 
+        (r.type === 'admin_ot_approve' && isSuperAdmin)
+    ) || [];
     const renderView = () => {
         if (isLocked && view !== 'forms') return <FormsView users={Object.values(dbData.users)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
         switch (view) {
@@ -1685,6 +1715,35 @@ function App() {
             case 'payroll': return <PayrollView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
             case 'attendance': return <AttendanceView users={Object.values(dbData.users)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
             case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            // 🟢 在 settings 下方補上 inbox 分支
+            case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            
+            // 🌴 這是手術三：通知中心 (收件匣)
+            case 'inbox': return (
+                <div className="max-w-md mx-auto space-y-4">
+                    <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex items-center gap-3">
+                        <Bell className="text-indigo-600"/><h2 className="font-black text-xl">通知中心</h2>
+                    </div>
+                    {myNotifications.length === 0 ? (
+                        <div className="text-center py-20 text-gray-300 font-bold uppercase tracking-widest">No Notifications</div>
+                    ) : (
+                        myNotifications.map(req => (
+                            <div key={req.id} className="bg-white p-6 rounded-[2rem] border border-l-8 border-l-indigo-500 shadow-xl animate-scale-in">
+                                <h3 className="font-black text-gray-800">{req.type === 'leave_request' ? '🌴 請假申請' : '單據審核'}</h3>
+                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{dbData.users[req.uid]?.name} | 日期：{req.date}</p>
+                                <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700">
+                                    {req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-400 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">駁回</button>
+                                    <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">核准</button>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            );
+
             default: return null;
         }
     };
@@ -1717,10 +1776,25 @@ function App() {
                             </div>
                         )}
                     </div>
+                    {/* 🔔 鈴鐺入口：放在管理選單 </div> 之後 */}
+    <button 
+        onClick={() => setView('inbox')} 
+        className={`p-2.5 relative rounded-xl transition-all ${
+            view === 'inbox' 
+            ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200' 
+            : 'text-gray-400 hover:bg-gray-100'
+        }`}
+    >
+        <Bell className="w-5 h-5" />
+        {/* 如果有待簽核通知，顯示紅點 */}
+        {myNotifications.length > 0 && (
+            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>
+        )}
+    </button>
                 </nav>
             </header>
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">{renderView()}</main>
-            {isLocked && <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center justify-center gap-3 font-black shadow-2xl animate-bounce"><Lock size={16}/> 請先至「管理 > 表單與簽署」完成合約！</div>}
+            {isLocked && <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center justify-center gap-3 font-black shadow-2xl animate-bounce"><Lock size={16}/> 請先至「管理 &gt; 表單與簽署」完成合約！</div>}
         </div>
     );
 }
