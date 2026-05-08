@@ -1761,58 +1761,48 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
     };
 
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
-    // 🟠 當使用者尚未登入時顯示的歡迎介面 (已移除 Logo 且修復登入)
+    // 🟠 1. TEATOP 台中東山店：純淨版登入大門
     if (!user) return (
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
-            
-            {/* 🍃 背景裝飾氣泡 (仿珍珠/茶滴，使用輕柔的橘色) */}
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50"></div>
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40"></div>
 
             <div className="w-full max-w-md space-y-12 text-center relative z-10">
-                
-                {/* 🍊 TEATOP 店名區塊 (🟢 已移除原本的大大的 T Logo) */}
                 <div className="flex flex-col items-center gap-3">
                     <div className="mt-4">
-                        <h1 className="font-black text-5xl text-[#F26F21] tracking-tighter">TEATOP</h1>
-                        <h2 className="font-extrabold text-3xl text-gray-800 tracking-tight mt-1">台中東山店</h2>
-                        <div className="bg-white border border-gray-100 text-gray-400 font-bold text-[10px] px-4 py-1.5 rounded-full mt-4 shadow-inner uppercase tracking-widest inline-block">
-                            Staff Management System
-                        </div>
+                        <h1 className="font-black text-6xl text-[#F26F21] tracking-tighter">TEATOP</h1>
+                        <h2 className="font-extrabold text-4xl text-gray-800 tracking-tight mt-2">台中東山店</h2>
                     </div>
                 </div>
 
-                {/* 💳 登入卡片：使用圓潤的 TEATOP 風格 */}
-                <div className="bg-white border border-gray-100 p-10 rounded-[2.5rem] shadow-2xl shadow-orange-100 animate-slide-up">
+                <div className="bg-white/80 backdrop-blur-sm border border-gray-100 p-10 rounded-[3rem] shadow-2xl shadow-orange-200/50 animate-slide-up">
                     <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]">
-                        <Fingerprint size={28} />
+                        <Fingerprint size={32} />
                         <h3 className="font-black text-2xl text-gray-800">身分驗證</h3>
                     </div>
                     
-                    {/* 🟢 修復：將按鈕還原為原本包含 Logo 且能運作的版本 */}
                     <button 
                         onClick={() => signInWithPopup(auth, provider)} 
-                        className="w-full flex items-center justify-center gap-4 bg-gray-50 text-gray-700 font-black px-8 py-5 rounded-2xl shadow-inner border border-gray-100 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 hover:shadow-md transition-all duration-300"
+                        className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 shadow-xl shadow-gray-100/50 transition-all duration-300 active:scale-95"
                     >
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
-                        <span className="text-lg">使用 Google 帳號登入</span>
+                        <span className="text-xl">使用 Google 帳號登入</span>
                     </button>
                     
-                    <p className="text-xs font-bold text-gray-400 mt-8 leading-relaxed">
-                        請使用 TEATOP 內部 Google 帳號登入系統。<br/>
-                        若無法登入，請洽詢東山店管理人員。
+                    <p className="text-[11px] font-bold text-gray-400 mt-10 leading-relaxed">
+                        請使用東山店內部授權帳號登入系統<br/>
+                        若無法登入請聯繫管理人員
                     </p>
                 </div>
             </div>
 
-            {/* 底部文字 */}
-            <div className="absolute bottom-6 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">
-                TEATOP Dongshan © 2026 | Dedicated to Tea Perfection
+            <div className="absolute bottom-8 text-center text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">
+                TEATOP DONGSHAN © 2026
             </div>
         </div>
     );
 
-    // 🔵 2. 主要系統架構 (修復了 1841 行標籤破洞的問題)
+    // 🔵 2. 主要系統架構 (地雷清除版)
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
@@ -1828,7 +1818,6 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                         <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
                         <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
                         
-                        {/* ⚙️ 管理選單：含紅點提醒 */}
                         <div className="relative">
                             <button 
                                 onClick={() => setMenuOpen(!menuOpen)} 
@@ -1853,7 +1842,6 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                             )}
                         </div>
 
-                        {/* 🔔 通知鈴鐺 */}
                         <button 
                             onClick={() => setView('inbox')} 
                             className={`p-2.5 relative rounded-xl transition-all ${view === 'inbox' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-100'}`}
@@ -1871,10 +1859,10 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                 {renderView()}
             </main>
 
-            {/* 底部合約鎖定提醒 */}
             {isLocked && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
-                    <Lock size={16}/> <span>請點擊「管理 &gt; 系統設定」完成員工合約！</span>
+                    <Lock size={16}/> 
+                    <span>請點擊「管理 &gt; 系統設定」完成員工合約！</span>
                 </div>
             )}
         </div>
