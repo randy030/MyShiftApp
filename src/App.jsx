@@ -1489,45 +1489,49 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [showResigned, setShowResigned] = useState(false);
   
   const userList = Object.values(users || {});
-  // 🟢 提醒邏輯：若沒設「薪資」或「合約起始日」就視為待辦
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
 
   const saveUser = async () => { 
-      // 🟢 強制驗證：確保合約起始日有填寫
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
           return alert("🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！");
       }
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), formData); 
+      // 🟢 儲存時自動確保權限邏輯 (例如：老闆一定是 Admin)
+      const updatedData = {
+          ...formData,
+          isAdmin: ['boss', 'supervisor'].includes(formData.role), // 自動判斷是否具備管理權限
+      };
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), updatedData); 
       setEditingId(null); 
-      alert("✅ 員工資料與合約日期已更新！");
+      alert("✅ 員工權限與合約資料已更新！");
   };
+
+  const roles = [
+      { id: 'employee', label: '員工', color: 'bg-gray-100 text-gray-600', desc: '僅能查看個人班表、打卡' },
+      { id: 'supervisor', label: '主管', color: 'bg-blue-100 text-blue-600', desc: '可審核假單、查看團隊出勤' },
+      { id: 'boss', label: '老闆', color: 'bg-indigo-600 text-white', desc: '全系統最高權限（含薪資、設定）' },
+      { id: 'observer', label: '觀察者', color: 'bg-amber-100 text-amber-600', desc: '僅可查看所有資料，不可修改' }
+  ];
 
   return (
     <div className="space-y-8 pb-20 max-w-4xl mx-auto animate-fade-in">
       {/* 💳 頂端資訊卡片 */}
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
-        <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '使用者'}</h2>
-        <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">System Controller</p>
-        
-        {isSuperAdmin && pendingUsersCount > 0 && (
-          <div className="mt-4 bg-red-50 border border-red-100 text-red-600 py-2 px-4 rounded-2xl text-xs font-black animate-pulse">
-            ⚠️ 偵測到 {pendingUsersCount} 位新進員工尚未設定薪資與合約！
-          </div>
-        )}
+        <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '管理員'}</h2>
+        <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">Permission Controller</p>
       </div>
 
-      {/* 👥 員工資料與合約管理區 */}
+      {/* 👥 員工資料與權限管理區 */}
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
           <div className="flex justify-between items-center mb-8">
               <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
-                <Users className="text-indigo-600" size={24}/> 員工檔案與合約庫
+                <ShieldAlert className="text-indigo-600" size={24}/> 權限等級與合約檔案
               </h3>
               <button 
                 onClick={() => setShowResigned(!showResigned)}
-                className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-gray-100 text-gray-400'}`}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
               >
-                {showResigned ? '顯示中：包含離職' : '隱藏中：離職人員'}
+                {showResigned ? '顯示離職' : '隱藏離職'}
               </button>
           </div>
           
@@ -1537,67 +1541,67 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
               .sort((a, b) => (a?.isResigned === b?.isResigned ? 0 : a?.isResigned ? 1 : -1))
               .map(u => {
                 const needsSetup = !u?.salaryAmount || !u?.contractStart;
-                const userName = u?.name || '未命名員工';
-                
+                const currentRole = roles.find(r => r.id === (u?.role || 'employee'));
+
                 return (
-                  <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u?.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50/50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
+                  <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u?.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
                     {editingId === u.uid ? (
                       <div className="space-y-6 animate-scale-in">
-                        {/* 📅 第一排：基本日期與薪資 */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-black text-gray-400 ml-2 uppercase">Arrival Date 到職日</label>
-                                <input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" />
+                        {/* 🔑 權限設定區 */}
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-black text-gray-400 ml-2 uppercase tracking-widest">Permission Level 權限等級設定</label>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                {roles.map(role => (
+                                    <button
+                                        key={role.id}
+                                        onClick={() => setFormData({...formData, role: role.id})}
+                                        className={`p-3 rounded-2xl text-[11px] font-black transition-all border-2 ${formData.role === role.id ? 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-inner' : 'border-transparent bg-white text-gray-400 hover:bg-gray-50'}`}
+                                    >
+                                        {role.label}
+                                    </button>
+                                ))}
                             </div>
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-black text-gray-400 ml-2 uppercase">Base Salary 本薪</label>
-                                <input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" />
-                            </div>
+                            <p className="text-[9px] text-gray-400 ml-2 font-bold italic">
+                                * {roles.find(r => r.id === formData.role)?.desc}
+                            </p>
                         </div>
 
-                        {/* 📅 第二排：合約起訖日 (您要的設定) */}
+                        {/* 📅 日期與薪資設定 */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-black text-indigo-400 ml-2 uppercase">Contract Start 合約起點</label>
-                                <input type="date" value={formData.contractStart || ''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="w-full bg-indigo-50/30 border-2 border-indigo-100 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" />
-                            </div>
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-black text-purple-400 ml-2 uppercase">Contract End 合約到期</label>
-                                <input type="date" value={formData.contractEnd || ''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="w-full bg-purple-50/30 border-2 border-purple-100 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-purple-500" />
-                            </div>
+                            <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">到職日</label><input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+                            <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">本薪</label><input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
                         </div>
 
-                        <div className="flex items-center gap-4">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={formData.isResigned || false} onChange={e=>setFormData({...formData, isResigned: e.target.checked})} className="rounded-full text-indigo-600" />
-                                <span className="text-xs font-black text-gray-500">標記為離職員工</span>
-                            </label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1"><label className="text-[10px] font-black text-indigo-400 ml-2">合約起點</label><input type="date" value={formData.contractStart || ''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="w-full bg-indigo-50/30 border-2 border-indigo-100 p-4 rounded-2xl text-sm font-bold shadow-sm" /></div>
+                            <div className="space-y-1"><label className="text-[10px] font-black text-purple-400 ml-2">合約到期</label><input type="date" value={formData.contractEnd || ''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="w-full bg-purple-50/30 border-2 border-purple-100 p-4 rounded-2xl text-sm font-bold shadow-sm" /></div>
                         </div>
 
                         <div className="flex gap-3 justify-end pt-2">
                             <button onClick={()=>setEditingId(null)} className="px-6 py-2 font-black text-gray-400 text-xs">取消</button>
-                            <button onClick={saveUser} className="bg-indigo-600 text-white px-10 py-4 rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 hover:scale-105 transition-all">儲存合約設定</button>
+                            <button onClick={saveUser} className="bg-indigo-600 text-white px-10 py-4 rounded-2xl font-black text-xs shadow-lg shadow-indigo-100">確認並儲存</button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-4">
-                            <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center font-black shadow-sm border ${u?.isResigned ? 'bg-gray-200 text-gray-400' : needsSetup ? 'bg-red-100 text-red-600 animate-pulse border-red-200' : 'bg-white text-indigo-600 border-gray-100'}`}>
-                                {userName.slice(0,1)}
+                            <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center font-black border-2 ${currentRole?.id === 'boss' ? 'border-indigo-600 bg-indigo-50 text-indigo-600' : 'bg-white border-gray-100 text-gray-400'}`}>
+                                {u?.name?.slice(0,1)}
                             </div>
                             <div>
                                 <div className="font-black text-gray-800 text-lg flex items-center gap-2">
-                                  {userName}
-                                  {u?.isResigned && <span className="text-[9px] bg-gray-200 text-gray-500 px-2 py-1 rounded-lg">RESIGNED</span>}
-                                  {!u?.isResigned && needsSetup && <span className="text-[9px] bg-red-500 text-white px-2 py-1 rounded-lg animate-bounce">PENDING</span>}
+                                  {u?.name}
+                                  <span className={`text-[9px] px-2 py-1 rounded-lg font-black ${currentRole?.color || 'bg-gray-100 text-gray-400'}`}>
+                                    {currentRole?.label || '未定身分'}
+                                  </span>
                                 </div>
-                                <div className="text-[10px] text-gray-400 font-bold tracking-widest uppercase mt-0.5">
-                                  {u?.isResigned ? '系統封存中' : `合約: ${u?.contractStart || '未設定'} ~ ${u?.contractEnd || '長期'}`}
+                                <div className="text-[10px] text-gray-400 font-bold uppercase mt-1 tracking-widest">
+                                  {u?.contractStart ? `合約期間: ${u.contractStart} ~ ${u.contractEnd || '長期'}` : '⚠️ 合約日期未設定'}
                                 </div>
                             </div>
                         </div>
-                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-gray-50 px-6 py-3 rounded-2xl text-xs font-black text-gray-600 shadow-sm hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all">
-                            編輯參數
+                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-gray-50 px-6 py-3 rounded-2xl text-xs font-black text-gray-600 hover:bg-indigo-600 hover:text-white transition-all">
+                            編輯身分
                         </button>
                       </div>
                     )}
@@ -1757,8 +1761,59 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
     };
 
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
-    if (!user) return <div className="h-screen flex flex-col items-center justify-center p-6 bg-gray-50"><h1 className="text-4xl font-black text-indigo-600 mb-8 tracking-tighter italic">TEAMSHIFT V10</h1><button onClick={() => signInWithPopup(auth, new GoogleAuthProvider())} className="bg-white border-2 border-indigo-600 text-indigo-600 px-10 py-5 rounded-[2rem] font-black shadow-2xl hover:bg-indigo-50 transition-all active:scale-95 flex items-center gap-4">GOOGLE SSO LOGIN</button></div>;
+    // 🟠 第 1764 行：TEATOP 台中東山店 專屬歡迎介面
+    if (!user) return (
+        <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
+            
+            {/* 🍃 背景裝飾氣泡 (仿珍珠/茶滴，橘色調) */}
+            <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50"></div>
+            <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40"></div>
 
+            <div className="w-full max-w-md space-y-12 text-center relative z-10">
+                
+                {/* 🍊 TEATOP Logo 與店名區塊 */}
+                <div className="flex flex-col items-center gap-3">
+                    {/* 這裡使用 TEATOP 經典橘色 #F26F21 */}
+                    <div className="w-24 h-24 bg-[#F26F21] rounded-[2.2rem] flex items-center justify-center shadow-2xl shadow-orange-200 animate-scale-in">
+                        <span className="text-white font-black text-6xl tracking-tighter">T</span>
+                    </div>
+                    <div className="mt-4">
+                        <h1 className="font-black text-5xl text-[#F26F21] tracking-tighter">TEATOP</h1>
+                        <h2 className="font-extrabold text-3xl text-gray-800 tracking-tight mt-1">台中東山店</h2>
+                        <div className="bg-white border border-gray-100 text-gray-400 font-bold text-[10px] px-4 py-1.5 rounded-full mt-4 shadow-inner uppercase tracking-widest inline-block">
+                            Staff Management System
+                        </div>
+                    </div>
+                </div>
+
+                {/* 💳 登入卡片 */}
+                <div className="bg-white border border-gray-100 p-10 rounded-[2.5rem] shadow-2xl shadow-orange-100 animate-slide-up">
+                    <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]">
+                        <Fingerprint size={28} />
+                        <h3 className="font-black text-2xl text-gray-800">身分驗證</h3>
+                    </div>
+                    
+                    <button 
+                        onClick={() => signInWithPopup(auth, provider)} 
+                        className="w-full flex items-center justify-center gap-4 bg-gray-50 text-gray-700 font-black px-8 py-5 rounded-2xl shadow-inner border border-gray-100 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 hover:shadow-md transition-all duration-300"
+                    >
+                        <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
+                        <span className="text-lg">使用 Google 帳號登入</span>
+                    </button>
+                    
+                    <p className="text-xs font-bold text-gray-400 mt-8 leading-relaxed">
+                        請使用東山店內部帳號登入。<br/>
+                        若有問題請洽詢管理人員。
+                    </p>
+                </div>
+            </div>
+
+            {/* 底部文字 */}
+            <div className="absolute bottom-6 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">
+                TEATOP Dongshan © 2026 | Dedicated to Tea Perfection
+            </div>
+        </div>
+    );
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-indigo-100">
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
