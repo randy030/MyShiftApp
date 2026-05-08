@@ -1761,32 +1761,24 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
     };
 
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
-    // 🟠 第 1764 行：TEATOP 台中東山店 專屬歡迎介面
+    // 🟠 1. TEATOP 台中東山店：橘色專屬登入大門
     if (!user) return (
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
-            
-            {/* 🍃 背景裝飾氣泡 (仿珍珠/茶滴，橘色調) */}
+            {/* 背景氣泡裝飾 */}
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50"></div>
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40"></div>
 
             <div className="w-full max-w-md space-y-12 text-center relative z-10">
-                
-                {/* 🍊 TEATOP Logo 與店名區塊 */}
                 <div className="flex flex-col items-center gap-3">
-                    {/* 這裡使用 TEATOP 經典橘色 #F26F21 */}
                     <div className="w-24 h-24 bg-[#F26F21] rounded-[2.2rem] flex items-center justify-center shadow-2xl shadow-orange-200 animate-scale-in">
                         <span className="text-white font-black text-6xl tracking-tighter">T</span>
                     </div>
                     <div className="mt-4">
                         <h1 className="font-black text-5xl text-[#F26F21] tracking-tighter">TEATOP</h1>
                         <h2 className="font-extrabold text-3xl text-gray-800 tracking-tight mt-1">台中東山店</h2>
-                        <div className="bg-white border border-gray-100 text-gray-400 font-bold text-[10px] px-4 py-1.5 rounded-full mt-4 shadow-inner uppercase tracking-widest inline-block">
-                            Staff Management System
-                        </div>
                     </div>
                 </div>
 
-                {/* 💳 登入卡片 */}
                 <div className="bg-white border border-gray-100 p-10 rounded-[2.5rem] shadow-2xl shadow-orange-100 animate-slide-up">
                     <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]">
                         <Fingerprint size={28} />
@@ -1795,95 +1787,85 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                     
                     <button 
                         onClick={() => signInWithPopup(auth, provider)} 
-                        className="w-full flex items-center justify-center gap-4 bg-gray-50 text-gray-700 font-black px-8 py-5 rounded-2xl shadow-inner border border-gray-100 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 hover:shadow-md transition-all duration-300"
+                        className="w-full flex items-center justify-center gap-4 bg-gray-50 text-gray-700 font-black px-8 py-5 rounded-2xl border border-gray-100 hover:bg-orange-50 hover:text-[#F26F21] transition-all duration-300"
                     >
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
-                        <span className="text-lg">使用 Google 帳號登入</span>
+                        <span className="text-lg">Google 帳號登入</span>
                     </button>
                     
                     <p className="text-xs font-bold text-gray-400 mt-8 leading-relaxed">
-                        請使用東山店內部帳號登入。<br/>
-                        若有問題請洽詢管理人員。
+                        TEATOP Dongshan Staff Only
                     </p>
                 </div>
             </div>
-
-            {/* 底部文字 */}
-            <div className="absolute bottom-6 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">
-                TEATOP Dongshan © 2026 | Dedicated to Tea Perfection
-            </div>
         </div>
     );
-    return (
-        <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-indigo-100">
-            <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
-            <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-100">
-                        <Calendar className="text-white" size={20} />
-                    </div>
-                    <div className="hidden xs:block">
-                        <h1 className="font-black text-xl text-gray-800 tracking-tight">MyShiftApp</h1>
-                    </div>
-                </div>
 
-                <nav className="flex items-center gap-2">
-                    <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
-                    <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
-                    <NavBtn active={view === 'inventory'} onClick={() => setView('inventory')} icon={Package} label="盤點" />
-                    
-                    {/* ⚙️ 1. 管理齒輪按鈕區塊 */}
-                    <div className="relative">
+    // 🔵 2. 主要系統架構 (修復了 1841 行標籤破洞的問題)
+    return (
+        <div className="min-h-screen bg-gray-50 flex flex-col">
+            <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
+                <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-[#F26F21] rounded-2xl flex items-center justify-center shadow-lg shadow-orange-100">
+                            <Calendar className="text-white" size={20} />
+                        </div>
+                        <h1 className="font-black text-xl text-gray-800 hidden xs:block tracking-tight">TEATOP 東山店</h1>
+                    </div>
+
+                    <nav className="flex items-center gap-2">
+                        <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
+                        <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
+                        
+                        {/* ⚙️ 管理選單：含紅點提醒 */}
+                        <div className="relative">
+                            <button 
+                                onClick={() => setMenuOpen(!menuOpen)} 
+                                className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs relative transition-all ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-100':'text-gray-400 hover:bg-gray-100'}`}
+                            >
+                                <Settings size={16}/>
+                                <ChevronDown size={14}/>
+                                {needsSetupCount > 0 && isSuperAdmin && (
+                                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></span>
+                                )}
+                            </button>
+
+                            {menuOpen && (
+                                <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
+                                    {isSuperAdmin && <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
+                                    {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
+                                    <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
+                                    <div className="border-t my-2 border-gray-50"></div>
+                                    <DropdownItem onClick={() => {setView('settings'); setMenuOpen(false)}} icon={Settings} label="系統設定" />
+                                    <button onClick={() => signOut(auth)} className="w-full text-left px-6 py-3 text-red-500 text-xs font-black hover:bg-red-50">登出系統</button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 🔔 通知鈴鐺 */}
                         <button 
-                            onClick={() => setMenuOpen(!menuOpen)} 
-                            className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs transition-all relative ${
-                                ['salary','attendance','payroll','forms','settings'].includes(view)
-                                ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200' 
-                                : 'text-gray-400 hover:bg-gray-100'
-                            }`}
+                            onClick={() => setView('inbox')} 
+                            className={`p-2.5 relative rounded-xl transition-all ${view === 'inbox' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-100'}`}
                         >
-                            <Settings className="w-4 h-4"/>
-                            <ChevronDown size={14}/>
-                            {/* 新進人員紅點 */}
-                            {needsSetupCount > 0 && isSuperAdmin && (
-                                <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></span>
+                            <Bell size={20} />
+                            {myNotifications.length > 0 && (
+                                <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>
                             )}
                         </button>
+                    </nav>
+                </div>
+            </header>
 
-                        {/* 下拉選單內容 */}
-                        {menuOpen && (
-                            <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
-                                {isSuperAdmin && <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
-                                {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
-                                {isSuperAdmin && <DropdownItem onClick={() => {setView('payroll'); setMenuOpen(false)}} icon={PieChart} label="薪資總表" />}
-                                <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
-                                <div className="border-t my-2 border-gray-50"></div>
-                                <DropdownItem onClick={() => {setView('settings'); setMenuOpen(false)}} icon={Settings} label="系統設定" />
-                                <button onClick={() => signOut(auth)} className="w-full text-left px-6 py-3 text-red-500 text-xs font-black hover:bg-red-50 transition-all">登出系統</button>
-                            </div>
-                        )}
-                    </div>
+            <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">
+                {renderView()}
+            </main>
 
-                    {/* 🔔 2. 鈴鐺入口按鈕 */}
-                    <button 
-                        onClick={() => setView('inbox')} 
-                        className={`p-2.5 relative rounded-xl transition-all ${
-                            view === 'inbox' 
-                            ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200' 
-                            : 'text-gray-400 hover:bg-gray-100'
-                        }`}
-                    >
-                        <Bell className="w-5 h-5" />
-                        {/* 簽核通知紅點 */}
-                        {myNotifications.length > 0 && (
-                            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>
-                        )}
-                    </button>
-                </nav>
-            </div>
-        </header>
-            <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">{renderView()}</main>
-            {isLocked && <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center justify-center gap-3 font-black shadow-2xl animate-bounce"><Lock size={16}/> 請先至「管理 &gt; 表單與簽署」完成合約！</div>}
+            {/* 底部合約鎖定提醒 */}
+            {isLocked && (
+                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
+                    <Lock size={16}/> <span>請點擊「管理 &gt; 系統設定」完成員工合約！</span>
+                </div>
+            )}
         </div>
     );
 }
