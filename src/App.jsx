@@ -1615,57 +1615,47 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   );
 };
 // ==========================================
-// 🌟 系統主程式 (Main App) - V10.0 完整核心
+// 🌟 系統主程式 (Main App) - 順序修正與邏輯優化版
 // ==========================================
-const App = () => {
-    const [loading, setLoading] = useState(true);
+function App() {
+    // 1. 基礎狀態設定
     const [user, setUser] = useState(null);
+    const [loading, setLoading] = useState(true);
     const [view, setView] = useState('calendar');
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
-    const [dbData, setDbData] = useState({
-        users: {},
-        shifts: {},
-        signatures: [],
-        gasReceipts: {},
-        storeLocation: null,
-        inventoryItems: DEFAULT_INVENTORY_ITEMS,
-        leaveTypes: DEFAULT_LEAVE_TYPES,
-        shiftTypes: DEFAULT_SHIFT_TYPES,
-        requests: [],
-        events: [],
-        leaves: [],
-        shiftsDef: DEFAULT_SHIFT_TYPES,
+    const [dbData, setDbData] = useState({ 
+        users: {}, shifts: {}, requests: [], events: [], signatures: [], 
+        gasReceipts: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS 
     });
 
-    const isPrivileged = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true;
-    const isReadOnly = currentUserInfo?.role === 'observer';
-    const myNotifications = [];
+    // 2. 【核心大腦】定義CurrentUser資訊 (必須放在權限判斷之前)
+    const currentUserInfo = useMemo(() => {
+        return (user && dbData.users) ? dbData.users[user.uid] : null;
+    }, [user, dbData.users]);
 
-    const renderView = () => {
-        if (loading) return <div className="p-8 text-center text-gray-400">載入中...</div>;
-        switch (view) {
-            case 'calendar':
-                return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />;
-            case 'clock':
-                return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation || {}} db={db} appId={appId} />;
-            case 'attendance':
-                return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts || {}} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} />;
-            case 'salary':
-                return <SalaryView users={dbData.users || {}} shifts={dbData.shifts || {}} currentDate={currentDate} leaveTypes={dbData.leaveTypes || DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isPrivileged} gasReceipts={dbData.gasReceipts || {}} db={db} appId={appId} />;
-            case 'payroll':
-                return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts || {}} />;
-            case 'forms':
-                return <FormsView users={dbData.users || {}} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={dbData.signatures || []} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
-            case 'settings':
-                return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || DEFAULT_INVENTORY_ITEMS} appId={appId} storeConfig={dbData.storeLocation || {}} db={db} isSuperAdmin={isSuperAdmin} />;
-            case 'inbox':
-                return <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 font-bold">通知中心功能尚未補回，已先保留入口。</div>;
-            default:
-                return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />;
-        }
-    };
-useEffect(() => {
+    // 3. 權限判斷 (老闆/主管/觀察者)
+    const isSuperAdmin = currentUserInfo?.role === 'boss' || currentUserInfo?.isAdmin === true;
+    const isPrivileged = isSuperAdmin || currentUserInfo?.role === 'supervisor';
+    const isReadOnly = currentUserInfo?.role === 'observer';
+
+    // 4. 合約與鎖定邏輯
+    const hasSignedContract = useMemo(() => {
+        return dbData.signatures?.some(s => s.uid === user?.uid && s.formType === 'contract') || false;
+    }, [user, dbData.signatures]);
+
+    const isLocked = useMemo(() => {
+        if (!currentUserInfo || isSuperAdmin) return false;
+        const infoNotSet = !currentUserInfo.salaryAmount || !currentUserInfo.contractStart;
+        return infoNotSet || !hasSignedContract;
+    }, [currentUserInfo, isSuperAdmin, hasSignedContract]);
+
+    const needsSetupCount = Object.values(dbData.users || {}).filter(u => 
+        !u.isResigned && (!u.salaryAmount || !u.contractStart)
+    ).length;
+
+    // 5. 資料連動監聽
+    useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
             setUser(u);
             if (u) {
@@ -1682,59 +1672,50 @@ useEffect(() => {
 
     useEffect(() => {
         if (!user) return;
-        const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, users: map })); });
-        const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, shifts: map })); });
-        const unsubSigs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, signatures: list })); });
-        const unsubGas = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, gasReceipts: map })); });
-        const unsubLoc = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => setDbData(prev => ({ ...prev, storeLocation: snap.data() })));
-        
-        // 🟢 關鍵：監聽雲端庫存品項設定
-        const unsubInv = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), (snap) => {
-            if (snap.exists() && snap.data().items) setDbData(prev => ({ ...prev, inventoryItems: snap.data().items }));
+        const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { 
+            const map = {}; snap.forEach(d => map[d.id] = d.data()); 
+            setDbData(prev => ({ ...prev, users: map })); 
         });
-
-        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubGas(); unsubLoc(); unsubInv(); };
+        const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { 
+            const map = {}; snap.forEach(d => map[d.id] = d.data()); 
+            setDbData(prev => ({ ...prev, shifts: map })); 
+        });
+        const unsubSigs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), (snap) => { 
+            const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); 
+            setDbData(prev => ({ ...prev, signatures: list })); 
+        });
+        const unsubLoc = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => 
+            setDbData(prev => ({ ...prev, storeLocation: snap.data() }))
+        );
+        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubLoc(); };
     }, [user]);
 
-    // 🧠 1. 核心邏輯：讓資料即時連動，解決員工無法簽名、沒反應的問題
-    const currentUserInfo = useMemo(() => {
-        return (user && dbData.users) ? dbData.users[user.uid] : null;
-    }, [user, dbData.users]);
+    // 6. 視圖切換
+    const renderView = () => {
+        if (loading) return <div className="p-8 text-center text-gray-400">系統載入中...</div>;
+        switch(view) {
+            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={dbData} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} isReadOnly={isReadOnly} />;
+            case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
+            case 'forms': return <FormsView users={dbData.users} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isPrivileged} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} />;
+            case 'salary': return isPrivileged ? <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={true} db={db} appId={appId} /> : null;
+            case 'settings': return <SettingsView users={dbData.users} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems} appId={appId} db={db} isSuperAdmin={isSuperAdmin} />;
+            default: return null;
+        }
+    };
 
-    const isSuperAdmin = currentUserInfo?.role === 'boss' || currentUserInfo?.isAdmin === true;
-
-    const hasSignedContract = useMemo(() => {
-        return dbData.signatures?.some(s => s.uid === user?.uid) || false;
-    }, [user, dbData.signatures]);
-
-    const isLocked = useMemo(() => {
-        if (!currentUserInfo || isSuperAdmin) return false;
-        const infoNotSet = !currentUserInfo.salaryAmount || !currentUserInfo.contractStart;
-        return infoNotSet || !hasSignedContract;
-    }, [currentUserInfo, isSuperAdmin, hasSignedContract]);
-
-    const needsSetupCount = Object.values(dbData.users || {}).filter(u => 
-        !u.isResigned && (!u.salaryAmount || !u.contractStart)
-    ).length;
-
-    // 🟠 2. TEATOP 歡迎大門：已移除 T Logo、移除多餘文字、修復點擊
+    // 7. 橘色專屬歡迎介面 (當 user 不存在時)
     if (!user) return (
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 relative overflow-hidden">
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50 pointer-events-none"></div>
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40 pointer-events-none"></div>
-
             <div className="w-full max-w-md space-y-12 text-center relative z-50">
                 <div className="flex flex-col items-center gap-3">
                     <h1 className="font-black text-6xl text-[#F26F21] tracking-tighter">TEATOP</h1>
                     <h2 className="font-extrabold text-4xl text-gray-800 tracking-tight mt-2">台中東山店</h2>
                 </div>
-
                 <div className="bg-white/80 backdrop-blur-sm border border-gray-100 p-10 rounded-[3rem] shadow-2xl shadow-orange-200/50">
                     <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]"><Fingerprint size={32} /><h3 className="font-black text-2xl text-gray-800">身分驗證</h3></div>
-                    <button 
-                        onClick={() => signInWithPopup(auth, provider)} 
-                        className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] shadow-xl transition-all active:scale-95 cursor-pointer relative z-50"
-                    >
+                    <button onClick={() => signInWithPopup(auth, provider)} className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] shadow-xl transition-all active:scale-95 cursor-pointer relative z-50">
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" className="w-6 h-6" /><span className="text-xl">使用 Google 帳號登入</span>
                     </button>
                     <p className="text-[11px] font-bold text-gray-400 mt-10 leading-relaxed">請使用東山店授權帳號登入<br/>若無法登入請聯繫管理人員</p>
@@ -1743,7 +1724,7 @@ useEffect(() => {
         </div>
     );
 
-    // 🔵 3. 主要系統架構
+    // 8. 主要系統外殼
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
@@ -1762,8 +1743,7 @@ useEffect(() => {
                             </button>
                             {menuOpen && (
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50">
-                                    {isSuperAdmin && <DropdownItem onClick={()=>{setView('salary');setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
-                                    {isSuperAdmin && <DropdownItem onClick={()=>{setView('attendance');setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
+                                    {isPrivileged && <DropdownItem onClick={()=>{setView('salary');setMenuOpen(false)}} icon={Wallet} label="薪資結算" />}
                                     <DropdownItem onClick={()=>{setView('forms');setMenuOpen(false)}} icon={FileText} label="表單簽署" />
                                     <div className="border-t my-2 border-gray-50"></div>
                                     <DropdownItem onClick={()=>{setView('settings');setMenuOpen(false)}} icon={Settings} label="系統設定" />
@@ -1772,21 +1752,19 @@ useEffect(() => {
                             )}
                         </div>
                         <button onClick={() => setView('inbox')} className={`p-2.5 relative rounded-xl ${view === 'inbox' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-100'}`}>
-                            <Bell size={20} />{myNotifications.length > 0 && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>}
+                            <Bell size={20} />
                         </button>
                     </nav>
                 </div>
             </header>
-
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full">{renderView()}</main>
-
             {isLocked && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
-                    <Lock size={16}/><span>請點擊「管理 → 系統設定」完成員工合約！</span>
+                    <Lock size={16}/><span>請點擊「管理 - 系統設定」完成員工合約！</span>
                 </div>
             )}
         </div>
     );
-} // <--- 關閉 App 函數
+}
 
 export { App as default };
