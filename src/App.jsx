@@ -1761,42 +1761,53 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
     };
 
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
-    // 🟠 1. TEATOP 台中東山店：橘色專屬登入大門
+    // 🟠 當使用者尚未登入時顯示的歡迎介面 (已移除 Logo 且修復登入)
     if (!user) return (
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
-            {/* 背景氣泡裝飾 */}
+            
+            {/* 🍃 背景裝飾氣泡 (仿珍珠/茶滴，使用輕柔的橘色) */}
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50"></div>
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40"></div>
 
             <div className="w-full max-w-md space-y-12 text-center relative z-10">
+                
+                {/* 🍊 TEATOP 店名區塊 (🟢 已移除原本的大大的 T Logo) */}
                 <div className="flex flex-col items-center gap-3">
-                    <div className="w-24 h-24 bg-[#F26F21] rounded-[2.2rem] flex items-center justify-center shadow-2xl shadow-orange-200 animate-scale-in">
-                        <span className="text-white font-black text-6xl tracking-tighter">T</span>
-                    </div>
                     <div className="mt-4">
                         <h1 className="font-black text-5xl text-[#F26F21] tracking-tighter">TEATOP</h1>
                         <h2 className="font-extrabold text-3xl text-gray-800 tracking-tight mt-1">台中東山店</h2>
+                        <div className="bg-white border border-gray-100 text-gray-400 font-bold text-[10px] px-4 py-1.5 rounded-full mt-4 shadow-inner uppercase tracking-widest inline-block">
+                            Staff Management System
+                        </div>
                     </div>
                 </div>
 
+                {/* 💳 登入卡片：使用圓潤的 TEATOP 風格 */}
                 <div className="bg-white border border-gray-100 p-10 rounded-[2.5rem] shadow-2xl shadow-orange-100 animate-slide-up">
                     <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]">
                         <Fingerprint size={28} />
                         <h3 className="font-black text-2xl text-gray-800">身分驗證</h3>
                     </div>
                     
+                    {/* 🟢 修復：將按鈕還原為原本包含 Logo 且能運作的版本 */}
                     <button 
                         onClick={() => signInWithPopup(auth, provider)} 
-                        className="w-full flex items-center justify-center gap-4 bg-gray-50 text-gray-700 font-black px-8 py-5 rounded-2xl border border-gray-100 hover:bg-orange-50 hover:text-[#F26F21] transition-all duration-300"
+                        className="w-full flex items-center justify-center gap-4 bg-gray-50 text-gray-700 font-black px-8 py-5 rounded-2xl shadow-inner border border-gray-100 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 hover:shadow-md transition-all duration-300"
                     >
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
-                        <span className="text-lg">Google 帳號登入</span>
+                        <span className="text-lg">使用 Google 帳號登入</span>
                     </button>
                     
                     <p className="text-xs font-bold text-gray-400 mt-8 leading-relaxed">
-                        TEATOP Dongshan Staff Only
+                        請使用 TEATOP 內部 Google 帳號登入系統。<br/>
+                        若無法登入，請洽詢東山店管理人員。
                     </p>
                 </div>
+            </div>
+
+            {/* 底部文字 */}
+            <div className="absolute bottom-6 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">
+                TEATOP Dongshan © 2026 | Dedicated to Tea Perfection
             </div>
         </div>
     );
