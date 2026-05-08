@@ -27,6 +27,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const provider = new GoogleAuthProvider(); // 🟢 補上這行，按鈕才會動！
 const db = getFirestore(app);
 const appId = 'team-shift-pc-v1'; 
 
