@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v11 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1232,7 +1232,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
     );
 };
 // ==========================================
-// 📊 統計明細 (SalaryView) - V10 旗艦還原版
+// 📊 統計明細 (SalaryView) - V12 發票登錄版
 // ==========================================
 const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
@@ -1335,9 +1335,12 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                                 <div>🏃 年度已休: {s.yearStats.usedAnnual} 天</div>
                             </div>
                         </div>
-                        <div className="bg-teal-50 p-2 rounded-lg border border-teal-200 flex justify-between items-center text-xs">
-                            <span className="font-bold text-teal-800"><Fuel className="w-3 h-3 inline mr-1"/> 本月油資核銷: ${Math.min(s.gasTotal, 500)}</span>
-                            <span className="text-[10px] text-teal-600">實報實銷 (上限500)</span>
+                        <div className="bg-teal-50 p-3 rounded-lg border border-teal-200 flex justify-between items-center gap-3">
+                            <div>
+                                <div className="font-bold text-sm text-teal-800"><Fuel className="w-3 h-3 inline mr-1"/> 本月油資核銷: ${Math.min(s.gasTotal, 500)}</div>
+                                <div className="text-[10px] text-teal-600">已登錄 {(gasReceipts?.[targetMonth]?.[u.uid] || []).length} 張發票，實報實銷 (上限500)</div>
+                            </div>
+                            <button onClick={() => setGasModalData(u)} className="shrink-0 bg-teal-600 text-white text-xs font-bold px-3 py-2 rounded-lg hover:bg-teal-700 shadow-sm">{isPrivileged ? '管理發票' : '登錄發票'}</button>
                         </div>
                         <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
                             <div className="font-bold text-blue-900 mb-2">本月時數結算明細</div>
@@ -1370,6 +1373,15 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                     </div>
                 )
             })}
+            <GasReceiptModal
+                isOpen={!!gasModalData}
+                onClose={() => setGasModalData(null)}
+                user={gasModalData}
+                monthStr={targetMonth}
+                db={db}
+                appId={appId}
+                currentRecords={gasReceipts?.[targetMonth] || {}}
+            />
         </div>
     );
 };
@@ -1380,6 +1392,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
     const [showResigned, setShowResigned] = useState(false);
+    const [gasModalUser, setGasModalUser] = useState(null);
     
     useEffect(() => { 
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => { 
@@ -1407,7 +1420,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
             </div>
             
             <div className="bg-white rounded-xl border overflow-x-auto shadow-sm">
-                <table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">姓名</th><th className="p-3 w-24">本薪</th><th className="p-3 w-20 bg-teal-50 text-teal-700 text-center">油資核銷</th><th className="p-3 w-24">補助/津貼</th><th className="p-3 w-24 bg-pink-50 text-pink-700">生日禮金</th><th className="p-3 w-24 bg-purple-50 text-purple-700">三節獎金</th><th className="p-3 w-24 bg-yellow-50 text-yellow-700">年終獎金</th><th className="p-3">備註</th></tr></thead>
+                <table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">姓名</th><th className="p-3 w-24">本薪</th><th className="p-3 w-32 bg-teal-50 text-teal-700 text-center">油資核銷 / 發票</th><th className="p-3 w-24">補助/津貼</th><th className="p-3 w-24 bg-pink-50 text-pink-700">生日禮金</th><th className="p-3 w-24 bg-purple-50 text-purple-700">三節獎金</th><th className="p-3 w-24 bg-yellow-50 text-yellow-700">年終獎金</th><th className="p-3">備註</th></tr></thead>
                 <tbody>{visibleUsers.map(u => { 
                     const record = payrollData[u.uid] || {}; 
                     const userGasRecords = gasReceipts?.[targetMonth]?.[u.uid] || [];
@@ -1417,7 +1430,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
                         <tr key={u.uid} className={`border-b hover:bg-gray-50 ${u.isResigned ? 'opacity-60 bg-gray-50' : ''}`}>
                             <td className="p-3 font-bold flex items-center gap-1 mt-1">{u.name}{u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1 py-0.5 rounded ml-1 border border-red-200">離職</span>}</td>
                             <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.base || ''} onChange={e=>updatePayroll(u.uid, 'base', e.target.value)}/></td>
-                            <td className="p-3 bg-teal-50 text-center font-bold text-teal-800">${gasCapped}</td>
+                            <td className="p-3 bg-teal-50 text-center">
+                                <div className="font-bold text-teal-800">${gasCapped}</div>
+                                <div className="text-[10px] text-teal-600">登錄 ${gasTotal} / {userGasRecords.length} 張</div>
+                                <button onClick={() => setGasModalUser(u)} className="mt-1 text-[10px] font-bold text-white bg-teal-600 hover:bg-teal-700 px-2 py-1 rounded">發票列表</button>
+                            </td>
                             <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={e=>updatePayroll(u.uid, 'subsidy', e.target.value)}/></td>
                             <td className="p-3 bg-pink-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_bday || ''} onChange={e=>updatePayroll(u.uid, 'bonus_bday', e.target.value)}/></td>
                             <td className="p-3 bg-purple-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_festival || ''} onChange={e=>updatePayroll(u.uid, 'bonus_festival', e.target.value)}/></td>
@@ -1427,6 +1444,15 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
                     ); 
                 })}</tbody></table>
             </div>
+            <GasReceiptModal
+                isOpen={!!gasModalUser}
+                onClose={() => setGasModalUser(null)}
+                user={gasModalUser}
+                monthStr={targetMonth}
+                db={db}
+                appId={appId}
+                currentRecords={gasReceipts?.[targetMonth] || {}}
+            />
         </div>
     );
 };
