@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.1 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.2 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1286,7 +1286,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                 if ((assign.useComp || lType === 'annual') && hrs > 0 && lType !== 'menstrual') {
                     if (lType !== 'annual') yearStats.compHoursUsed += hrs;
                     otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
-                    if (date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
+                    if (date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣${assign.note ? ` (${assign.note})` : ''}` });
                 }
                 if(date.startsWith(targetMonth)) {
                     if(!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
@@ -1301,7 +1301,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
                 if (hrs < 0) yearStats.compHoursUsed += Math.abs(hrs);
                 if(date.startsWith(targetMonth) && hrs > 0) monthStats.ot += hrs;
                 otHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
-                if(date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
+                if(date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: hrs, reason: (assign.otReason && assign.otReason !== '無備註') ? assign.otReason : (assign.note || '無備註') });
             }
         });
   
