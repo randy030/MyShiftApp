@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.1 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1038,7 +1038,14 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
         } else if (!isPrivileged && uid === currentUserInfo.uid) {
           const existingReq = requests.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
           if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUserInfo.uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUserInfo.uid, fromName: currentUserInfo.name, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
+          const approverLineIds = [...new Set(Object.values(users)
+            .filter(u => !u.isResigned && (u.role === 'boss' || u.role === 'supervisor' || u.isAdmin || u.isManager) && u.lineUserId)
+            .map(u => u.lineUserId)
+            .filter(Boolean))];
+          if (approverLineIds.length > 0) {
+            await sendLineNotification(approverLineIds, `🔔 【時數審核申請】\n申請人：${currentUserInfo.name}\n日期：${dateStr}\n時數：${numHours} hr\n原因：${remark || '無備註'}\n請至系統「通知中心」進行審核。`);
+          }
           setOtModalData(null); onClose(); setTimeout(() => alert("已送出審核明細！請等候主管核准。"), 100);
         } else {
           let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid); 
@@ -1635,11 +1642,18 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
     const handleRequest = async (req, action) => {
         if (!canApproveLeaveRequests) return alert("您沒有審核權限");
         const requestRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id);
-        const targetUser = dbData.users[req.uid || req.fromUid]; 
+        const requesterUid = req.uid || req.fromUid;
+        const targetUser = dbData.users[requesterUid] || Object.values(dbData.users || {}).find(u => u.uid === requesterUid);
+        const requesterName = req.userName || req.fromName || targetUser?.name || '未知員工';
         if (action === 'reject') {
             await deleteDoc(requestRef);
-            if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `❌ 您於 ${req.date} 送出的${req.leaveLabel || '申請'}未通過審核。`);
-            alert("✅ 已駁回申請，並通知員工。");
+            if (targetUser?.lineUserId) {
+                const rejectText = req.type === 'leave_request'
+                    ? `❌ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}未通過審核。`
+                    : `❌ 您於 ${req.date} 送出的時數申請未通過審核。`;
+                await sendLineNotification([targetUser.lineUserId], rejectText);
+            }
+            alert(`✅ 已駁回 ${requesterName} 的申請，並通知員工。`);
             return;
         }
         if (req.type === 'leave_request') {
@@ -1660,7 +1674,20 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
             await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
             await deleteDoc(requestRef);
             if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。`);
-            alert("✅ 假單已核准，班表已更新，並已通知員工。");
+            alert(`✅ ${requesterName} 的假單已核准，班表已更新，並已通知員工。`);
+        } else if (req.type === 'admin_ot_approve') {
+            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+            const shiftSnap = await getDoc(shiftRef);
+            const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+            const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+            const idx = assigns.findIndex(a => a.uid === requesterUid);
+            const baseEntry = idx >= 0 ? assigns[idx] : { uid: requesterUid, type: 'WORK' };
+            const updatedEntry = { ...baseEntry, uid: requesterUid, type: baseEntry.type || 'WORK', otHours: req.hours, otReason: req.reason || '無備註', otConfirmed: true, timestamp: Date.now() };
+            if (idx >= 0) assigns[idx] = updatedEntry; else assigns.push(updatedEntry);
+            await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+            await deleteDoc(requestRef);
+            if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的時數申請已核准，結算明細已同步更新。`);
+            alert(`✅ ${requesterName} 的時數申請已核准，並已通知員工。`);
         }
     };
     
@@ -1698,7 +1725,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                         myNotifications.map(req => (
                             <div key={req.id} className="bg-white p-6 rounded-[2rem] border border-l-8 border-l-indigo-500 shadow-xl animate-scale-in">
                                 <h3 className="font-black text-gray-800">{req.type === 'leave_request' ? '🌴 請假申請' : '單據審核'}</h3>
-                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{dbData.users?.[req.uid]?.name || '未知員工'} | 日期：{req.date}</p>
+                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工'} | 日期：{req.date}</p>
                                 <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700">
                                     {req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}
                                 </div>
