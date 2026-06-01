@@ -8,9 +8,9 @@ import {
     FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, 
     Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Map, Package, 
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
-    FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
+    FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart, GripVertical
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.2 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.3 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -81,6 +81,20 @@ const formatDateTime = (value) => {
     const mi = String(dateObj.getMinutes()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 };
+
+const sortInventoryItems = (items = []) => {
+    const safeItems = Array.isArray(items) ? [...items] : [];
+    return safeItems.sort((a, b) => {
+        const orderA = Number.isFinite(Number(a?.sortOrder)) ? Number(a.sortOrder) : Number.MAX_SAFE_INTEGER;
+        const orderB = Number.isFinite(Number(b?.sortOrder)) ? Number(b.sortOrder) : Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return `${a?.category || ''}-${a?.name || ''}`.localeCompare(`${b?.category || ''}-${b?.name || ''}`, 'zh-Hant');
+    });
+};
+const normalizeInventoryItems = (items = []) => sortInventoryItems(items).map((item, index) => ({
+    ...item,
+    sortOrder: index
+}));
 const getDistance = (lat1, lon1, lat2, lon2) => {
     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
     const R = 6371e3; 
@@ -521,17 +535,19 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 // ==========================================
 // 📦 庫存盤點頁面 (InventoryView) - 🔴 V8.6 歷史紀錄查詢功能
 // ==========================================
+
 const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
-    const items = Array.isArray(inventoryItems) && inventoryItems.length > 0 ? inventoryItems : [];
-    const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
+    const items = useMemo(() => normalizeInventoryItems(inventoryItems), [inventoryItems]);
+    const categories = useMemo(() => [...new Set(items.map(i => i.category).filter(Boolean))], [items]);
     const draftKey = `inventoryDraft_${appId}_${currentUserInfo?.uid || 'guest'}`;
-    
-    const [mode, setMode] = useState('count'); // 'count' 或 'history'
+
+    const [mode, setMode] = useState('count');
     const [activeTab, setActiveTab] = useState(categories[0] || '');
     const [records, setRecords] = useState({});
     const [historyList, setHistoryList] = useState([]);
     const [selectedHistory, setSelectedHistory] = useState(null);
     const [editingRecordDate, setEditingRecordDate] = useState(null);
+    const [editingRecordId, setEditingRecordId] = useState(null);
 
     useEffect(() => {
         if (categories.length > 0 && !categories.includes(activeTab)) setActiveTab(categories[0] || '');
@@ -546,6 +562,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
                     setRecords(parsed.records);
                     if (parsed.activeTab) setActiveTab(parsed.activeTab);
                     if (parsed.editingRecordDate) setEditingRecordDate(parsed.editingRecordDate);
+                    if (parsed.editingRecordId) setEditingRecordId(parsed.editingRecordId);
                 }
             }
         } catch (e) {
@@ -555,20 +572,28 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
 
     useEffect(() => {
         try {
-            if (Object.keys(records).length === 0 && !editingRecordDate) localStorage.removeItem(draftKey);
-            else localStorage.setItem(draftKey, JSON.stringify({ records, activeTab, editingRecordDate, savedAt: Date.now() }));
+            if (Object.keys(records).length === 0 && !editingRecordDate && !editingRecordId) {
+                localStorage.removeItem(draftKey);
+            } else {
+                localStorage.setItem(draftKey, JSON.stringify({
+                    records,
+                    activeTab,
+                    editingRecordDate,
+                    editingRecordId,
+                    savedAt: Date.now()
+                }));
+            }
         } catch (e) {
             console.error('儲存盤點暫存失敗', e);
         }
-    }, [records, activeTab, editingRecordDate, draftKey]);
+    }, [records, activeTab, editingRecordDate, editingRecordId, draftKey]);
 
-    // 🔴 載入歷史紀錄
     useEffect(() => {
         if (mode === 'history') {
             const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords'), (snap) => {
                 const list = [];
-                snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
-                list.sort((a, b) => b.date.localeCompare(a.date));
+                snap.forEach(docSnap => list.push({ id: docSnap.id, ...docSnap.data() }));
+                list.sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
                 setHistoryList(list);
             });
             return () => unsub();
@@ -576,23 +601,111 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
     }, [mode, db, appId]);
 
     const filteredItems = items.filter(i => i.category === activeTab);
-    const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * item.price), 0), [items, records]);
+    const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * Number(item.price || 0)), 0), [items, records]);
     const roundedTotalValue = useMemo(() => Math.ceil(totalValue), [totalValue]);
 
     const resetDraft = () => {
         setRecords({});
         setEditingRecordDate(null);
-        try { localStorage.removeItem(draftKey); } catch (e) { console.error('清除盤點暫存失敗', e); }
+        setEditingRecordId(null);
+        try {
+            localStorage.removeItem(draftKey);
+        } catch (e) {
+            console.error('清除盤點暫存失敗', e);
+        }
     };
 
     const loadHistoryForEdit = (hist) => {
-        setRecords(hist?.data || {});
+        const nextRecords = hist?.data && typeof hist.data === 'object' ? hist.data : {};
+        setRecords(nextRecords);
         setEditingRecordDate(hist?.date || null);
+        setEditingRecordId(hist?.id || hist?.date || null);
         setMode('count');
-        setSelectedHistory(null);
-        const firstCategory = items.find(item => (hist?.data || {})[item.id] !== undefined)?.category;
+        setSelectedHistory(hist || null);
+        const firstCategory = items.find(item => nextRecords[item.id] !== undefined)?.category || categories[0] || '';
         if (firstCategory) setActiveTab(firstCategory);
-        alert(`已載入 ${hist?.date || ''} 的盤點資料，您可以繼續修改後重新儲存。`);
+        alert(`已載入 ${hist?.date || ''} 的盤點資料，請直接修改後按「更新檔案」儲存。`);
+    };
+
+    const handleCountChange = (id, delta) => {
+        setRecords(prev => {
+            const current = prev[id] || 0;
+            return { ...prev, [id]: Math.max(0, current + delta) };
+        });
+    };
+
+    const handleInputChange = (id, val) => {
+        const num = parseFloat(val);
+        if (!Number.isNaN(num) && num >= 0) setRecords(prev => ({ ...prev, [id]: num }));
+        else if (val === '') setRecords(prev => {
+            const nextRecords = { ...prev };
+            delete nextRecords[id];
+            return nextRecords;
+        });
+    };
+
+    const handleSave = async () => {
+        if (Object.keys(records).length === 0) return alert('尚未填寫任何盤點數量！');
+        const now = Date.now();
+        const targetDate = editingRecordDate || new Date(now).toISOString().split('T')[0];
+        const targetRecordId = editingRecordId || targetDate;
+        const existingHistory = historyList.find(hist => hist.id === targetRecordId) || (selectedHistory?.id === targetRecordId ? selectedHistory : null);
+        const createdAt = existingHistory?.createdAt || existingHistory?.timestamp || now;
+        const nextEditCount = editingRecordId ? Number(existingHistory?.editCount || 0) + 1 : 0;
+        const actionLabel = editingRecordId ? `更新 ${targetDate} 的盤點紀錄` : '送出今日盤點結果';
+        if (!window.confirm(`確定要${actionLabel}嗎？
+
+儲存後會保留在歷史紀錄中，並清空目前暫存。`)) return;
+
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', targetRecordId), {
+            id: targetRecordId,
+            date: targetDate,
+            timestamp: createdAt,
+            createdAt,
+            updatedAt: now,
+            data: records,
+            lastEditorUid: currentUserInfo?.uid || '',
+            lastEditorName: currentUserInfo?.name || '未知使用者',
+            editCount: nextEditCount,
+            lastEditedAt: editingRecordId ? now : null
+        }, { merge: true });
+
+        alert(`✅ 盤點資料已成功${editingRecordId ? '更新' : '儲存'}至雲端！`);
+        resetDraft();
+        setSelectedHistory(null);
+        setMode('history');
+    };
+
+    const handleClearDraft = () => {
+        if (!window.confirm('確定要清空目前盤點暫存嗎？')) return;
+        resetDraft();
+    };
+
+    const handleExportCSV = () => {
+        const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
+        const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
+        let exportTotal = 0;
+        items.forEach(item => {
+            const qty = records[item.id] || 0;
+            const subtotal = qty * Number(item.price || 0);
+            exportTotal += subtotal;
+            rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]);
+        });
+        rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
+        exportToCSV(`當前盤點表_${targetDate}`, rows);
+    };
+
+    const handleExportHistoryCSV = (hist) => {
+        const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
+        let exportTotal = 0;
+        items.forEach(item => {
+            const qty = hist?.data?.[item.id] || 0;
+            const subtotal = qty * Number(item.price || 0);
+            exportTotal += subtotal;
+            rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]);
+        });
+        rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
+        exportToCSV(`歷史盤點紀錄_${hist?.date || '未命名'}`, rows);
     };
 
     if (items.length === 0) {
@@ -602,102 +715,50 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
                 <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
                 <p className="text-gray-500 mt-2">請使用管理員帳號，前往「管理」➡️「系統設定」新增庫存品項。</p>
             </div>
-        )
+        );
     }
-
-    const handleCountChange = (id, delta) => { setRecords(prev => { const current = prev[id] || 0; return { ...prev, [id]: Math.max(0, current + delta) }; }); };
-    const handleInputChange = (id, val) => {
-        const num = parseFloat(val);
-        if(!isNaN(num) && num >= 0) setRecords(prev => ({ ...prev, [id]: num }));
-        else if (val === '') setRecords(prev => { const newRecs = {...prev}; delete newRecs[id]; return newRecs; });
-    };
-
-    const handleSave = async () => {
-        if (Object.keys(records).length === 0) return alert("尚未填寫任何盤點數量！");
-        const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
-        const actionLabel = editingRecordDate ? `更新 ${editingRecordDate} 的盤點紀錄` : '送出今日盤點結果';
-        if (window.confirm(`確定要${actionLabel}嗎？
-
-儲存後會保留在歷史紀錄中，並清空目前暫存。`)) {
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', targetDate), {
-                date: targetDate,
-                timestamp: Date.now(),
-                data: records,
-                lastEditorUid: currentUserInfo?.uid || '',
-                lastEditorName: currentUserInfo?.name || '未知使用者'
-            }, { merge: true });
-            alert(`✅ 盤點資料已成功${editingRecordDate ? '更新' : '儲存'}至雲端！`);
-            resetDraft();
-        }
-    };
-
-    const handleClearDraft = () => {
-        if (!window.confirm('確定要清空目前盤點暫存嗎？')) return;
-        resetDraft();
-    };
-
-    // 匯出「當前填寫中」的報表
-    const handleExportCSV = () => {
-        const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
-        const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
-        let exportTotal = 0;
-        items.forEach(item => {
-            const qty = records[item.id] || 0;
-            const subtotal = qty * item.price;
-            exportTotal += subtotal;
-            rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]);
-        });
-        rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
-        exportToCSV(`當前盤點表_${targetDate}`, rows);
-    };
-
-    // 🔴 匯出「指定歷史紀錄」的報表
-    const handleExportHistoryCSV = (hist) => {
-        const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
-        let exportTotal = 0;
-        items.forEach(item => { 
-            const qty = hist.data[item.id] || 0; 
-            const subtotal = qty * item.price; 
-            exportTotal += subtotal; 
-            rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]); 
-        });
-        rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
-        exportToCSV(`歷史盤點紀錄_${hist.date}`, rows);
-    };
 
     return (
         <div className="max-w-2xl mx-auto pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row justify-between items-center mb-4 shadow-sm gap-3">
                 <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><Package/> 庫存盤點</h2>
                 <div className="flex gap-2 bg-gray-100 p-1 rounded-lg w-full sm:w-auto">
-                    <button onClick={()=>{setMode('count'); setSelectedHistory(null);}} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode==='count'?'bg-white shadow text-indigo-600':'text-gray-500 hover:text-gray-700'}`}>新增盤點</button>
-                    <button onClick={()=>setMode('history')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode==='history'?'bg-white shadow text-indigo-600':'text-gray-500 hover:text-gray-700'}`}>歷史紀錄</button>
+                    <button onClick={() => { setMode('count'); setSelectedHistory(null); }} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode === 'count' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}>新增盤點</button>
+                    <button onClick={() => setMode('history')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode === 'history' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}>歷史紀錄</button>
                 </div>
             </div>
             {mode === 'count' ? (
                 <>
-                    {(editingRecordDate || Object.keys(records).length > 0) && (
+                    {(editingRecordId || Object.keys(records).length > 0) && (
                         <div className="mb-3 bg-amber-50 border border-amber-100 rounded-xl p-3 text-sm font-bold text-amber-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                            <div>{editingRecordDate ? `目前正在編輯 ${editingRecordDate} 的盤點紀錄` : '已為您保留盤點暫存，離開後回來可接續編輯。'}</div>
+                            <div>{editingRecordId ? `目前正在修改 ${editingRecordDate} 的已送出盤點紀錄` : '已為您保留盤點暫存，離開後回來可接續編輯。'}</div>
                             <button onClick={handleClearDraft} className="px-3 py-1.5 rounded-lg bg-white border border-amber-200 text-amber-700 text-xs font-black hover:bg-amber-100">清空暫存</button>
                         </div>
                     )}
                     <div className="flex justify-between items-center mb-2 px-1 gap-2 flex-wrap">
                         <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${roundedTotalValue.toLocaleString()} <span className="text-[10px] text-red-400 ml-1">(小數點後無條件進位)</span></div>
-                        <div className="flex gap-2"><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button><button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> {editingRecordDate ? '更新檔案' : '送出'}</button></div>
+                        <div className="flex gap-2">
+                            <button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button>
+                            <button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> {editingRecordId ? '更新檔案' : '送出'}</button>
+                        </div>
                     </div>
                     <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
-                        {categories.map(c => (<button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{c}</button>))}
+                        {categories.map(category => (
+                            <button key={category} onClick={() => setActiveTab(category)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === category ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{category}</button>
+                        ))}
                     </div>
                     <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
                         {filteredItems.map((item, idx) => (
                             <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                                <div><div className="font-bold text-gray-800 text-lg">{item.name}</div><div className="text-xs text-gray-400 font-mono">單價: ${item.price}</div></div>
+                                <div>
+                                    <div className="font-bold text-gray-800 text-lg">{item.name}</div>
+                                    <div className="text-xs text-gray-400 font-mono">單價: ${Number(item.price || 0)}</div>
+                                </div>
                                 <div className="flex items-center gap-2 sm:gap-3">
                                     <span className="text-lg font-black text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 shadow-sm mr-1 sm:mr-3">{item.spec}</span>
-                                    <button onClick={()=>handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
-                                    <input type="number" value={records[item.id] !== undefined ? records[item.id] : ''} onChange={(e)=>handleInputChange(item.id, e.target.value)} placeholder="0" className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent" />
-                                    <button onClick={()=>handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
+                                    <button onClick={() => handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
+                                    <input type="number" value={records[item.id] !== undefined ? records[item.id] : ''} onChange={(e) => handleInputChange(item.id, e.target.value)} placeholder="0" className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent" />
+                                    <button onClick={() => handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
                                 </div>
                             </div>
                         ))}
@@ -710,14 +771,25 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
                             <div className="flex justify-between items-center mb-4 border-b pb-3 flex-wrap gap-2">
                                 <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Calendar size={18}/> {selectedHistory.date} 盤點明細</h3>
                                 <div className="flex gap-2 flex-wrap">
-                                    <button onClick={()=>loadHistoryForEdit(selectedHistory)} className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-indigo-100 flex items-center gap-1"><Edit size={14}/> 修改此檔</button>
-                                    <button onClick={()=>handleExportHistoryCSV(selectedHistory)} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={14}/> 匯出</button>
-                                    <button onClick={()=>setSelectedHistory(null)} className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded text-sm font-bold hover:bg-gray-200">返回列表</button>
+                                    <button onClick={() => loadHistoryForEdit(selectedHistory)} className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-indigo-100 flex items-center gap-1"><Edit size={14}/> 修改此檔</button>
+                                    <button onClick={() => handleExportHistoryCSV(selectedHistory)} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={14}/> 匯出</button>
+                                    <button onClick={() => setSelectedHistory(null)} className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded text-sm font-bold hover:bg-gray-200">返回列表</button>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-xs">
+                                <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+                                    <div className="text-gray-400 font-black mb-1">送出時間</div>
+                                    <div className="font-bold text-gray-700">{formatDateTime(selectedHistory.createdAt || selectedHistory.timestamp)}</div>
+                                </div>
+                                <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+                                    <div className="text-gray-400 font-black mb-1">最後編輯</div>
+                                    <div className="font-bold text-gray-700">{selectedHistory.lastEditorName || '—'}</div>
+                                    {selectedHistory.updatedAt && <div className="text-[11px] text-gray-400 mt-1">{formatDateTime(selectedHistory.updatedAt)}</div>}
                                 </div>
                             </div>
                             <div className="space-y-2">
                                 {items.map(item => {
-                                    const qty = selectedHistory.data[item.id];
+                                    const qty = selectedHistory?.data?.[item.id];
                                     if (qty === undefined || qty === 0) return null;
                                     return (
                                         <div key={item.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-100">
@@ -727,7 +799,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
                                             </div>
                                             <div className="font-mono font-bold text-indigo-600 text-lg">{qty} <span className="text-xs text-gray-500">{item.spec}</span></div>
                                         </div>
-                                    )
+                                    );
                                 })}
                             </div>
                         </div>
@@ -739,20 +811,22 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
                             ) : (
                                 <div className="divide-y">
                                     {historyList.map(hist => {
-                                        const totalCost = items.reduce((sum, item) => sum + ((hist.data[item.id] || 0) * item.price), 0);
+                                        const totalCost = items.reduce((sum, item) => sum + (((hist?.data?.[item.id]) || 0) * Number(item.price || 0)), 0);
                                         return (
-                                            <div key={hist.id} onClick={()=>setSelectedHistory(hist)} className="p-4 hover:bg-indigo-50 cursor-pointer flex justify-between items-center transition-colors">
-                                                <div>
+                                            <div key={hist.id} onClick={() => setSelectedHistory(hist)} className="p-4 hover:bg-indigo-50 cursor-pointer flex justify-between items-center transition-colors gap-4">
+                                                <div className="min-w-0">
                                                     <div className="font-bold text-gray-800 text-lg flex items-center gap-2"><Calendar size={16} className="text-indigo-500"/> {hist.date}</div>
-                                                    <div className="text-xs text-gray-400 mt-1">送出時間: {new Date(hist.timestamp).toLocaleString()}</div>
-                                                    {hist.lastEditorName && <div className="text-xs text-gray-400 mt-1">最後編輯: {hist.lastEditorName}</div>}
+                                                    <div className="text-xs text-gray-400 mt-1">送出時間: {formatDateTime(hist.createdAt || hist.timestamp)}</div>
+                                                    {hist.updatedAt && <div className="text-xs text-gray-400 mt-1">最後更新: {formatDateTime(hist.updatedAt)}</div>}
+                                                    {hist.lastEditorName && <div className="text-xs text-gray-400 mt-1">最後編輯: {hist.lastEditorName}{hist.editCount ? `（已修改 ${hist.editCount} 次）` : ''}</div>}
                                                 </div>
-                                                <div className="text-right">
+                                                <div className="text-right shrink-0">
                                                     <div className="text-xs text-gray-500">當次庫存總值</div>
                                                     <div className="font-bold text-red-600">${Math.ceil(totalCost).toLocaleString()}</div>
+                                                    <button onClick={(e) => { e.stopPropagation(); loadHistoryForEdit(hist); }} className="mt-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-indigo-100 flex items-center gap-1 ml-auto"><Edit size={13}/> 修改此檔</button>
                                                 </div>
                                             </div>
-                                        )
+                                        );
                                     })}
                                 </div>
                             )}
@@ -763,6 +837,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         </div>
     );
 };
+
 // ==========================================
 // 📍 GPS 打卡頁面 (ClockView)// ==========================================
 // 📍 GPS 打卡頁面 (ClockView)
@@ -1611,32 +1686,36 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
 // ==========================================
 // ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
 // ==========================================
+
 const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
   const [showResigned, setShowResigned] = useState(false);
-  const [inventoryList, setInventoryList] = useState(Array.isArray(inventoryItems) ? inventoryItems : []);
+  const [inventoryList, setInventoryList] = useState(normalizeInventoryItems(inventoryItems));
   const [editingItemId, setEditingItemId] = useState(null);
   const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
-  
+  const [draggingItemId, setDraggingItemId] = useState(null);
+  const [dragOverItemId, setDragOverItemId] = useState(null);
+  const [dragOverCategory, setDragOverCategory] = useState('');
+
   useEffect(() => {
-      setInventoryList(Array.isArray(inventoryItems) ? inventoryItems : []);
+      setInventoryList(normalizeInventoryItems(inventoryItems));
   }, [inventoryItems]);
-  
+
   const userList = Object.values(users || {});
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
-  const saveUser = async () => { 
+  const saveUser = async () => {
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
-          return alert("🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！");
+          return alert('🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！');
       }
       const updatedData = {
           ...formData,
           isAdmin: ['boss', 'supervisor'].includes(formData.role),
           workLocation: formData.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店',
       };
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), updatedData); 
-      setEditingId(null); 
-      alert("✅ 員工權限與合約資料已更新！");
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), updatedData);
+      setEditingId(null);
+      alert('✅ 員工權限與合約資料已更新！');
   };
   const roles = [
       { id: 'employee', label: '員工', color: 'bg-gray-100 text-gray-600', desc: '僅能查看個人班表、打卡' },
@@ -1644,6 +1723,19 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       { id: 'boss', label: '老闆', color: 'bg-indigo-600 text-white', desc: '全系統最高權限（含薪資、設定）' },
       { id: 'observer', label: '觀察者', color: 'bg-amber-100 text-amber-600', desc: '僅可查看所有資料，不可修改' }
   ];
+
+  const persistInventoryList = async (nextItems) => {
+      const normalizedItems = normalizeInventoryItems(nextItems);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: normalizedItems }, { merge: true });
+      setInventoryList(normalizedItems);
+      return normalizedItems;
+  };
+
+  const clearDragState = () => {
+      setDraggingItemId(null);
+      setDragOverItemId(null);
+      setDragOverCategory('');
+  };
 
   const resetInventoryForm = () => {
       setEditingItemId(null);
@@ -1677,15 +1769,21 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       if (Number.isNaN(priceNum) || priceNum < 0) return alert('單價請輸入 0 以上的數字');
 
       const itemId = editingItemId && editingItemId !== 'new' ? editingItemId : `i_${Date.now()}`;
-      const nextItem = { id: itemId, category, name, spec, price: priceNum };
       let nextItems = Array.isArray(inventoryList) ? [...inventoryList] : [];
       const idx = nextItems.findIndex(i => i.id === itemId);
+      const existingItem = idx >= 0 ? nextItems[idx] : null;
+      const nextItem = {
+          id: itemId,
+          category,
+          name,
+          spec,
+          price: priceNum,
+          sortOrder: Number.isFinite(Number(existingItem?.sortOrder)) ? Number(existingItem.sortOrder) : nextItems.length
+      };
       if (idx >= 0) nextItems[idx] = nextItem;
       else nextItems.push(nextItem);
-      nextItems.sort((a, b) => `${a.category}-${a.name}`.localeCompare(`${b.category}-${b.name}`, 'zh-Hant'));
 
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: nextItems }, { merge: true });
-      setInventoryList(nextItems);
+      await persistInventoryList(nextItems);
       resetInventoryForm();
       alert(`✅ 庫存品項已${idx >= 0 ? '更新' : '新增'}！`);
   };
@@ -1695,10 +1793,49 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       const target = inventoryList.find(i => i.id === itemId);
       if (!window.confirm(`確定要刪除「${target?.name || '這個品項'}」嗎？`)) return;
       const nextItems = inventoryList.filter(i => i.id !== itemId);
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: nextItems }, { merge: true });
-      setInventoryList(nextItems);
+      await persistInventoryList(nextItems);
       if (editingItemId === itemId) resetInventoryForm();
       alert('✅ 庫存品項已刪除！');
+  };
+
+  const handleInventoryDragStart = (itemId) => {
+      if (!isSuperAdmin) return;
+      setDraggingItemId(itemId);
+      setDragOverItemId(null);
+      setDragOverCategory('');
+  };
+
+  const handleInventoryDragOver = (e, targetId = null, targetCategory = '') => {
+      if (!isSuperAdmin || !draggingItemId) return;
+      e.preventDefault();
+      setDragOverItemId(targetId);
+      setDragOverCategory(targetCategory);
+  };
+
+  const moveInventoryItem = async ({ targetId = null, targetCategory = '' } = {}) => {
+      if (!isSuperAdmin || !draggingItemId) return;
+      const nextItems = [...inventoryList];
+      const fromIndex = nextItems.findIndex(item => item.id === draggingItemId);
+      if (fromIndex < 0) return clearDragState();
+
+      const movingItem = { ...nextItems[fromIndex] };
+      nextItems.splice(fromIndex, 1);
+      if (targetCategory) movingItem.category = targetCategory;
+
+      let insertIndex = nextItems.length;
+      if (targetId) {
+          insertIndex = nextItems.findIndex(item => item.id === targetId);
+          if (insertIndex < 0) insertIndex = nextItems.length;
+      } else if (targetCategory) {
+          const targetIndexes = nextItems
+              .map((item, index) => (item.category === targetCategory ? index : -1))
+              .filter(index => index >= 0);
+          insertIndex = targetIndexes.length ? targetIndexes[targetIndexes.length - 1] + 1 : nextItems.length;
+      }
+
+      nextItems.splice(insertIndex, 0, movingItem);
+      await persistInventoryList(nextItems);
+      clearDragState();
   };
 
   const inventoryCategories = [...new Set((inventoryList || []).map(i => i.category).filter(Boolean))];
@@ -1719,14 +1856,14 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                   </h3>
                   {pendingUsersCount > 0 && <p className="text-[11px] text-red-500 font-black mt-2">尚有 {pendingUsersCount} 位員工未完成合約 / 薪資必要設定</p>}
               </div>
-              <button 
+              <button
                 onClick={() => setShowResigned(!showResigned)}
                 className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
               >
                 {showResigned ? '顯示離職' : '隱藏離職'}
               </button>
           </div>
-          
+
           <div className="grid gap-4">
             {userList
               .filter(u => showResigned ? true : !u?.isResigned)
@@ -1791,7 +1928,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                       </div>
                     )}
                   </div>
-                )
+                );
             })}
           </div>
       </div>
@@ -1803,6 +1940,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                     <Package className="text-indigo-600" size={24}/> 庫存品項管理
                   </h3>
                   <p className="text-sm text-gray-500 mt-2">在這裡統一管理盤點表的品項清單。新增、刪除、編輯後，盤點頁會立即同步更新。</p>
+                  <p className="text-xs text-indigo-500 font-bold mt-2">支援拖曳排序與跨分類移動：把品項拖到其他分類卡片，即可同步改變順序與分類。</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center min-w-[260px]">
                   <div className="bg-indigo-50 rounded-2xl px-4 py-3 border border-indigo-100">
@@ -1864,6 +2002,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                       <div>• 品名：盤點表中顯示的名稱</div>
                       <div>• 單位：如 斤、包、罐、桶</div>
                       <div>• 單價：用於估算庫存總值，可填 0</div>
+                      <div>• 排序：可直接拖曳品項上下移動，也可跨分類拖放</div>
                   </div>
 
                   {isSuperAdmin && (
@@ -1877,7 +2016,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
                       <h4 className="font-black text-gray-800">現有品項清單</h4>
-                      <div className="text-xs text-gray-500 font-bold">操作流程：新增或編輯 → 儲存 → 盤點頁立即同步</div>
+                      <div className="text-xs text-gray-500 font-bold">操作流程：拖曳排序 / 跨分類 → 自動儲存 → 盤點頁立即同步</div>
                   </div>
 
                   {inventoryList.length === 0 ? (
@@ -1889,17 +2028,33 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                           {inventoryCategories.map(category => {
                               const groupItems = inventoryList.filter(item => item.category === category);
                               return (
-                                  <div key={category} className="bg-white rounded-[1.5rem] border border-gray-100 overflow-hidden">
+                                  <div
+                                      key={category}
+                                      className={`bg-white rounded-[1.5rem] border overflow-hidden transition-all ${dragOverCategory === category ? 'border-indigo-300 shadow-lg shadow-indigo-50' : 'border-gray-100'}`}
+                                      onDragOver={(e) => handleInventoryDragOver(e, null, category)}
+                                      onDrop={(e) => { e.preventDefault(); moveInventoryItem({ targetCategory: category }); }}
+                                  >
                                       <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
                                           <div className="font-black text-indigo-700">{category}</div>
                                           <div className="text-[10px] font-black text-indigo-400">{groupItems.length} 項</div>
                                       </div>
                                       <div className="divide-y divide-gray-100">
                                           {groupItems.map(item => (
-                                              <div key={item.id} className="px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                                  <div className="min-w-0">
-                                                      <div className="font-black text-gray-800 text-base">{item.name}</div>
-                                                      <div className="text-xs text-gray-400 font-bold mt-1">ID: {item.id} ｜ 單位: {item.spec} ｜ 單價: ${Number(item.price || 0).toLocaleString()}</div>
+                                              <div
+                                                  key={item.id}
+                                                  draggable={isSuperAdmin}
+                                                  onDragStart={() => handleInventoryDragStart(item.id)}
+                                                  onDragEnd={clearDragState}
+                                                  onDragOver={(e) => handleInventoryDragOver(e, item.id, category)}
+                                                  onDrop={(e) => { e.preventDefault(); moveInventoryItem({ targetId: item.id, targetCategory: category }); }}
+                                                  className={`px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 transition-all ${isSuperAdmin ? 'cursor-move' : ''} ${draggingItemId === item.id ? 'opacity-40' : ''} ${dragOverItemId === item.id ? 'bg-indigo-50 ring-2 ring-indigo-200 ring-inset' : ''}`}
+                                              >
+                                                  <div className="min-w-0 flex items-start gap-3">
+                                                      {isSuperAdmin && <div className="text-gray-300 mt-0.5 shrink-0"><GripVertical size={18} /></div>}
+                                                      <div className="min-w-0">
+                                                          <div className="font-black text-gray-800 text-base">{item.name}</div>
+                                                          <div className="text-xs text-gray-400 font-bold mt-1">ID: {item.id} ｜ 單位: {item.spec} ｜ 單價: ${Number(item.price || 0).toLocaleString()}</div>
+                                                      </div>
                                                   </div>
                                                   <div className="flex gap-2 shrink-0">
                                                       <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>
@@ -1911,6 +2066,15 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                                                   </div>
                                               </div>
                                           ))}
+                                          {isSuperAdmin && (
+                                              <div
+                                                  className={`px-5 py-3 text-center text-xs font-black transition-colors ${dragOverCategory === category && !dragOverItemId ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`}
+                                                  onDragOver={(e) => handleInventoryDragOver(e, null, category)}
+                                                  onDrop={(e) => { e.preventDefault(); moveInventoryItem({ targetCategory: category }); }}
+                                              >
+                                                  拖曳到這裡，可移到「{category}」分類尾端
+                                              </div>
+                                          )}
                                       </div>
                                   </div>
                               );
