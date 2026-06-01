@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.2 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.6 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -787,9 +787,11 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
   
     const handleSaveEvent = async (eventData) => {
+        const isEditing = !!eventData.id;
         if (eventData.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventData.id), eventData);
         else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), eventData);
         setEditingEvent(null);
+        alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。系統將於事件當天早上 9:00 或有人開啟系統時，自動發送 LINE 提醒。`);
     };
     
     const handleDeleteEvent = async (eventId) => {
@@ -1632,6 +1634,54 @@ function App() {
         });
         return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); };
     }, [user]);
+
+    useEffect(() => {
+        if (!user) return;
+        const memberLineIds = [...new Set(Object.values(dbData.users || {})
+            .filter(u => !u.isResigned && u.lineUserId)
+            .map(u => u.lineUserId)
+            .filter(Boolean))];
+        if (memberLineIds.length === 0 || !Array.isArray(dbData.events) || dbData.events.length === 0) return;
+
+        let timer = null;
+        let cancelled = false;
+
+        const sendTodayEventNotifications = async () => {
+            if (cancelled) return;
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+            const todaysEvents = dbData.events.filter(e => e?.title && checkEventOnDate(e, todayStr));
+            if (todaysEvents.length === 0) return;
+
+            for (const evt of todaysEvents) {
+                const logId = `${evt.id || evt.startDate || 'event'}_${todayStr}`;
+                const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'eventNotificationLogs', logId);
+                const sentSnap = await getDoc(logRef);
+                if (sentSnap.exists()) continue;
+
+                const timeText = evt.time ? `\n時間：${evt.time}` : '';
+                const repeatText = evt.repeatType && evt.repeatType !== 'none' ? `\n重複：${REPEAT_LABELS[evt.repeatType] || evt.repeatType}` : '';
+                const noteText = evt.note ? `\n內容：${evt.note}` : '';
+
+                await sendLineNotification(memberLineIds, `📢 【今日公司備忘錄 / 行程提醒】\n日期：${todayStr}${timeText}\n標題：${evt.title}${repeatText}${noteText}\n請留意今日安排。`);
+                await setDoc(logRef, { eventId: evt.id || null, date: todayStr, sentAt: Date.now(), title: evt.title, repeatType: evt.repeatType || 'none' }, { merge: true });
+            }
+        };
+
+        const now = new Date();
+        const nineAM = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0);
+        if (now >= nineAM) {
+            sendTodayEventNotifications();
+        } else {
+            timer = setTimeout(sendTodayEventNotifications, nineAM.getTime() - now.getTime());
+        }
+
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+        };
+    }, [user, dbData.events, dbData.users]);
+
     const isSuperAdmin = currentUserInfo?.isAdmin === true;
     const canApproveLeaveRequests = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true;
     const hasSignedContract = dbData.signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
@@ -1793,6 +1843,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                     <nav className="flex items-center gap-2">
                         <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
                         <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
+                        <NavBtn active={view === 'inventory'} onClick={() => setView('inventory')} icon={Package} label="盤點" />
                         
                         <div className="relative">
                             <button 
