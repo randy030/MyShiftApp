@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.1 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.2 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -521,30 +521,80 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 // ==========================================
 // 📦 庫存盤點頁面 (InventoryView) - 🔴 V8.6 歷史紀錄查詢功能
 // ==========================================
-const InventoryView = ({ db, appId, inventoryItems }) => {
+const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
     const items = Array.isArray(inventoryItems) && inventoryItems.length > 0 ? inventoryItems : [];
     const categories = useMemo(() => [...new Set(items.map(i => i.category))], [items]);
+    const draftKey = `inventoryDraft_${appId}_${currentUserInfo?.uid || 'guest'}`;
     
     const [mode, setMode] = useState('count'); // 'count' 或 'history'
     const [activeTab, setActiveTab] = useState(categories[0] || '');
     const [records, setRecords] = useState({});
     const [historyList, setHistoryList] = useState([]);
     const [selectedHistory, setSelectedHistory] = useState(null);
+    const [editingRecordDate, setEditingRecordDate] = useState(null);
+
+    useEffect(() => {
+        if (categories.length > 0 && !categories.includes(activeTab)) setActiveTab(categories[0] || '');
+    }, [categories, activeTab]);
+
+    useEffect(() => {
+        try {
+            const savedDraft = localStorage.getItem(draftKey);
+            if (savedDraft) {
+                const parsed = JSON.parse(savedDraft);
+                if (parsed?.records && typeof parsed.records === 'object') {
+                    setRecords(parsed.records);
+                    if (parsed.activeTab) setActiveTab(parsed.activeTab);
+                    if (parsed.editingRecordDate) setEditingRecordDate(parsed.editingRecordDate);
+                }
+            }
+        } catch (e) {
+            console.error('讀取盤點暫存失敗', e);
+        }
+    }, [draftKey]);
+
+    useEffect(() => {
+        try {
+            if (Object.keys(records).length === 0 && !editingRecordDate) localStorage.removeItem(draftKey);
+            else localStorage.setItem(draftKey, JSON.stringify({ records, activeTab, editingRecordDate, savedAt: Date.now() }));
+        } catch (e) {
+            console.error('儲存盤點暫存失敗', e);
+        }
+    }, [records, activeTab, editingRecordDate, draftKey]);
+
     // 🔴 載入歷史紀錄
     useEffect(() => {
         if (mode === 'history') {
             const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords'), (snap) => {
                 const list = [];
                 snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
-                // 依日期由新到舊排序
                 list.sort((a, b) => b.date.localeCompare(a.date));
                 setHistoryList(list);
             });
             return () => unsub();
         }
     }, [mode, db, appId]);
+
     const filteredItems = items.filter(i => i.category === activeTab);
     const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * item.price), 0), [items, records]);
+    const roundedTotalValue = useMemo(() => Math.ceil(totalValue), [totalValue]);
+
+    const resetDraft = () => {
+        setRecords({});
+        setEditingRecordDate(null);
+        try { localStorage.removeItem(draftKey); } catch (e) { console.error('清除盤點暫存失敗', e); }
+    };
+
+    const loadHistoryForEdit = (hist) => {
+        setRecords(hist?.data || {});
+        setEditingRecordDate(hist?.date || null);
+        setMode('count');
+        setSelectedHistory(null);
+        const firstCategory = items.find(item => (hist?.data || {})[item.id] !== undefined)?.category;
+        if (firstCategory) setActiveTab(firstCategory);
+        alert(`已載入 ${hist?.date || ''} 的盤點資料，您可以繼續修改後重新儲存。`);
+    };
+
     if (items.length === 0) {
         return (
             <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
@@ -554,25 +604,53 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
             </div>
         )
     }
+
     const handleCountChange = (id, delta) => { setRecords(prev => { const current = prev[id] || 0; return { ...prev, [id]: Math.max(0, current + delta) }; }); };
-    const handleInputChange = (id, val) => { const num = parseFloat(val); if(!isNaN(num) && num >= 0) { setRecords(prev => ({ ...prev, [id]: num })); } else if (val === '') { const newRecs = {...records}; delete newRecs[id]; setRecords(newRecs); } };
+    const handleInputChange = (id, val) => {
+        const num = parseFloat(val);
+        if(!isNaN(num) && num >= 0) setRecords(prev => ({ ...prev, [id]: num }));
+        else if (val === '') setRecords(prev => { const newRecs = {...prev}; delete newRecs[id]; return newRecs; });
+    };
+
     const handleSave = async () => {
         if (Object.keys(records).length === 0) return alert("尚未填寫任何盤點數量！");
-        if (window.confirm("確定要送出今日盤點結果嗎？\n\n送出後畫面將自動重置為 0。")) {
-            const todayStr = new Date().toISOString().split('T')[0];
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', todayStr), { date: todayStr, timestamp: Date.now(), data: records }, { merge: true });
-            alert("✅ 盤點資料已成功儲存至雲端！"); setRecords({}); 
+        const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
+        const actionLabel = editingRecordDate ? `更新 ${editingRecordDate} 的盤點紀錄` : '送出今日盤點結果';
+        if (window.confirm(`確定要${actionLabel}嗎？
+
+儲存後會保留在歷史紀錄中，並清空目前暫存。`)) {
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', targetDate), {
+                date: targetDate,
+                timestamp: Date.now(),
+                data: records,
+                lastEditorUid: currentUserInfo?.uid || '',
+                lastEditorName: currentUserInfo?.name || '未知使用者'
+            }, { merge: true });
+            alert(`✅ 盤點資料已成功${editingRecordDate ? '更新' : '儲存'}至雲端！`);
+            resetDraft();
         }
     };
+
+    const handleClearDraft = () => {
+        if (!window.confirm('確定要清空目前盤點暫存嗎？')) return;
+        resetDraft();
+    };
+
     // 匯出「當前填寫中」的報表
     const handleExportCSV = () => {
-        const todayStr = new Date().toISOString().split('T')[0];
+        const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
         let exportTotal = 0;
-        items.forEach(item => { const qty = records[item.id] || 0; const subtotal = qty * item.price; exportTotal += subtotal; rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]); });
-        rows.push(['', '', '', '', '庫存總值:', exportTotal]);
-        exportToCSV(`當前盤點表_${todayStr}`, rows);
+        items.forEach(item => {
+            const qty = records[item.id] || 0;
+            const subtotal = qty * item.price;
+            exportTotal += subtotal;
+            rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]);
+        });
+        rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
+        exportToCSV(`當前盤點表_${targetDate}`, rows);
     };
+
     // 🔴 匯出「指定歷史紀錄」的報表
     const handleExportHistoryCSV = (hist) => {
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
@@ -583,9 +661,10 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
             exportTotal += subtotal; 
             rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]); 
         });
-        rows.push(['', '', '', '', '庫存總值:', exportTotal]);
+        rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
         exportToCSV(`歷史盤點紀錄_${hist.date}`, rows);
     };
+
     return (
         <div className="max-w-2xl mx-auto pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row justify-between items-center mb-4 shadow-sm gap-3">
@@ -597,9 +676,15 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
             </div>
             {mode === 'count' ? (
                 <>
-                    <div className="flex justify-between items-center mb-2 px-1">
-                        <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${totalValue.toLocaleString()}</div>
-                        <div className="flex gap-2"><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button><button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> 送出</button></div>
+                    {(editingRecordDate || Object.keys(records).length > 0) && (
+                        <div className="mb-3 bg-amber-50 border border-amber-100 rounded-xl p-3 text-sm font-bold text-amber-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                            <div>{editingRecordDate ? `目前正在編輯 ${editingRecordDate} 的盤點紀錄` : '已為您保留盤點暫存，離開後回來可接續編輯。'}</div>
+                            <button onClick={handleClearDraft} className="px-3 py-1.5 rounded-lg bg-white border border-amber-200 text-amber-700 text-xs font-black hover:bg-amber-100">清空暫存</button>
+                        </div>
+                    )}
+                    <div className="flex justify-between items-center mb-2 px-1 gap-2 flex-wrap">
+                        <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${roundedTotalValue.toLocaleString()} <span className="text-[10px] text-red-400 ml-1">(小數點後無條件進位)</span></div>
+                        <div className="flex gap-2"><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button><button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> {editingRecordDate ? '更新檔案' : '送出'}</button></div>
                     </div>
                     <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
                         {categories.map(c => (<button key={c} onClick={()=>setActiveTab(c)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === c ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{c}</button>))}
@@ -622,9 +707,10 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
                 <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
                     {selectedHistory ? (
                         <div className="p-4">
-                            <div className="flex justify-between items-center mb-4 border-b pb-3">
+                            <div className="flex justify-between items-center mb-4 border-b pb-3 flex-wrap gap-2">
                                 <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Calendar size={18}/> {selectedHistory.date} 盤點明細</h3>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 flex-wrap">
+                                    <button onClick={()=>loadHistoryForEdit(selectedHistory)} className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-indigo-100 flex items-center gap-1"><Edit size={14}/> 修改此檔</button>
                                     <button onClick={()=>handleExportHistoryCSV(selectedHistory)} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={14}/> 匯出</button>
                                     <button onClick={()=>setSelectedHistory(null)} className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded text-sm font-bold hover:bg-gray-200">返回列表</button>
                                 </div>
@@ -659,10 +745,11 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
                                                 <div>
                                                     <div className="font-bold text-gray-800 text-lg flex items-center gap-2"><Calendar size={16} className="text-indigo-500"/> {hist.date}</div>
                                                     <div className="text-xs text-gray-400 mt-1">送出時間: {new Date(hist.timestamp).toLocaleString()}</div>
+                                                    {hist.lastEditorName && <div className="text-xs text-gray-400 mt-1">最後編輯: {hist.lastEditorName}</div>}
                                                 </div>
                                                 <div className="text-right">
                                                     <div className="text-xs text-gray-500">當次庫存總值</div>
-                                                    <div className="font-bold text-red-600">${totalCost.toLocaleString()}</div>
+                                                    <div className="font-bold text-red-600">${Math.ceil(totalCost).toLocaleString()}</div>
                                                 </div>
                                             </div>
                                         )
@@ -677,6 +764,7 @@ const InventoryView = ({ db, appId, inventoryItems }) => {
     );
 };
 // ==========================================
+// 📍 GPS 打卡頁面 (ClockView)// ==========================================
 // 📍 GPS 打卡頁面 (ClockView)
 // ==========================================
 const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => {
@@ -2078,7 +2166,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         switch (view) {
             case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
-            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} />;
+            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} currentUserInfo={currentUserInfo} />;
             case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
             case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
             case 'payroll': return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
