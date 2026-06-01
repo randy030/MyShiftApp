@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.1 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.2 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -91,10 +91,11 @@ const sortInventoryItems = (items = []) => {
         return `${a?.category || ''}-${a?.name || ''}`.localeCompare(`${b?.category || ''}-${b?.name || ''}`, 'zh-Hant');
     });
 };
-const normalizeInventoryItems = (items = []) => sortInventoryItems(items).map((item, index) => ({
+const normalizeInventoryItems = (items = []) => (Array.isArray(items) ? items : []).map((item, index) => ({
     ...item,
     sortOrder: index
 }));
+const prepareInventoryItems = (items = []) => normalizeInventoryItems(sortInventoryItems(items));
 const getDistance = (lat1, lon1, lat2, lon2) => {
     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
     const R = 6371e3; 
@@ -537,7 +538,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 // ==========================================
 
 const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
-    const items = useMemo(() => normalizeInventoryItems(inventoryItems), [inventoryItems]);
+    const items = useMemo(() => prepareInventoryItems(inventoryItems), [inventoryItems]);
     const categories = useMemo(() => [...new Set(items.map(i => i.category).filter(Boolean))], [items]);
     const draftKey = `inventoryDraft_${appId}_${currentUserInfo?.uid || 'guest'}`;
 
@@ -1692,14 +1693,14 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
   const [showResigned, setShowResigned] = useState(false);
-  const [inventoryList, setInventoryList] = useState(normalizeInventoryItems(inventoryItems));
+  const [inventoryList, setInventoryList] = useState(prepareInventoryItems(inventoryItems));
   const [editingItemId, setEditingItemId] = useState(null);
   const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
   const [sequenceInputs, setSequenceInputs] = useState({});
   const canManageInventory = isSuperAdmin || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor';
 
   useEffect(() => {
-      setInventoryList(normalizeInventoryItems(inventoryItems));
+      setInventoryList(prepareInventoryItems(inventoryItems));
   }, [inventoryItems]);
 
   const buildInventoryGroups = (sourceItems = []) => {
