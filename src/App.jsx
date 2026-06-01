@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.6 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.1 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -38,14 +38,48 @@ const exportToCSV = (filename, rows) => {
     link.click();
 };
 const sendLineNotification = async (targetLineIds, messageText) => {
-    if (!targetLineIds || targetLineIds.length === 0) return;
+    if (!targetLineIds || targetLineIds.length === 0) return false;
     try {
-        await fetch(LINE_API_URL, { 
+        const response = await fetch(LINE_API_URL, { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ to: targetLineIds, messages: [{ type: 'text', text: messageText }] }) 
         });
-    } catch (e) { console.error("LINE 通知失敗", e); }
+        if (!response.ok) throw new Error(`LINE API ${response.status}`);
+        return true;
+    } catch (e) {
+        console.error("LINE 通知失敗", e);
+        return false;
+    }
+};
+const getApproverLineIds = (users = {}) => [...new Set(
+    Object.values(users || {})
+        .filter(u => !u?.isResigned && (u?.role === 'boss' || u?.role === 'supervisor' || u?.isAdmin === true || u?.isManager === true) && u?.lineUserId)
+        .map(u => u.lineUserId)
+        .filter(Boolean)
+)];
+const getSiblingPendingRequests = (requests = [], req = {}) => {
+    const requesterUid = req?.uid || req?.fromUid;
+    return (requests || []).filter(item => {
+        const itemRequesterUid = item?.uid || item?.fromUid;
+        if (!item?.id || item.id === req?.id) return false;
+        if (item?.type !== req?.type) return false;
+        if (itemRequesterUid !== requesterUid) return false;
+        if ((item?.date || '') !== (req?.date || '')) return false;
+        if ((item?.leaveType || '') !== (req?.leaveType || '')) return false;
+        return String(item?.hours ?? '') === String(req?.hours ?? '');
+    });
+};
+const formatDateTime = (value) => {
+    if (!value) return '—';
+    const dateObj = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return '—';
+    const yyyy = dateObj.getFullYear();
+    const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const dd = String(dateObj.getDate()).padStart(2, '0');
+    const hh = String(dateObj.getHours()).padStart(2, '0');
+    const mi = String(dateObj.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 };
 const getDistance = (lat1, lon1, lat2, lon2) => {
     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
@@ -974,7 +1008,9 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
             else {
                 const leaveLabel = leaves.find(l => l.id === lType)?.label || '假別';
                 try {
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
+                    const duplicatedReqs = (requests || []).filter(r => r.type === 'leave_request' && (r.uid === currentUserInfo.uid) && r.date === dateStr);
+                    await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
+                    const newRequestRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
                         type: 'leave_request',
                         uid: currentUserInfo.uid,
                         userName: currentUserInfo.name,
@@ -986,14 +1022,24 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
                         timestamp: new Date(),
                         status: 'pending'
                     });
-                    const approverLineIds = [...new Set(Object.values(users)
-                        .filter(u => !u.isResigned && (u.role === 'boss' || u.role === 'supervisor' || u.isAdmin || u.isManager) && u.lineUserId)
-                        .map(u => u.lineUserId)
-                        .filter(Boolean))];
+                    const approverLineIds = getApproverLineIds(users);
                     if (approverLineIds.length > 0) {
-                        await sendLineNotification(approverLineIds, `🔔 【新假單申請】\n申請人：${currentUserInfo.name}\n日期：${dateStr}\n類別：${leaveLabel}${subUid ? `\n代理人：${users[subUid]?.name || '已填寫'}` : ''}\n請至系統「通知中心」進行審核。`);
+                        const sent = await sendLineNotification(approverLineIds, `🔔 【新假單申請】
+申請人：${currentUserInfo.name}
+日期：${dateStr}
+類別：${leaveLabel}${subUid ? `
+代理人：${users[subUid]?.name || '已填寫'}` : ''}
+請至系統「通知中心」進行審核。`);
+                        if (sent) {
+                            await updateDoc(newRequestRef, {
+                                lineNotifiedAt: Date.now(),
+                                notifiedApproverCount: approverLineIds.length,
+                                lastNotificationType: 'create'
+                            });
+                        }
                     }
-                    alert(`✅ ${leaveLabel} 申請已送出！\n不論是否填寫代理人，皆需主管或管理員審核後才會上班表。`);
+                    alert(`✅ ${leaveLabel} 申請已送出！
+不論是否填寫代理人，皆需主管或管理員審核後才會上班表。`);
                     setExpanded(null);
                     onClose(); // 申請完自動關閉彈窗
                 } catch (e) {
@@ -1038,15 +1084,24 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'ot_confirm', uid, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
           setOtModalData(null); onClose(); setTimeout(() => alert("已送出時數確認單給員工"), 100);
         } else if (!isPrivileged && uid === currentUserInfo.uid) {
-          const existingReq = requests.find(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
-          if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUserInfo.uid, fromName: currentUserInfo.name, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
-          const approverLineIds = [...new Set(Object.values(users)
-            .filter(u => !u.isResigned && (u.role === 'boss' || u.role === 'supervisor' || u.isAdmin || u.isManager) && u.lineUserId)
-            .map(u => u.lineUserId)
-            .filter(Boolean))];
+          const duplicatedReqs = (requests || []).filter(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
+          await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
+          const newRequestRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUserInfo.uid, fromName: currentUserInfo.name, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
+          const approverLineIds = getApproverLineIds(users);
           if (approverLineIds.length > 0) {
-            await sendLineNotification(approverLineIds, `🔔 【時數審核申請】\n申請人：${currentUserInfo.name}\n日期：${dateStr}\n時數：${numHours} hr\n原因：${remark || '無備註'}\n請至系統「通知中心」進行審核。`);
+            const sent = await sendLineNotification(approverLineIds, `🔔 【時數審核申請】
+申請人：${currentUserInfo.name}
+日期：${dateStr}
+時數：${numHours} hr
+原因：${remark || '無備註'}
+請至系統「通知中心」進行審核。`);
+            if (sent) {
+              await updateDoc(newRequestRef, {
+                lineNotifiedAt: Date.now(),
+                notifiedApproverCount: approverLineIds.length,
+                lastNotificationType: 'create'
+              });
+            }
           }
           setOtModalData(null); onClose(); setTimeout(() => alert("已送出審核明細！請等候主管核准。"), 100);
         } else {
@@ -1472,6 +1527,13 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
   const [showResigned, setShowResigned] = useState(false);
+  const [inventoryList, setInventoryList] = useState(Array.isArray(inventoryItems) ? inventoryItems : []);
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
+  
+  useEffect(() => {
+      setInventoryList(Array.isArray(inventoryItems) ? inventoryItems : []);
+  }, [inventoryItems]);
   
   const userList = Object.values(users || {});
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
@@ -1479,10 +1541,9 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
           return alert("🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！");
       }
-      // 🟢 儲存時自動確保權限邏輯 (例如：老闆一定是 Admin)
       const updatedData = {
           ...formData,
-          isAdmin: ['boss', 'supervisor'].includes(formData.role), // 自動判斷是否具備管理權限
+          isAdmin: ['boss', 'supervisor'].includes(formData.role),
           workLocation: formData.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店',
       };
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), updatedData); 
@@ -1495,20 +1556,81 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       { id: 'boss', label: '老闆', color: 'bg-indigo-600 text-white', desc: '全系統最高權限（含薪資、設定）' },
       { id: 'observer', label: '觀察者', color: 'bg-amber-100 text-amber-600', desc: '僅可查看所有資料，不可修改' }
   ];
+
+  const resetInventoryForm = () => {
+      setEditingItemId(null);
+      setInventoryForm({ category: '', name: '', spec: '', price: '' });
+  };
+
+  const startAddInventoryItem = () => {
+      if (!isSuperAdmin) return alert('只有管理員可新增庫存品項');
+      setEditingItemId('new');
+      setInventoryForm({ category: '', name: '', spec: '', price: '' });
+  };
+
+  const startEditInventoryItem = (item) => {
+      if (!isSuperAdmin) return alert('只有管理員可編輯庫存品項');
+      setEditingItemId(item.id);
+      setInventoryForm({
+          category: item.category || '',
+          name: item.name || '',
+          spec: item.spec || '',
+          price: item.price ?? ''
+      });
+  };
+
+  const saveInventoryItem = async () => {
+      if (!isSuperAdmin) return alert('只有管理員可儲存庫存品項');
+      const category = String(inventoryForm.category || '').trim();
+      const name = String(inventoryForm.name || '').trim();
+      const spec = String(inventoryForm.spec || '').trim();
+      const priceNum = Number(inventoryForm.price);
+      if (!category || !name || !spec) return alert('請完整填寫分類、品名與單位');
+      if (Number.isNaN(priceNum) || priceNum < 0) return alert('單價請輸入 0 以上的數字');
+
+      const itemId = editingItemId && editingItemId !== 'new' ? editingItemId : `i_${Date.now()}`;
+      const nextItem = { id: itemId, category, name, spec, price: priceNum };
+      let nextItems = Array.isArray(inventoryList) ? [...inventoryList] : [];
+      const idx = nextItems.findIndex(i => i.id === itemId);
+      if (idx >= 0) nextItems[idx] = nextItem;
+      else nextItems.push(nextItem);
+      nextItems.sort((a, b) => `${a.category}-${a.name}`.localeCompare(`${b.category}-${b.name}`, 'zh-Hant'));
+
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: nextItems }, { merge: true });
+      setInventoryList(nextItems);
+      resetInventoryForm();
+      alert(`✅ 庫存品項已${idx >= 0 ? '更新' : '新增'}！`);
+  };
+
+  const deleteInventoryItem = async (itemId) => {
+      if (!isSuperAdmin) return alert('只有管理員可刪除庫存品項');
+      const target = inventoryList.find(i => i.id === itemId);
+      if (!window.confirm(`確定要刪除「${target?.name || '這個品項'}」嗎？`)) return;
+      const nextItems = inventoryList.filter(i => i.id !== itemId);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: nextItems }, { merge: true });
+      setInventoryList(nextItems);
+      if (editingItemId === itemId) resetInventoryForm();
+      alert('✅ 庫存品項已刪除！');
+  };
+
+  const inventoryCategories = [...new Set((inventoryList || []).map(i => i.category).filter(Boolean))];
+
   return (
-    <div className="space-y-8 pb-20 max-w-4xl mx-auto animate-fade-in">
-      {/* 💳 頂端資訊卡片 */}
+    <div className="space-y-8 pb-20 max-w-5xl mx-auto animate-fade-in">
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
         <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '管理員'}</h2>
         <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">Permission Controller</p>
       </div>
-      {/* 👥 員工資料與權限管理區 */}
+
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
-          <div className="flex justify-between items-center mb-8">
-              <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
-                <ShieldAlert className="text-indigo-600" size={24}/> 權限等級與合約檔案
-              </h3>
+          <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-8">
+              <div>
+                  <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+                    <ShieldAlert className="text-indigo-600" size={24}/> 權限等級與合約檔案
+                  </h3>
+                  {pendingUsersCount > 0 && <p className="text-[11px] text-red-500 font-black mt-2">尚有 {pendingUsersCount} 位員工未完成合約 / 薪資必要設定</p>}
+              </div>
               <button 
                 onClick={() => setShowResigned(!showResigned)}
                 className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
@@ -1522,13 +1644,11 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
               .filter(u => showResigned ? true : !u?.isResigned)
               .sort((a, b) => (a?.isResigned === b?.isResigned ? 0 : a?.isResigned ? 1 : -1))
               .map(u => {
-                const needsSetup = !u?.salaryAmount || !u?.contractStart;
                 const currentRole = roles.find(r => r.id === (u?.role || 'employee'));
                 return (
                   <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u?.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
                     {editingId === u.uid ? (
                       <div className="space-y-6 animate-scale-in">
-                        {/* 🔑 權限設定區 */}
                         <div className="space-y-3">
                             <label className="text-[10px] font-black text-gray-400 ml-2 uppercase tracking-widest">Permission Level 權限等級設定</label>
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -1546,7 +1666,6 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                                 * {roles.find(r => r.id === formData.role)?.desc}
                             </p>
                         </div>
-                        {/* 📅 日期與薪資設定 */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">到職日</label><input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
                             <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">本薪</label><input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
@@ -1561,13 +1680,13 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                         </div>
                       </div>
                     ) : (
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-4">
-                            <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center font-black border-2 ${currentRole?.id === 'boss' ? 'border-indigo-600 bg-indigo-50 text-indigo-600' : 'bg-white border-gray-100 text-gray-400'}`}>
+                      <div className="flex justify-between items-center gap-4">
+                        <div className="flex items-center gap-4 min-w-0">
+                            <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center font-black border-2 shrink-0 ${currentRole?.id === 'boss' ? 'border-indigo-600 bg-indigo-50 text-indigo-600' : 'bg-white border-gray-100 text-gray-400'}`}>
                                 {u?.name?.slice(0,1)}
                             </div>
-                            <div>
-                                <div className="font-black text-gray-800 text-lg flex items-center gap-2">
+                            <div className="min-w-0">
+                                <div className="font-black text-gray-800 text-lg flex items-center gap-2 flex-wrap">
                                   {u?.name}
                                   <span className={`text-[9px] px-2 py-1 rounded-lg font-black ${currentRole?.color || 'bg-gray-100 text-gray-400'}`}>
                                     {currentRole?.label || '未定身分'}
@@ -1578,7 +1697,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                                 </div>
                             </div>
                         </div>
-                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-gray-50 px-6 py-3 rounded-2xl text-xs font-black text-gray-600 hover:bg-indigo-600 hover:text-white transition-all">
+                        <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-gray-50 px-6 py-3 rounded-2xl text-xs font-black text-gray-600 hover:bg-indigo-600 hover:text-white transition-all shrink-0">
                             編輯身分
                         </button>
                       </div>
@@ -1588,9 +1707,135 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
             })}
           </div>
       </div>
+
+      <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
+              <div>
+                  <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+                    <Package className="text-indigo-600" size={24}/> 庫存品項管理
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-2">在這裡統一管理盤點表的品項清單。新增、刪除、編輯後，盤點頁會立即同步更新。</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center min-w-[260px]">
+                  <div className="bg-indigo-50 rounded-2xl px-4 py-3 border border-indigo-100">
+                      <div className="text-[10px] font-black text-indigo-400">總品項數</div>
+                      <div className="text-2xl font-black text-indigo-700">{inventoryList.length}</div>
+                  </div>
+                  <div className="bg-purple-50 rounded-2xl px-4 py-3 border border-purple-100">
+                      <div className="text-[10px] font-black text-purple-400">分類數</div>
+                      <div className="text-2xl font-black text-purple-700">{inventoryCategories.length}</div>
+                  </div>
+                  <div className="bg-amber-50 rounded-2xl px-4 py-3 border border-amber-100">
+                      <div className="text-[10px] font-black text-amber-400">操作權限</div>
+                      <div className="text-sm font-black text-amber-700 mt-1">{isSuperAdmin ? '管理員可編輯' : '僅可檢視'}</div>
+                  </div>
+              </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[360px,1fr] gap-6">
+              <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5 space-y-4">
+                  <div className="flex justify-between items-center">
+                      <h4 className="font-black text-gray-800">品項編輯器</h4>
+                      {isSuperAdmin && (
+                          <button onClick={startAddInventoryItem} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-black shadow hover:bg-indigo-700 flex items-center gap-1">
+                              <Plus size={14}/> 新增品項
+                          </button>
+                      )}
+                  </div>
+
+                  {!isSuperAdmin && (
+                      <div className="bg-amber-50 text-amber-700 border border-amber-100 rounded-2xl p-4 text-sm font-bold">
+                          目前帳號僅可查看庫存品項，新增、編輯、刪除需使用管理員權限。
+                      </div>
+                  )}
+
+                  <div className="space-y-3">
+                      <div>
+                          <label className="block text-[11px] font-black text-gray-500 mb-1">分類</label>
+                          <input type="text" value={inventoryForm.category} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, category: e.target.value})} placeholder="例如：茶葉類" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                      </div>
+                      <div>
+                          <label className="block text-[11px] font-black text-gray-500 mb-1">品名</label>
+                          <input type="text" value={inventoryForm.name} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, name: e.target.value})} placeholder="例如：高山青茶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                          <div>
+                              <label className="block text-[11px] font-black text-gray-500 mb-1">單位</label>
+                              <input type="text" value={inventoryForm.spec} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, spec: e.target.value})} placeholder="斤 / 包 / 桶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                          </div>
+                          <div>
+                              <label className="block text-[11px] font-black text-gray-500 mb-1">單價</label>
+                              <input type="number" value={inventoryForm.price} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, price: e.target.value})} placeholder="0" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                          </div>
+                      </div>
+                  </div>
+
+                  <div className="bg-white border border-gray-100 rounded-2xl p-4 text-xs text-gray-500 leading-6">
+                      <div className="font-black text-gray-700 mb-2">欄位說明</div>
+                      <div>• 分類：決定盤點頁上方的分類頁籤</div>
+                      <div>• 品名：盤點表中顯示的名稱</div>
+                      <div>• 單位：如 斤、包、罐、桶</div>
+                      <div>• 單價：用於估算庫存總值，可填 0</div>
+                  </div>
+
+                  {isSuperAdmin && (
+                      <div className="flex gap-3 pt-2">
+                          <button onClick={resetInventoryForm} className="flex-1 bg-gray-100 text-gray-600 py-3 rounded-2xl font-black text-sm hover:bg-gray-200">清空 / 取消</button>
+                          <button onClick={saveInventoryItem} className="flex-1 bg-indigo-600 text-white py-3 rounded-2xl font-black text-sm shadow hover:bg-indigo-700">{editingItemId && editingItemId !== 'new' ? '儲存修改' : '新增品項'}</button>
+                      </div>
+                  )}
+              </div>
+
+              <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+                      <h4 className="font-black text-gray-800">現有品項清單</h4>
+                      <div className="text-xs text-gray-500 font-bold">操作流程：新增或編輯 → 儲存 → 盤點頁立即同步</div>
+                  </div>
+
+                  {inventoryList.length === 0 ? (
+                      <div className="bg-white rounded-2xl border border-dashed border-gray-200 p-10 text-center text-gray-400 font-bold">
+                          目前尚無庫存品項，請先新增第一個品項。
+                      </div>
+                  ) : (
+                      <div className="space-y-3 max-h-[760px] overflow-y-auto pr-1">
+                          {inventoryCategories.map(category => {
+                              const groupItems = inventoryList.filter(item => item.category === category);
+                              return (
+                                  <div key={category} className="bg-white rounded-[1.5rem] border border-gray-100 overflow-hidden">
+                                      <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+                                          <div className="font-black text-indigo-700">{category}</div>
+                                          <div className="text-[10px] font-black text-indigo-400">{groupItems.length} 項</div>
+                                      </div>
+                                      <div className="divide-y divide-gray-100">
+                                          {groupItems.map(item => (
+                                              <div key={item.id} className="px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                                  <div className="min-w-0">
+                                                      <div className="font-black text-gray-800 text-base">{item.name}</div>
+                                                      <div className="text-xs text-gray-400 font-bold mt-1">ID: {item.id} ｜ 單位: {item.spec} ｜ 單價: ${Number(item.price || 0).toLocaleString()}</div>
+                                                  </div>
+                                                  <div className="flex gap-2 shrink-0">
+                                                      <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>
+                                                          編輯
+                                                      </button>
+                                                      <button onClick={() => deleteInventoryItem(item.id)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-red-500 border-red-200 hover:bg-red-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>
+                                                          刪除
+                                                      </button>
+                                                  </div>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  </div>
+                              );
+                          })}
+                      </div>
+                  )}
+              </div>
+          </div>
+      </div>
     </div>
   );
 };
+
 // ==========================================
 // 🌟 系統主程式 (Main App) - V10.0 完整核心
 // ==========================================
@@ -1695,49 +1940,90 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         const requesterUid = req.uid || req.fromUid;
         const targetUser = dbData.users[requesterUid] || Object.values(dbData.users || {}).find(u => u.uid === requesterUid);
         const requesterName = req.userName || req.fromName || targetUser?.name || '未知員工';
-        if (action === 'reject') {
-            await deleteDoc(requestRef);
-            if (targetUser?.lineUserId) {
-                const rejectText = req.type === 'leave_request'
-                    ? `❌ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}未通過審核。`
-                    : `❌ 您於 ${req.date} 送出的時數申請未通過審核。`;
-                await sendLineNotification([targetUser.lineUserId], rejectText);
-            }
-            alert(`✅ 已駁回 ${requesterName} 的申請，並通知員工。`);
-            return;
-        }
-        if (req.type === 'leave_request') {
-            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
-            const shiftSnap = await getDoc(shiftRef);
-            const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
-            const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            const idx = assigns.findIndex(a => a.uid === req.uid);
-            const leaveEntry = { 
-                uid: req.uid, 
-                type: 'LEAVE', 
-                leaveType: req.leaveType, 
-                leaveHours: 8, 
+        const reviewerName = currentUserInfo?.name || '未知審核人';
+        const reviewedAt = Date.now();
+        const siblingRequests = getSiblingPendingRequests(dbData.requests, req);
+        const writeReviewLog = async (result) => {
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requestReviewLogs'), {
+                requestId: req.id,
+                requestType: req.type,
+                requesterUid,
+                requesterName,
+                requestDate: req.date || '',
+                leaveType: req.leaveType || '',
+                leaveLabel: req.leaveLabel || '',
                 subUid: req.subUid || null,
-                timestamp: Date.now() 
-            };
-            if (idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
-            await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
-            await deleteDoc(requestRef);
-            if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。`);
-            alert(`✅ ${requesterName} 的假單已核准，班表已更新，並已通知員工。`);
-        } else if (req.type === 'admin_ot_approve') {
-            const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
-            const shiftSnap = await getDoc(shiftRef);
-            const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
-            const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            const idx = assigns.findIndex(a => a.uid === requesterUid);
-            const baseEntry = idx >= 0 ? assigns[idx] : { uid: requesterUid, type: 'WORK' };
-            const updatedEntry = { ...baseEntry, uid: requesterUid, type: baseEntry.type || 'WORK', otHours: req.hours, otReason: req.reason || '無備註', otConfirmed: true, timestamp: Date.now() };
-            if (idx >= 0) assigns[idx] = updatedEntry; else assigns.push(updatedEntry);
-            await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
-            await deleteDoc(requestRef);
-            if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的時數申請已核准，結算明細已同步更新。`);
-            alert(`✅ ${requesterName} 的時數申請已核准，並已通知員工。`);
+                subName: req.subName || '',
+                hours: req.hours ?? null,
+                reason: req.reason || '',
+                submittedAt: req.timestamp || null,
+                reviewedAt,
+                reviewedByUid: currentUserInfo?.uid || '',
+                reviewedByName: reviewerName,
+                result
+            });
+        };
+        const clearSiblingRequests = async () => {
+            await Promise.all(siblingRequests.map(item => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', item.id)).catch(() => null)));
+        };
+        try {
+            if (action === 'reject') {
+                await writeReviewLog('rejected');
+                await deleteDoc(requestRef);
+                await clearSiblingRequests();
+                if (targetUser?.lineUserId) {
+                    const rejectText = req.type === 'leave_request'
+                        ? `❌ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}未通過審核。
+審核人：${reviewerName}`
+                        : `❌ 您於 ${req.date} 送出的時數申請未通過審核。
+審核人：${reviewerName}`;
+                    await sendLineNotification([targetUser.lineUserId], rejectText);
+                }
+                alert(`✅ 已駁回 ${requesterName} 的申請，並通知員工。`);
+                return;
+            }
+            if (req.type === 'leave_request') {
+                const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+                const shiftSnap = await getDoc(shiftRef);
+                const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+                const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+                const idx = assigns.findIndex(a => a.uid === req.uid);
+                const leaveEntry = { 
+                    uid: req.uid, 
+                    type: 'LEAVE', 
+                    leaveType: req.leaveType, 
+                    leaveHours: 8, 
+                    subUid: req.subUid || null,
+                    timestamp: Date.now() 
+                };
+                if (idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
+                await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+                await writeReviewLog('approved');
+                await deleteDoc(requestRef);
+                await clearSiblingRequests();
+                if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。
+審核人：${reviewerName}`);
+                alert(`✅ ${requesterName} 的假單已核准，班表已更新，並已通知員工。`);
+            } else if (req.type === 'admin_ot_approve') {
+                const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+                const shiftSnap = await getDoc(shiftRef);
+                const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+                const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+                const idx = assigns.findIndex(a => a.uid === requesterUid);
+                const baseEntry = idx >= 0 ? assigns[idx] : { uid: requesterUid, type: 'WORK' };
+                const updatedEntry = { ...baseEntry, uid: requesterUid, type: baseEntry.type || 'WORK', otHours: req.hours, otReason: req.reason || '無備註', otConfirmed: true, timestamp: Date.now() };
+                if (idx >= 0) assigns[idx] = updatedEntry; else assigns.push(updatedEntry);
+                await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+                await writeReviewLog('approved');
+                await deleteDoc(requestRef);
+                await clearSiblingRequests();
+                if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的時數申請已核准，結算明細已同步更新。
+審核人：${reviewerName}`);
+                alert(`✅ ${requesterName} 的時數申請已核准，並已通知員工。`);
+            }
+        } catch (e) {
+            console.error('審核處理失敗', e);
+            alert('這筆申請可能已被其他主管處理，請重新整理後再確認。');
         }
     };
     
@@ -1746,6 +2032,44 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         (r.type === 'leave_request' && canApproveLeaveRequests) || 
         (r.type === 'admin_ot_approve' && canApproveLeaveRequests)
     ) || [];
+
+    useEffect(() => {
+        const pendingRequests = (dbData.requests || []).filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt);
+        if (pendingRequests.length === 0) return;
+        const approverLineIds = getApproverLineIds(dbData.users);
+        if (approverLineIds.length === 0) return;
+        let cancelled = false;
+        const backfillPendingNotifications = async () => {
+            for (const req of pendingRequests) {
+                if (cancelled) return;
+                const requesterName = req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工';
+                const msg = req.type === 'leave_request'
+                    ? `🔔 【待審核假單提醒】
+申請人：${requesterName}
+日期：${req.date}
+類別：${req.leaveLabel || '假單'}${req.subName ? `
+代理人：${req.subName}` : ''}
+請至系統「通知中心」進行審核。`
+                    : `🔔 【待審核時數提醒】
+申請人：${requesterName}
+日期：${req.date}
+時數：${req.hours} hr
+原因：${req.reason || '無備註'}
+請至系統「通知中心」進行審核。`;
+                const sent = await sendLineNotification(approverLineIds, msg);
+                if (sent) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id), {
+                        lineNotifiedAt: Date.now(),
+                        notifiedApproverCount: approverLineIds.length,
+                        lastNotificationType: 'backfill'
+                    }).catch(() => null);
+                }
+            }
+        };
+        backfillPendingNotifications();
+        return () => { cancelled = true; };
+    }, [dbData.requests, dbData.users]);
+
     const renderView = () => {
         // 如果還沒簽約，強制跳轉到表單頁
         if (isLocked && view !== 'forms') {
@@ -1776,8 +2100,20 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                             <div key={req.id} className="bg-white p-6 rounded-[2rem] border border-l-8 border-l-indigo-500 shadow-xl animate-scale-in">
                                 <h3 className="font-black text-gray-800">{req.type === 'leave_request' ? '🌴 請假申請' : '單據審核'}</h3>
                                 <p className="text-sm font-bold text-gray-500 mt-1">申請人：{req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工'} | 日期：{req.date}</p>
-                                <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700">
-                                    {req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}
+                                <div className="grid grid-cols-2 gap-3 mt-3 mb-3 text-xs font-black">
+                                    <div className="bg-gray-50 rounded-2xl px-3 py-2 border border-gray-100">
+                                        <div className="text-[10px] text-gray-400 mb-1">送出時間</div>
+                                        <div className="text-gray-700">{formatDateTime(req.timestamp)}</div>
+                                    </div>
+                                    <div className="bg-gray-50 rounded-2xl px-3 py-2 border border-gray-100">
+                                        <div className="text-[10px] text-gray-400 mb-1">審核人</div>
+                                        <div className="text-gray-700">{req.reviewedByName || '待審核'}</div>
+                                    </div>
+                                </div>
+                                <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700 space-y-1">
+                                    <div>{req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}</div>
+                                    {req.type === 'leave_request' && req.subName && <div className="text-xs text-indigo-500">代理人：{req.subName}</div>}
+                                    {req.type === 'admin_ot_approve' && <div className="text-xs text-indigo-500">原因：{req.reason || '無備註'}</div>}
                                 </div>
                                 <div className="flex gap-3">
                                     <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-400 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">駁回</button>
