@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.1 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1696,6 +1696,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [editingItemId, setEditingItemId] = useState(null);
   const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
   const [sequenceInputs, setSequenceInputs] = useState({});
+  const canManageInventory = isSuperAdmin || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor';
 
   useEffect(() => {
       setInventoryList(normalizeInventoryItems(inventoryItems));
@@ -1774,13 +1775,13 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   };
 
   const startAddInventoryItem = () => {
-      if (!isSuperAdmin) return alert('只有管理員可新增庫存品項');
+      if (!canManageInventory) return alert('只有管理權限帳號可新增庫存品項');
       setEditingItemId('new');
       setInventoryForm({ category: '', name: '', spec: '', price: '' });
   };
 
   const startEditInventoryItem = (item) => {
-      if (!isSuperAdmin) return alert('只有管理員可編輯庫存品項');
+      if (!canManageInventory) return alert('只有管理權限帳號可編輯庫存品項');
       setEditingItemId(item.id);
       setInventoryForm({
           category: item.category || '',
@@ -1791,7 +1792,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   };
 
   const saveInventoryItem = async () => {
-      if (!isSuperAdmin) return alert('只有管理員可儲存庫存品項');
+      if (!canManageInventory) return alert('只有管理權限帳號可儲存庫存品項');
       const category = String(inventoryForm.category || '').trim();
       const name = String(inventoryForm.name || '').trim();
       const spec = String(inventoryForm.spec || '').trim();
@@ -1820,7 +1821,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   };
 
   const deleteInventoryItem = async (itemId) => {
-      if (!isSuperAdmin) return alert('只有管理員可刪除庫存品項');
+      if (!canManageInventory) return alert('只有管理權限帳號可刪除庫存品項');
       const target = inventoryList.find(i => i.id === itemId);
       if (!window.confirm(`確定要刪除「${target?.name || '這個品項'}」嗎？`)) return;
       const nextItems = inventoryList.filter(i => i.id !== itemId);
@@ -1830,7 +1831,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   };
 
   const moveInventoryItemByStep = async (itemId, step) => {
-      if (!isSuperAdmin) return alert('只有管理員可調整排序');
+      if (!canManageInventory) return alert('只有管理權限帳號可調整排序');
       const groups = buildInventoryGroups(inventoryList);
       const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
       if (groupIndex < 0) return;
@@ -1844,7 +1845,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   };
 
   const applyInventorySequence = async (itemId) => {
-      if (!isSuperAdmin) return alert('只有管理員可調整排序');
+      if (!canManageInventory) return alert('只有管理權限帳號可調整排序');
       const groups = buildInventoryGroups(inventoryList);
       const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
       if (groupIndex < 0) return;
@@ -1859,7 +1860,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   };
 
   const updateInventoryCategory = async (itemId, targetCategory) => {
-      if (!isSuperAdmin) return alert('只有管理員可變更分類');
+      if (!canManageInventory) return alert('只有管理權限帳號可變更分類');
       const category = String(targetCategory || '').trim();
       if (!category) return alert('請選擇有效分類');
       const groups = buildInventoryGroups(inventoryList);
@@ -1990,7 +1991,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                   </div>
                   <div className="bg-amber-50 rounded-2xl px-4 py-3 border border-amber-100">
                       <div className="text-[10px] font-black text-amber-400">操作權限</div>
-                      <div className="text-sm font-black text-amber-700 mt-1">{isSuperAdmin ? '管理員可編輯' : '僅可檢視'}</div>
+                      <div className="text-sm font-black text-amber-700 mt-1">{canManageInventory ? '管理權限可編輯' : '僅可檢視'}</div>
                   </div>
               </div>
           </div>
@@ -1999,14 +2000,14 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5 space-y-4">
                   <div className="flex justify-between items-center">
                       <h4 className="font-black text-gray-800">品項編輯器</h4>
-                      {isSuperAdmin && (
+                      {canManageInventory && (
                           <button onClick={startAddInventoryItem} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-black shadow hover:bg-indigo-700 flex items-center gap-1">
                               <Plus size={14}/> 新增品項
                           </button>
                       )}
                   </div>
 
-                  {!isSuperAdmin && (
+                  {!canManageInventory && (
                       <div className="bg-amber-50 text-amber-700 border border-amber-100 rounded-2xl p-4 text-sm font-bold">
                           目前帳號僅可查看庫存品項，新增、編輯、刪除需使用管理員權限。
                       </div>
@@ -2015,20 +2016,20 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                   <div className="space-y-3">
                       <div>
                           <label className="block text-[11px] font-black text-gray-500 mb-1">分類</label>
-                          <input type="text" value={inventoryForm.category} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, category: e.target.value})} placeholder="例如：茶葉類" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                          <input type="text" value={inventoryForm.category} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, category: e.target.value})} placeholder="例如：茶葉類" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
                       </div>
                       <div>
                           <label className="block text-[11px] font-black text-gray-500 mb-1">品名</label>
-                          <input type="text" value={inventoryForm.name} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, name: e.target.value})} placeholder="例如：高山青茶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                          <input type="text" value={inventoryForm.name} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, name: e.target.value})} placeholder="例如：高山青茶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                           <div>
                               <label className="block text-[11px] font-black text-gray-500 mb-1">單位</label>
-                              <input type="text" value={inventoryForm.spec} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, spec: e.target.value})} placeholder="斤 / 包 / 桶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                              <input type="text" value={inventoryForm.spec} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, spec: e.target.value})} placeholder="斤 / 包 / 桶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
                           </div>
                           <div>
                               <label className="block text-[11px] font-black text-gray-500 mb-1">單價</label>
-                              <input type="number" value={inventoryForm.price} disabled={!isSuperAdmin} onChange={e=>setInventoryForm({...inventoryForm, price: e.target.value})} placeholder="0" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+                              <input type="number" value={inventoryForm.price} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, price: e.target.value})} placeholder="0" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
                           </div>
                       </div>
                   </div>
@@ -2042,7 +2043,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                       <div>• 排序：可用上移 / 下移，或直接輸入序號後按套用</div>
                   </div>
 
-                  {isSuperAdmin && (
+                  {canManageInventory && (
                       <div className="flex gap-3 pt-2">
                           <button onClick={resetInventoryForm} className="flex-1 bg-gray-100 text-gray-600 py-3 rounded-2xl font-black text-sm hover:bg-gray-200">清空 / 取消</button>
                           <button onClick={saveInventoryItem} className="flex-1 bg-indigo-600 text-white py-3 rounded-2xl font-black text-sm shadow hover:bg-indigo-700">{editingItemId && editingItemId !== 'new' ? '儲存修改' : '新增品項'}</button>
@@ -2079,33 +2080,33 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                                                   </div>
                                                   <div className="flex flex-col gap-3 lg:items-end">
                                                       <div className="flex flex-wrap items-center gap-2">
-                                                          <button onClick={() => moveInventoryItemByStep(item.id, -1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin || itemIndex === 0}>上移</button>
-                                                          <button onClick={() => moveInventoryItemByStep(item.id, 1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin || itemIndex === group.items.length - 1}>下移</button>
+                                                          <button onClick={() => moveInventoryItemByStep(item.id, -1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory || itemIndex === 0}>上移</button>
+                                                          <button onClick={() => moveInventoryItemByStep(item.id, 1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory || itemIndex === group.items.length - 1}>下移</button>
                                                           <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5">
                                                               <span className="text-[11px] font-black text-gray-500">排序</span>
                                                               <input
                                                                   type="number"
                                                                   min="1"
                                                                   value={sequenceInputs[item.id] || String(itemIndex + 1)}
-                                                                  disabled={!isSuperAdmin}
+                                                                  disabled={!canManageInventory}
                                                                   onChange={e => setSequenceInputs(prev => ({ ...prev, [item.id]: e.target.value }))}
                                                                   onKeyDown={e => { if (e.key === 'Enter') applyInventorySequence(item.id); }}
                                                                   className="w-16 bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm font-black text-center focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
                                                               />
-                                                              <button onClick={() => applyInventorySequence(item.id)} className={`px-3 py-1.5 rounded-lg text-xs font-black ${isSuperAdmin ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`} disabled={!isSuperAdmin}>套用</button>
+                                                              <button onClick={() => applyInventorySequence(item.id)} className={`px-3 py-1.5 rounded-lg text-xs font-black ${canManageInventory ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`} disabled={!canManageInventory}>套用</button>
                                                           </div>
                                                       </div>
                                                       <div className="flex flex-wrap items-center gap-2 justify-start lg:justify-end">
                                                           <select
                                                               value={item.category}
-                                                              disabled={!isSuperAdmin}
+                                                              disabled={!canManageInventory}
                                                               onChange={e => updateInventoryCategory(item.id, e.target.value)}
                                                               className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-black text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
                                                           >
                                                               {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
                                                           </select>
-                                                          <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>編輯</button>
-                                                          <button onClick={() => deleteInventoryItem(item.id)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-red-500 border-red-200 hover:bg-red-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>刪除</button>
+                                                          <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory}>編輯</button>
+                                                          <button onClick={() => deleteInventoryItem(item.id)} className={`px-4 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-red-500 border-red-200 hover:bg-red-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory}>刪除</button>
                                                       </div>
                                                   </div>
                                               </div>
