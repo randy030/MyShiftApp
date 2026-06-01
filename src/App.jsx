@@ -8,9 +8,9 @@ import {
     FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, 
     Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Map, Package, 
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
-    FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart, GripVertical
+    FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.3 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1687,6 +1687,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
 // ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
 // ==========================================
 
+
 const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
@@ -1694,16 +1695,51 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [inventoryList, setInventoryList] = useState(normalizeInventoryItems(inventoryItems));
   const [editingItemId, setEditingItemId] = useState(null);
   const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
-  const [draggingItemId, setDraggingItemId] = useState(null);
-  const [dragOverItemId, setDragOverItemId] = useState(null);
-  const [dragOverCategory, setDragOverCategory] = useState('');
+  const [sequenceInputs, setSequenceInputs] = useState({});
 
   useEffect(() => {
       setInventoryList(normalizeInventoryItems(inventoryItems));
   }, [inventoryItems]);
 
+  const buildInventoryGroups = (sourceItems = []) => {
+      const groups = [];
+      (Array.isArray(sourceItems) ? sourceItems : []).forEach(item => {
+          const category = String(item?.category || '未分類').trim() || '未分類';
+          let group = groups.find(entry => entry.category === category);
+          if (!group) {
+              group = { category, items: [] };
+              groups.push(group);
+          }
+          group.items.push({ ...item, category });
+      });
+      return groups;
+  };
+
+  const flattenInventoryGroups = (groups = []) => normalizeInventoryItems(
+      (Array.isArray(groups) ? groups : []).flatMap(group =>
+          (group?.items || []).map(item => ({
+              ...item,
+              category: String(group?.category || item?.category || '未分類').trim() || '未分類'
+          }))
+      )
+  );
+
+  const inventoryGroups = useMemo(() => buildInventoryGroups(inventoryList), [inventoryList]);
+  const inventoryCategories = useMemo(() => inventoryGroups.map(group => group.category), [inventoryGroups]);
+
+  useEffect(() => {
+      const nextInputs = {};
+      inventoryGroups.forEach(group => {
+          group.items.forEach((item, index) => {
+              nextInputs[item.id] = String(index + 1);
+          });
+      });
+      setSequenceInputs(nextInputs);
+  }, [inventoryGroups]);
+
   const userList = Object.values(users || {});
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
+
   const saveUser = async () => {
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
           return alert('🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！');
@@ -1717,6 +1753,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       setEditingId(null);
       alert('✅ 員工權限與合約資料已更新！');
   };
+
   const roles = [
       { id: 'employee', label: '員工', color: 'bg-gray-100 text-gray-600', desc: '僅能查看個人班表、打卡' },
       { id: 'supervisor', label: '主管', color: 'bg-blue-100 text-blue-600', desc: '可審核假單、查看團隊出勤' },
@@ -1729,12 +1766,6 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: normalizedItems }, { merge: true });
       setInventoryList(normalizedItems);
       return normalizedItems;
-  };
-
-  const clearDragState = () => {
-      setDraggingItemId(null);
-      setDragOverItemId(null);
-      setDragOverCategory('');
   };
 
   const resetInventoryForm = () => {
@@ -1771,14 +1802,14 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       const itemId = editingItemId && editingItemId !== 'new' ? editingItemId : `i_${Date.now()}`;
       let nextItems = Array.isArray(inventoryList) ? [...inventoryList] : [];
       const idx = nextItems.findIndex(i => i.id === itemId);
-      const existingItem = idx >= 0 ? nextItems[idx] : null;
+      const currentItem = idx >= 0 ? nextItems[idx] : null;
       const nextItem = {
           id: itemId,
           category,
           name,
           spec,
           price: priceNum,
-          sortOrder: Number.isFinite(Number(existingItem?.sortOrder)) ? Number(existingItem.sortOrder) : nextItems.length
+          sortOrder: Number.isFinite(Number(currentItem?.sortOrder)) ? Number(currentItem.sortOrder) : nextItems.length
       };
       if (idx >= 0) nextItems[idx] = nextItem;
       else nextItems.push(nextItem);
@@ -1798,47 +1829,53 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       alert('✅ 庫存品項已刪除！');
   };
 
-  const handleInventoryDragStart = (itemId) => {
-      if (!isSuperAdmin) return;
-      setDraggingItemId(itemId);
-      setDragOverItemId(null);
-      setDragOverCategory('');
+  const moveInventoryItemByStep = async (itemId, step) => {
+      if (!isSuperAdmin) return alert('只有管理員可調整排序');
+      const groups = buildInventoryGroups(inventoryList);
+      const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
+      if (groupIndex < 0) return;
+      const itemIndex = groups[groupIndex].items.findIndex(item => item.id === itemId);
+      const targetIndex = itemIndex + step;
+      if (targetIndex < 0 || targetIndex >= groups[groupIndex].items.length) return;
+      const temp = groups[groupIndex].items[itemIndex];
+      groups[groupIndex].items[itemIndex] = groups[groupIndex].items[targetIndex];
+      groups[groupIndex].items[targetIndex] = temp;
+      await persistInventoryList(flattenInventoryGroups(groups));
   };
 
-  const handleInventoryDragOver = (e, targetId = null, targetCategory = '') => {
-      if (!isSuperAdmin || !draggingItemId) return;
-      e.preventDefault();
-      setDragOverItemId(targetId);
-      setDragOverCategory(targetCategory);
+  const applyInventorySequence = async (itemId) => {
+      if (!isSuperAdmin) return alert('只有管理員可調整排序');
+      const groups = buildInventoryGroups(inventoryList);
+      const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
+      if (groupIndex < 0) return;
+      const itemIndex = groups[groupIndex].items.findIndex(item => item.id === itemId);
+      const rawValue = sequenceInputs[itemId];
+      const parsed = parseInt(rawValue, 10);
+      if (Number.isNaN(parsed)) return alert('排序序號請輸入正整數');
+      const clampedIndex = Math.min(Math.max(parsed, 1), groups[groupIndex].items.length) - 1;
+      const [movingItem] = groups[groupIndex].items.splice(itemIndex, 1);
+      groups[groupIndex].items.splice(clampedIndex, 0, movingItem);
+      await persistInventoryList(flattenInventoryGroups(groups));
   };
 
-  const moveInventoryItem = async ({ targetId = null, targetCategory = '' } = {}) => {
-      if (!isSuperAdmin || !draggingItemId) return;
-      const nextItems = [...inventoryList];
-      const fromIndex = nextItems.findIndex(item => item.id === draggingItemId);
-      if (fromIndex < 0) return clearDragState();
-
-      const movingItem = { ...nextItems[fromIndex] };
-      nextItems.splice(fromIndex, 1);
-      if (targetCategory) movingItem.category = targetCategory;
-
-      let insertIndex = nextItems.length;
-      if (targetId) {
-          insertIndex = nextItems.findIndex(item => item.id === targetId);
-          if (insertIndex < 0) insertIndex = nextItems.length;
-      } else if (targetCategory) {
-          const targetIndexes = nextItems
-              .map((item, index) => (item.category === targetCategory ? index : -1))
-              .filter(index => index >= 0);
-          insertIndex = targetIndexes.length ? targetIndexes[targetIndexes.length - 1] + 1 : nextItems.length;
+  const updateInventoryCategory = async (itemId, targetCategory) => {
+      if (!isSuperAdmin) return alert('只有管理員可變更分類');
+      const category = String(targetCategory || '').trim();
+      if (!category) return alert('請選擇有效分類');
+      const groups = buildInventoryGroups(inventoryList);
+      const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
+      if (groupIndex < 0) return;
+      const itemIndex = groups[groupIndex].items.findIndex(item => item.id === itemId);
+      const [movingItem] = groups[groupIndex].items.splice(itemIndex, 1);
+      if (groups[groupIndex].items.length === 0) groups.splice(groupIndex, 1);
+      let targetGroup = groups.find(group => group.category === category);
+      if (!targetGroup) {
+          targetGroup = { category, items: [] };
+          groups.push(targetGroup);
       }
-
-      nextItems.splice(insertIndex, 0, movingItem);
-      await persistInventoryList(nextItems);
-      clearDragState();
+      targetGroup.items.push({ ...movingItem, category });
+      await persistInventoryList(flattenInventoryGroups(groups));
   };
-
-  const inventoryCategories = [...new Set((inventoryList || []).map(i => i.category).filter(Boolean))];
 
   return (
     <div className="space-y-8 pb-20 max-w-5xl mx-auto animate-fade-in">
@@ -1856,7 +1893,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                   </h3>
                   {pendingUsersCount > 0 && <p className="text-[11px] text-red-500 font-black mt-2">尚有 {pendingUsersCount} 位員工未完成合約 / 薪資必要設定</p>}
               </div>
-              <button
+              <button 
                 onClick={() => setShowResigned(!showResigned)}
                 className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
               >
@@ -1928,7 +1965,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                       </div>
                     )}
                   </div>
-                );
+                )
             })}
           </div>
       </div>
@@ -1940,7 +1977,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                     <Package className="text-indigo-600" size={24}/> 庫存品項管理
                   </h3>
                   <p className="text-sm text-gray-500 mt-2">在這裡統一管理盤點表的品項清單。新增、刪除、編輯後，盤點頁會立即同步更新。</p>
-                  <p className="text-xs text-indigo-500 font-bold mt-2">支援拖曳排序與跨分類移動：把品項拖到其他分類卡片，即可同步改變順序與分類。</p>
+                  <p className="text-xs text-indigo-500 font-bold mt-2">排序改為上下移動、數字序號與分類下拉選單，避免拖曳操作不順。</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center min-w-[260px]">
                   <div className="bg-indigo-50 rounded-2xl px-4 py-3 border border-indigo-100">
@@ -2002,7 +2039,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                       <div>• 品名：盤點表中顯示的名稱</div>
                       <div>• 單位：如 斤、包、罐、桶</div>
                       <div>• 單價：用於估算庫存總值，可填 0</div>
-                      <div>• 排序：可直接拖曳品項上下移動，也可跨分類拖放</div>
+                      <div>• 排序：可用上移 / 下移，或直接輸入序號後按套用</div>
                   </div>
 
                   {isSuperAdmin && (
@@ -2016,7 +2053,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
                       <h4 className="font-black text-gray-800">現有品項清單</h4>
-                      <div className="text-xs text-gray-500 font-bold">操作流程：拖曳排序 / 跨分類 → 自動儲存 → 盤點頁立即同步</div>
+                      <div className="text-xs text-gray-500 font-bold">操作流程：上下移動 / 修改序號 / 切換分類 → 自動儲存 → 盤點頁立即同步</div>
                   </div>
 
                   {inventoryList.length === 0 ? (
@@ -2025,60 +2062,58 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
                       </div>
                   ) : (
                       <div className="space-y-3 max-h-[760px] overflow-y-auto pr-1">
-                          {inventoryCategories.map(category => {
-                              const groupItems = inventoryList.filter(item => item.category === category);
-                              return (
-                                  <div
-                                      key={category}
-                                      className={`bg-white rounded-[1.5rem] border overflow-hidden transition-all ${dragOverCategory === category ? 'border-indigo-300 shadow-lg shadow-indigo-50' : 'border-gray-100'}`}
-                                      onDragOver={(e) => handleInventoryDragOver(e, null, category)}
-                                      onDrop={(e) => { e.preventDefault(); moveInventoryItem({ targetCategory: category }); }}
-                                  >
-                                      <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
-                                          <div className="font-black text-indigo-700">{category}</div>
-                                          <div className="text-[10px] font-black text-indigo-400">{groupItems.length} 項</div>
-                                      </div>
-                                      <div className="divide-y divide-gray-100">
-                                          {groupItems.map(item => (
-                                              <div
-                                                  key={item.id}
-                                                  draggable={isSuperAdmin}
-                                                  onDragStart={() => handleInventoryDragStart(item.id)}
-                                                  onDragEnd={clearDragState}
-                                                  onDragOver={(e) => handleInventoryDragOver(e, item.id, category)}
-                                                  onDrop={(e) => { e.preventDefault(); moveInventoryItem({ targetId: item.id, targetCategory: category }); }}
-                                                  className={`px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 transition-all ${isSuperAdmin ? 'cursor-move' : ''} ${draggingItemId === item.id ? 'opacity-40' : ''} ${dragOverItemId === item.id ? 'bg-indigo-50 ring-2 ring-indigo-200 ring-inset' : ''}`}
-                                              >
-                                                  <div className="min-w-0 flex items-start gap-3">
-                                                      {isSuperAdmin && <div className="text-gray-300 mt-0.5 shrink-0"><GripVertical size={18} /></div>}
-                                                      <div className="min-w-0">
-                                                          <div className="font-black text-gray-800 text-base">{item.name}</div>
-                                                          <div className="text-xs text-gray-400 font-bold mt-1">ID: {item.id} ｜ 單位: {item.spec} ｜ 單價: ${Number(item.price || 0).toLocaleString()}</div>
+                          {inventoryGroups.map(group => (
+                              <div key={group.category} className="bg-white rounded-[1.5rem] border border-gray-100 overflow-hidden">
+                                  <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+                                      <div className="font-black text-indigo-700">{group.category}</div>
+                                      <div className="text-[10px] font-black text-indigo-400">{group.items.length} 項</div>
+                                  </div>
+                                  <div className="divide-y divide-gray-100">
+                                      {group.items.map((item, itemIndex) => {
+                                          const categoryOptions = Array.from(new Set([...(inventoryCategories || []), item.category].filter(Boolean)));
+                                          return (
+                                              <div key={item.id} className="px-5 py-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                                  <div className="min-w-0 flex-1">
+                                                      <div className="font-black text-gray-800 text-base">{item.name}</div>
+                                                      <div className="text-xs text-gray-400 font-bold mt-1">ID: {item.id} ｜ 單位: {item.spec} ｜ 單價: ${Number(item.price || 0).toLocaleString()}</div>
+                                                  </div>
+                                                  <div className="flex flex-col gap-3 lg:items-end">
+                                                      <div className="flex flex-wrap items-center gap-2">
+                                                          <button onClick={() => moveInventoryItemByStep(item.id, -1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin || itemIndex === 0}>上移</button>
+                                                          <button onClick={() => moveInventoryItemByStep(item.id, 1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin || itemIndex === group.items.length - 1}>下移</button>
+                                                          <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5">
+                                                              <span className="text-[11px] font-black text-gray-500">排序</span>
+                                                              <input
+                                                                  type="number"
+                                                                  min="1"
+                                                                  value={sequenceInputs[item.id] || String(itemIndex + 1)}
+                                                                  disabled={!isSuperAdmin}
+                                                                  onChange={e => setSequenceInputs(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                                                  onKeyDown={e => { if (e.key === 'Enter') applyInventorySequence(item.id); }}
+                                                                  className="w-16 bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm font-black text-center focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                                              />
+                                                              <button onClick={() => applyInventorySequence(item.id)} className={`px-3 py-1.5 rounded-lg text-xs font-black ${isSuperAdmin ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`} disabled={!isSuperAdmin}>套用</button>
+                                                          </div>
+                                                      </div>
+                                                      <div className="flex flex-wrap items-center gap-2 justify-start lg:justify-end">
+                                                          <select
+                                                              value={item.category}
+                                                              disabled={!isSuperAdmin}
+                                                              onChange={e => updateInventoryCategory(item.id, e.target.value)}
+                                                              className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-black text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                                          >
+                                                              {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+                                                          </select>
+                                                          <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>編輯</button>
+                                                          <button onClick={() => deleteInventoryItem(item.id)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-red-500 border-red-200 hover:bg-red-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>刪除</button>
                                                       </div>
                                                   </div>
-                                                  <div className="flex gap-2 shrink-0">
-                                                      <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>
-                                                          編輯
-                                                      </button>
-                                                      <button onClick={() => deleteInventoryItem(item.id)} className={`px-4 py-2 rounded-xl text-xs font-black border ${isSuperAdmin ? 'bg-white text-red-500 border-red-200 hover:bg-red-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!isSuperAdmin}>
-                                                          刪除
-                                                      </button>
-                                                  </div>
                                               </div>
-                                          ))}
-                                          {isSuperAdmin && (
-                                              <div
-                                                  className={`px-5 py-3 text-center text-xs font-black transition-colors ${dragOverCategory === category && !dragOverItemId ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`}
-                                                  onDragOver={(e) => handleInventoryDragOver(e, null, category)}
-                                                  onDrop={(e) => { e.preventDefault(); moveInventoryItem({ targetCategory: category }); }}
-                                              >
-                                                  拖曳到這裡，可移到「{category}」分類尾端
-                                              </div>
-                                          )}
-                                      </div>
+                                          );
+                                      })}
                                   </div>
-                              );
-                          })}
+                              </div>
+                          ))}
                       </div>
                   )}
               </div>
