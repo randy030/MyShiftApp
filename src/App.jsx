@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.2 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.3 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -84,18 +84,31 @@ const formatDateTime = (value) => {
 
 const sortInventoryItems = (items = []) => {
     const safeItems = Array.isArray(items) ? [...items] : [];
-    return safeItems.sort((a, b) => {
-        const orderA = Number.isFinite(Number(a?.sortOrder)) ? Number(a.sortOrder) : Number.MAX_SAFE_INTEGER;
-        const orderB = Number.isFinite(Number(b?.sortOrder)) ? Number(b.sortOrder) : Number.MAX_SAFE_INTEGER;
-        if (orderA !== orderB) return orderA - orderB;
-        return `${a?.category || ''}-${a?.name || ''}`.localeCompare(`${b?.category || ''}-${b?.name || ''}`, 'zh-Hant');
-    });
+    return safeItems
+        .map((item, index) => ({ item, index }))
+        .sort((a, b) => {
+            const hasOrderA = Number.isFinite(Number(a.item?.sortOrder));
+            const hasOrderB = Number.isFinite(Number(b.item?.sortOrder));
+            if (hasOrderA && hasOrderB) {
+                const orderDiff = Number(a.item.sortOrder) - Number(b.item.sortOrder);
+                if (orderDiff !== 0) return orderDiff;
+            } else if (hasOrderA !== hasOrderB) {
+                return hasOrderA ? -1 : 1;
+            }
+            return a.index - b.index;
+        })
+        .map(entry => entry.item);
 };
 const normalizeInventoryItems = (items = []) => (Array.isArray(items) ? items : []).map((item, index) => ({
     ...item,
     sortOrder: index
 }));
-const prepareInventoryItems = (items = []) => normalizeInventoryItems(sortInventoryItems(items));
+const prepareInventoryItems = (items = []) => {
+    const safeItems = Array.isArray(items) ? [...items] : [];
+    if (safeItems.length === 0) return [];
+    const hasExplicitOrder = safeItems.some(item => Number.isFinite(Number(item?.sortOrder)));
+    return normalizeInventoryItems(hasExplicitOrder ? sortInventoryItems(safeItems) : safeItems);
+};
 const getDistance = (lat1, lon1, lat2, lon2) => {
     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
     const R = 6371e3; 
