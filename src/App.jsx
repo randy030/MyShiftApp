@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.3 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.4 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -132,6 +132,67 @@ const getAnnualLeaveDays = (startDateStr) => {
     if (diffYears >= 10) return Math.min(15 + Math.floor(diffYears - 9), 30);
     return 0;
 };
+
+const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = '', leaveTypes = [] }) => {
+    let monthStats = { ot: 0, leaves: {} };
+    let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnual: 0 };
+    let otHistory = [];
+    let monthOtHistory = [];
+
+    Object.keys(shifts || {}).forEach(date => {
+        if (!String(date).startsWith(targetYear || '')) return;
+        const data = shifts?.[date];
+        if (data?.isClosed) return;
+        const assign = Array.isArray(data?.assignments) ? data.assignments.find(a => a.uid === uid) : null;
+        if (!assign) return;
+
+        if (assign.type === 'LEAVE') {
+            const lType = assign.leaveType || 'unknown';
+            const typeInfo = (leaveTypes || []).find(t => t.id === lType);
+            const hrs = assign.leaveHours ? parseFloat(assign.leaveHours) : 0;
+            if (!yearStats.leaves[lType]) yearStats.leaves[lType] = { days: 0 };
+            yearStats.leaves[lType].days += 1;
+            if (lType === 'annual') yearStats.usedAnnual += (hrs / 8);
+            if (assign.useComp && hrs > 0 && lType !== 'menstrual') {
+                yearStats.compHoursUsed += hrs;
+                otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
+                if (targetMonth && date.startsWith(targetMonth)) {
+                    monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣${assign.note ? ` (${assign.note})` : ''}` });
+                }
+            }
+            if (targetMonth && date.startsWith(targetMonth)) {
+                if (!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
+                monthStats.leaves[lType].days += 1;
+                if (assign.leaveHours && lType !== 'menstrual') monthStats.leaves[lType].hours += hrs;
+                if (assign.useComp || lType === 'annual' || lType === 'menstrual') monthStats.leaves[lType].compHours += hrs;
+                else monthStats.leaves[lType].deductHours += hrs;
+            }
+        }
+
+        if (assign.otHours && assign.otConfirmed) {
+            const hrs = parseFloat(assign.otHours);
+            if (hrs > 0) yearStats.otEarned += hrs;
+            if (hrs < 0) yearStats.compHoursUsed += Math.abs(hrs);
+            if (targetMonth && date.startsWith(targetMonth) && hrs > 0) monthStats.ot += hrs;
+            otHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
+            if (targetMonth && date.startsWith(targetMonth)) {
+                monthOtHistory.push({ date, hours: hrs, reason: (assign.otReason && assign.otReason !== '無備註') ? assign.otReason : (assign.note || '無備註') });
+            }
+        }
+    });
+
+    otHistory.sort((a, b) => b.date.localeCompare(a.date));
+    monthOtHistory.sort((a, b) => b.date.localeCompare(a.date));
+
+    return {
+        monthStats,
+        yearStats,
+        otHistory,
+        monthOtHistory,
+        balance: yearStats.otEarned - yearStats.compHoursUsed
+    };
+};
+
 const DEFAULT_LEAVE_TYPES = [
     { id: 'rostered', label: '自畫假', deduct: false },
     { id: 'official', label: '排休', deduct: false }, 
@@ -1125,19 +1186,12 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
     const yearStr = dateStr.substring(0, 4);
     const monthStr = dateStr.substring(0, 7);
   
-    const getYearlyBalance = (uid, yearToFind) => {
-        let earned = 0; let used = 0;
-        Object.keys(shifts).forEach(d => {
-            if (!d.startsWith(yearToFind)) return;
-            const data = shifts[d]; if(data.isClosed) return;
-            const assign = Array.isArray(data.assignments) ? data.assignments.find(a => a.uid === uid) : null;
-            if (!assign) return;
-            if (assign.type === 'LEAVE' && assign.leaveHours) { if (assign.useComp || assign.leaveType === 'annual') { used += parseFloat(assign.leaveHours); } }
-            if (assign.otHours && assign.otConfirmed) { const hrs = parseFloat(assign.otHours); if (hrs > 0) earned += hrs; if (hrs < 0) used += Math.abs(hrs); }
-        });
-        return earned - used;
-    };
-  
+
+const getYearlyBalance = (uid, yearToFind) => {
+    const stats = getUserYearlyTimeStats({ shifts, uid, targetYear: yearToFind, leaveTypes: leaves });
+    return stats.balance;
+};
+
     const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); setExpanded(null); };
     
     const toggleClosed = async () => { 
@@ -1485,66 +1539,32 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
         return list;
     }, [users, currentUserInfo, isPrivileged, showResigned]);
   
-    const calc = (uid) => {
-        const targetYear = targetMonth.substring(0, 4);
-        const uObj = users[uid];
-        const annualLimit = getAnnualLeaveDays(uObj?.startDate);
-        let tenureText = "資料未建檔";
-        if (uObj?.startDate) {
-            const start = new Date(uObj.startDate);
-            const now = new Date();
-            const diffDays = Math.ceil(Math.abs(now - start) / (1000 * 60 * 60 * 24));
-            const diffYears = diffDays / 365.25;
-            if (diffYears < 0.5) tenureText = "未滿半年";
-            else if (diffYears >= 0.5 && diffYears < 1) tenureText = "滿半年";
-            else tenureText = `滿 ${Math.floor(diffYears)} 年`;
-        }
-        let monthStats = { ot: 0, leaves: {} };
-        let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnual: 0 }; 
-        let otHistory = []; 
-        let monthOtHistory = [];
-  
-        Object.keys(shifts).forEach(date => {
-            if (!date.startsWith(targetYear)) return; 
-            const data = shifts[date]; if(data.isClosed) return;
-            const assign = Array.isArray(data.assignments) ? data.assignments.find(a => a.uid === uid) : null;
-            if(!assign) return;
-            
-            if(assign.type === 'LEAVE') { 
-                const lType = assign.leaveType || 'unknown'; 
-                const typeInfo = leaveTypes.find(t => t.id === lType);
-                const hrs = assign.leaveHours ? parseFloat(assign.leaveHours) : 0;
-                if(!yearStats.leaves[lType]) yearStats.leaves[lType] = { days: 0 };
-                yearStats.leaves[lType].days += 1;
-                if (lType === 'annual') yearStats.usedAnnual += (hrs / 8);
-                if ((assign.useComp || lType === 'annual') && hrs > 0 && lType !== 'menstrual') {
-                    if (lType !== 'annual') yearStats.compHoursUsed += hrs;
-                    otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
-                    if (date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣${assign.note ? ` (${assign.note})` : ''}` });
-                }
-                if(date.startsWith(targetMonth)) {
-                    if(!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
-                    monthStats.leaves[lType].days += 1;
-                    if(assign.leaveHours && lType !== 'menstrual') monthStats.leaves[lType].hours += hrs;
-                    if (assign.useComp || lType === 'annual' || lType === 'menstrual') monthStats.leaves[lType].compHours += hrs; else monthStats.leaves[lType].deductHours += hrs;
-                }
-            }
-            if(assign.otHours && assign.otConfirmed) { 
-                const hrs = parseFloat(assign.otHours);
-                if (hrs > 0) yearStats.otEarned += hrs;
-                if (hrs < 0) yearStats.compHoursUsed += Math.abs(hrs);
-                if(date.startsWith(targetMonth) && hrs > 0) monthStats.ot += hrs;
-                otHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
-                if(date.startsWith(targetMonth)) monthOtHistory.push({ date, hours: hrs, reason: (assign.otReason && assign.otReason !== '無備註') ? assign.otReason : (assign.note || '無備註') });
-            }
-        });
-  
-        otHistory.sort((a, b) => b.date.localeCompare(a.date));
-        monthOtHistory.sort((a, b) => b.date.localeCompare(a.date));
-        const balance = yearStats.otEarned - yearStats.compHoursUsed;
-        const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
-        return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimit, gasTotal, tenureText };
-    };
+
+const calc = (uid) => {
+    const targetYear = targetMonth.substring(0, 4);
+    const uObj = users[uid];
+    const annualLimit = getAnnualLeaveDays(uObj?.startDate);
+    let tenureText = "資料未建檔";
+    if (uObj?.startDate) {
+        const start = new Date(uObj.startDate);
+        const now = new Date();
+        const diffDays = Math.ceil(Math.abs(now - start) / (1000 * 60 * 60 * 24));
+        const diffYears = diffDays / 365.25;
+        if (diffYears < 0.5) tenureText = "未滿半年";
+        else if (diffYears >= 0.5 && diffYears < 1) tenureText = "滿半年";
+        else tenureText = `滿 ${Math.floor(diffYears)} 年`;
+    }
+    const { monthStats, yearStats, balance, otHistory, monthOtHistory } = getUserYearlyTimeStats({
+        shifts,
+        uid,
+        targetYear,
+        targetMonth,
+        leaveTypes
+    });
+    const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
+    return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimit, gasTotal, tenureText };
+};
+
     return (
         <div className="space-y-4 pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
