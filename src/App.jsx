@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.5 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.6 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -284,7 +284,7 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
                 <div className="bg-indigo-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> 加班 / 補休申請</h3><button onClick={onClose} className="hover:bg-indigo-700 p-1 rounded"><X size={20}/></button></div>
                 <div className="p-6 space-y-4">
                     <div className="text-sm text-gray-500">正在編輯 <span className="font-bold text-gray-800">{user?.name}</span> 於 <span className="font-bold text-gray-800">{dateStr}</span> 的時數</div>
-                    <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center"><span className="text-sm font-bold text-indigo-900">年度剩餘補休：</span><span className={`text-lg font-bold ${balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{balance} hr</span></div>
+                    <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center"><span className="text-sm font-bold text-indigo-900">年度可用補休時數（不含特休／生理假）：</span><span className={`text-lg font-bold ${balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{balance} hr</span></div>
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">增減時數 (小時)</label><input type="number" autoFocus value={hours} onChange={e=>setHours(e.target.value)} placeholder="加班正數，補休負數" className={`w-full border-2 rounded-lg px-3 py-2 text-lg font-bold focus:outline-none ${isExceeding ? 'border-red-300 text-red-600 bg-red-50' : 'border-indigo-100 text-gray-700 focus:border-indigo-500'}`}/>{isExceeding && <p className="text-[11px] font-bold text-red-600 mt-1">⚠️ 申請補休大於剩餘時數，將依規定扣薪！</p>}</div>
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">事由 / 備註</label><input type="text" value={reason} onChange={e=>setReason(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"/></div>
                     <div className="flex gap-3 pt-2"><button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold hover:bg-gray-200">取消</button><button onClick={() => { if(hours === '') return alert("請輸入時數"); onConfirm(parseFloat(hours), reason); }} className="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-bold shadow hover:bg-indigo-700">送出</button></div>
@@ -454,7 +454,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
                                     <li>換假與換班需於 <strong>3 天前</strong> 經雙方確認並送交店長審核核准。未經核准擅自不到班者，依曠職論處。</li>
                                     <li><strong>特休</strong>：依勞動基準法第 38 條規定，由系統按到職日自動計算發放。</li>
                                     <li><strong>自畫假/排休</strong>：每月自畫休假上限 3 天，且逢星期六、日之假日最多僅能畫休 2 天。</li>
-                                    <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理，全年事假上限 14 日、病假上限 30 日。</li>
+                                    <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理；生理假每年最多 3 天、每月最多 1 天；全年事假上限 14 日、病假上限 30 日。</li>
                                 </ol>
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第三條：寒暑假旺季特別約定</p>
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
@@ -1607,13 +1607,13 @@ const calc = (uid) => {
                         <div className="flex justify-between items-start border-b pb-2">
                             <div className="font-bold text-lg">{u.name}</div>
                             <div className="text-right">
-                                <div className="text-[10px] text-gray-400">年度剩餘補休時數</div>
+                                <div className="text-[10px] text-gray-400">年度可用補休時數</div>
                                 <div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-indigo-600'}`}>{s.balance} hr</div>
                             </div>
                         </div>
                         <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200">
                             <div className="text-xs font-bold text-indigo-900 mb-2 border-b border-indigo-100 pb-1 flex justify-between">
-                                <span><Gift className="w-3 h-3 inline mr-1"/> 法定特休時數帳戶</span>
+                                <span><Gift className="w-3 h-3 inline mr-1"/> 特休時數帳戶（獨立，不扣補休）</span>
                                 <span className="bg-white px-2 rounded text-indigo-600">剩餘: {Math.max(0, s.annualLimitHours - s.yearStats.usedAnnualHours)} 小時</span>
                             </div>
                             <div className="grid grid-cols-2 gap-2 text-[11px] text-indigo-800">
@@ -1624,12 +1624,12 @@ const calc = (uid) => {
                             </div>
                         </div>
                         <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
-                            <div className="text-xs font-bold text-amber-900 mb-2 border-b border-amber-100 pb-1">已休休假總明細</div>
+                            <div className="text-xs font-bold text-amber-900 mb-2 border-b border-amber-100 pb-1">年度已休假總明細</div>
                             <div className="grid grid-cols-2 gap-2 text-[11px] text-amber-800">
-                                <div>🩸 生理假：{s.yearStats.leaves.menstrual?.days || 0} 天</div>
-                                <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時</div>
-                                <div>🗂️ 事假：{s.yearStats.leaves.personal?.days || 0} 天 / {s.yearStats.leaves.personal?.hours || 0} 小時</div>
-                                <div>🌴 特休：{s.yearStats.leaves.annual?.hours || 0} 小時</div>
+                                <div>🩸 生理假：{s.yearStats.leaves.menstrual?.days || 0} 天（每年最多 3 天／每月最多 1 天）</div>
+                                <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時（可選擇補休扣抵）</div>
+                                <div>🗂️ 事假：{s.yearStats.leaves.personal?.days || 0} 天 / {s.yearStats.leaves.personal?.hours || 0} 小時（可選擇補休扣抵）</div>
+                                <div>🌴 特休：{s.yearStats.leaves.annual?.hours || 0} 小時（獨立帳戶）</div>
                             </div>
                         </div>
                         <div className="bg-teal-50 p-3 rounded-lg border border-teal-200 flex justify-between items-center gap-3">
@@ -1640,7 +1640,7 @@ const calc = (uid) => {
                             <button onClick={() => setGasModalData(u)} className="shrink-0 bg-teal-600 text-white text-xs font-bold px-3 py-2 rounded-lg hover:bg-teal-700 shadow-sm">{isPrivileged ? '管理發票' : '登錄發票'}</button>
                         </div>
                         <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
-                            <div className="font-bold text-blue-900 mb-2">本月時數結算明細</div>
+                            <div className="font-bold text-blue-900 mb-2">本月加減時數明細（加班／補休扣抵）</div>
                             {s.monthOtHistory.length === 0 ? (
                                 <div className="text-xs text-blue-500">本月尚無加減時數紀錄</div>
                             ) : (
@@ -1657,7 +1657,7 @@ const calc = (uid) => {
                         </div>
                         {s.otHistory.length > 0 && (
                             <div className="text-[10px] bg-gray-50 p-2 rounded border">
-                                <div className="font-bold text-gray-500 mb-1">加班/補休沖抵歷史 (最新5筆)</div>
+                                <div className="font-bold text-gray-500 mb-1">年度補休增減歷史（最新 5 筆，不含特休）</div>
                                 {s.otHistory.slice(0, 5).map((h, i) => (
                                     <div key={i} className="flex justify-between border-b border-gray-100 last:border-0 py-0.5">
                                         <span>{h.date.substring(5)}</span>
