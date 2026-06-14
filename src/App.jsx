@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.4 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.5 (Master Integration Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -133,9 +133,31 @@ const getAnnualLeaveDays = (startDateStr) => {
     return 0;
 };
 
+const getAnnualLeaveHours = (startDateStr) => getAnnualLeaveDays(startDateStr) * 8;
+const calculateShiftHours = (shiftCode, shiftTypes = DEFAULT_SHIFT_TYPES) => {
+    const shift = (shiftTypes || []).find(st => st.id === shiftCode);
+    if (!shift) return 8;
+    if (shift.id === '09A') return 8;
+    if (shift.id === '09O') return 12;
+    if (!shift.start || !shift.end) return 8;
+    const [startHour, startMinute] = String(shift.start).split(':').map(Number);
+    const [endHour, endMinute] = String(shift.end).split(':').map(Number);
+    let startTotal = (startHour || 0) * 60 + (startMinute || 0);
+    let endTotal = (endHour || 0) * 60 + (endMinute || 0);
+    if (endTotal <= startTotal) endTotal += 24 * 60;
+    const rawHours = Math.round(((endTotal - startTotal) / 60) * 100) / 100;
+    if (rawHours === 8.5) return 8;
+    return Math.max(1, rawHours || 8);
+};
+const resolveLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
+    const existingHours = Number(assignment?.leaveHours);
+    if (Number.isFinite(existingHours) && existingHours > 0) return existingHours;
+    if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
+    return 8;
+};
 const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = '', leaveTypes = [] }) => {
     let monthStats = { ot: 0, leaves: {} };
-    let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnual: 0 };
+    let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnualHours: 0 };
     let otHistory = [];
     let monthOtHistory = [];
 
@@ -149,23 +171,27 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
         if (assign.type === 'LEAVE') {
             const lType = assign.leaveType || 'unknown';
             const typeInfo = (leaveTypes || []).find(t => t.id === lType);
-            const hrs = assign.leaveHours ? parseFloat(assign.leaveHours) : 0;
-            if (!yearStats.leaves[lType]) yearStats.leaves[lType] = { days: 0 };
+            const hrs = resolveLeaveHours(assign, DEFAULT_SHIFT_TYPES);
+            if (!yearStats.leaves[lType]) yearStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
             yearStats.leaves[lType].days += 1;
-            if (lType === 'annual') yearStats.usedAnnual += (hrs / 8);
-            if (assign.useComp && hrs > 0 && lType !== 'menstrual') {
+            if (lType !== 'menstrual') yearStats.leaves[lType].hours += hrs;
+            if (lType === 'annual') yearStats.usedAnnualHours += hrs;
+            if (assign.useComp && hrs > 0 && lType !== 'menstrual' && lType !== 'annual') {
                 yearStats.compHoursUsed += hrs;
+                yearStats.leaves[lType].compHours += hrs;
                 otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
                 if (targetMonth && date.startsWith(targetMonth)) {
                     monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣${assign.note ? ` (${assign.note})` : ''}` });
                 }
+            } else if (hrs > 0 && lType !== 'menstrual' && lType !== 'annual') {
+                yearStats.leaves[lType].deductHours += hrs;
             }
             if (targetMonth && date.startsWith(targetMonth)) {
                 if (!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
                 monthStats.leaves[lType].days += 1;
-                if (assign.leaveHours && lType !== 'menstrual') monthStats.leaves[lType].hours += hrs;
-                if (assign.useComp || lType === 'annual' || lType === 'menstrual') monthStats.leaves[lType].compHours += hrs;
-                else monthStats.leaves[lType].deductHours += hrs;
+                if (lType !== 'menstrual') monthStats.leaves[lType].hours += hrs;
+                if (assign.useComp && lType !== 'menstrual' && lType !== 'annual') monthStats.leaves[lType].compHours += hrs;
+                else if (lType !== 'annual' && lType !== 'menstrual') monthStats.leaves[lType].deductHours += hrs;
             }
         }
 
@@ -1229,8 +1255,9 @@ const getYearlyBalance = (uid, yearToFind) => {
             if (isSuperAdmin) {
                 let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
                 const idx = next.findIndex(a => a.uid === uid);
-                // 這裡保留您原本的 LEAVE 資料結構
-                const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, subUid: subUid || null, timestamp: Date.now() };
+                const baseAssign = idx >= 0 ? next[idx] : null;
+                const leaveHours = resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+                const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, timestamp: Date.now() };
                 if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
                 await update({ assignments: next });
                 setExpanded(null);
@@ -1543,7 +1570,7 @@ const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, i
 const calc = (uid) => {
     const targetYear = targetMonth.substring(0, 4);
     const uObj = users[uid];
-    const annualLimit = getAnnualLeaveDays(uObj?.startDate);
+    const annualLimitHours = getAnnualLeaveHours(uObj?.startDate);
     let tenureText = "資料未建檔";
     if (uObj?.startDate) {
         const start = new Date(uObj.startDate);
@@ -1562,7 +1589,7 @@ const calc = (uid) => {
         leaveTypes
     });
     const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
-    return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimit, gasTotal, tenureText };
+    return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimitHours, gasTotal, tenureText };
 };
 
     return (
@@ -1586,14 +1613,23 @@ const calc = (uid) => {
                         </div>
                         <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200">
                             <div className="text-xs font-bold text-indigo-900 mb-2 border-b border-indigo-100 pb-1 flex justify-between">
-                                <span><Gift className="w-3 h-3 inline mr-1"/> 法定特休帳戶</span>
-                                <span className="bg-white px-2 rounded text-indigo-600">剩餘: {Math.max(0, s.annualLimit - s.yearStats.usedAnnual)} 天</span>
+                                <span><Gift className="w-3 h-3 inline mr-1"/> 法定特休時數帳戶</span>
+                                <span className="bg-white px-2 rounded text-indigo-600">剩餘: {Math.max(0, s.annualLimitHours - s.yearStats.usedAnnualHours)} 小時</span>
                             </div>
                             <div className="grid grid-cols-2 gap-2 text-[11px] text-indigo-800">
                                 <div>📌 到職日: {u.startDate || '未設定'}</div>
                                 <div>⏳ 系統年資: {s.tenureText}</div>
-                                <div>🎯 年度總額: {s.annualLimit} 天</div>
-                                <div>🏃 年度已休: {s.yearStats.usedAnnual} 天</div>
+                                <div>🎯 年度總額: {s.annualLimitHours} 小時</div>
+                                <div>🏃 年度已休: {s.yearStats.usedAnnualHours} 小時</div>
+                            </div>
+                        </div>
+                        <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                            <div className="text-xs font-bold text-amber-900 mb-2 border-b border-amber-100 pb-1">已休休假總明細</div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px] text-amber-800">
+                                <div>🩸 生理假：{s.yearStats.leaves.menstrual?.days || 0} 天</div>
+                                <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時</div>
+                                <div>🗂️ 事假：{s.yearStats.leaves.personal?.days || 0} 天 / {s.yearStats.leaves.personal?.hours || 0} 小時</div>
+                                <div>🌴 特休：{s.yearStats.leaves.annual?.hours || 0} 小時</div>
                             </div>
                         </div>
                         <div className="bg-teal-50 p-3 rounded-lg border border-teal-200 flex justify-between items-center gap-3">
@@ -2310,11 +2346,14 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                 const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
                 const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
                 const idx = assigns.findIndex(a => a.uid === req.uid);
+                const baseAssign = idx >= 0 ? assigns[idx] : null;
+                const leaveHours = resolveLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES);
                 const leaveEntry = { 
                     uid: req.uid, 
                     type: 'LEAVE', 
                     leaveType: req.leaveType, 
-                    leaveHours: 8, 
+                    leaveHours, 
+                    shiftCode: baseAssign?.shiftCode || null,
                     subUid: req.subUid || null,
                     timestamp: Date.now() 
                 };
