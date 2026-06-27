@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.9-recovery-hardened (Contract Appendix Edition)"; 
+const CURRENT_VERSION = "v12.8.4.9-startup-guard (Contract Appendix Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -527,6 +527,43 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
         </div>
     );
 };
+class StartupGuardBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, errorMessage: '' };
+    }
+    static getDerivedStateFromError(error) {
+        return { hasError: true, errorMessage: error?.message || 'unknown startup error' };
+    }
+    componentDidCatch(error, info) {
+        console.error('StartupGuardBoundary caught:', error, info);
+    }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="min-h-screen bg-red-50 flex items-center justify-center p-6">
+                    <div className="w-full max-w-xl bg-white border border-red-200 rounded-3xl shadow-xl p-8 space-y-4">
+                        <div className="text-red-600 font-black text-2xl">系統啟動保護模式</div>
+                        <div className="text-sm text-gray-700 leading-relaxed">主畫面載入時發生錯誤，系統已阻止整頁白屏。請先重新整理；若仍失敗，請回報下方錯誤訊息。</div>
+                        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 text-xs font-mono text-red-700 break-all">{this.state.errorMessage || 'unknown startup error'}</div>
+                        <button onClick={() => window.location.reload()} className="w-full bg-red-600 text-white py-3 rounded-2xl font-black hover:bg-red-700">重新整理系統</button>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+const StartupGuardFallback = ({ title = 'LOADING MODULE...', detail = '資料初始化中，請稍候。' }) => (
+    <div className="min-h-[40vh] flex items-center justify-center p-6">
+        <div className="bg-white border border-indigo-100 rounded-3xl shadow-lg px-8 py-10 text-center max-w-lg w-full">
+            <div className="text-indigo-600 font-black text-2xl tracking-tight">{title}</div>
+            <div className="mt-3 text-sm text-gray-500 font-bold leading-relaxed">{detail}</div>
+        </div>
+    </div>
+);
+
 const ViewSignatureModal = ({ sigData, onClose }) => {
     if (!sigData) return null;
     const handlePrint = () => { window.print(); };
@@ -2613,6 +2650,8 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
         (r.type === 'leave_request' && canApproveLeaveRequests) || 
         (r.type === 'admin_ot_approve' && canApproveLeaveRequests)
     ) || [];
+    const notificationCount = Array.isArray(myNotifications) ? myNotifications.length : 0;
+    const canRenderProtectedApp = !loading && !!user && !!currentUserInfo;
 
     useEffect(() => {
         const pendingRequests = safeRequests.filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt);
@@ -2711,6 +2750,14 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             default: return null;
         }
     };
+    const safeRenderView = () => {
+        try {
+            return renderView();
+        } catch (err) {
+            console.error('safeRenderView failed:', err);
+            return <StartupGuardFallback title="MODULE LOAD FAILED" detail={err?.message || '畫面模組載入失敗，請重新整理或回報此訊息。'} />;
+        }
+    };
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
     if (user && !currentUserInfo) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">LOADING PROFILE...</div>;
     // 🟠 1. TEATOP 台中東山店：最終純淨版大門 (已移除 T 與小字，修復點擊)
@@ -2732,7 +2779,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                     
                     {/* 🟢 修復後的按鈕：加上 cursor-pointer 與 z-50 確保可點擊 */}
                     <button 
-                        onClick={() => signInWithPopup(auth, provider)} 
+                        onClick={async () => { try { await signInWithPopup(auth, provider); } catch (err) { console.error('Google sign-in failed:', err); alert('Google 登入失敗，請稍後再試。'); } }} 
                         className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 shadow-xl shadow-gray-100/50 transition-all duration-300 active:scale-95 cursor-pointer relative z-50"
                     >
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
@@ -2752,6 +2799,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
     );
     // 🔵 2. 主要系統架構 (地雷字元全面清除)
     return (
+        <StartupGuardBoundary>
         <div className="min-h-screen bg-gray-50 flex flex-col">
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
                 <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
@@ -2793,7 +2841,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                             className={`p-2.5 relative rounded-xl transition-all ${view === 'inbox' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-100'}`}
                         >
                             <Bell size={20} />
-                            {myNotifications.length > 0 && (
+                            {notificationCount > 0 && (
                                 <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>
                             )}
                         </button>
@@ -2801,10 +2849,10 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                 </div>
             </header>
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">
-                {renderView()}
+                {canRenderProtectedApp ? safeRenderView() : <StartupGuardFallback title="WAITING FOR CORE DATA..." detail="登入資料或使用者權限尚未完成同步，系統暫不載入主畫面。" />}
             </main>
 
-{showVersionNotice && user?.uid && !loading && (
+{showVersionNotice && user?.uid && !loading && currentUserInfo?.uid && (
     <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
         <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
@@ -2838,6 +2886,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                 </div>
             )}
         </div>
+        </StartupGuardBoundary>
     );
 }
 export { App as default };
