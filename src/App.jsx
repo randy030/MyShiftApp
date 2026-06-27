@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.9-recovery (Contract Appendix Edition)"; 
+const CURRENT_VERSION = "v12.8.4.9-recovery-hotfix (Contract Appendix Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -2385,6 +2385,17 @@ function App() {
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
     const [showVersionNotice, setShowVersionNotice] = useState(false);
+    const versionNoticeKey = user?.uid ? `version_notice_${CURRENT_VERSION}_${user.uid}` : '';
+    const dismissVersionNotice = () => {
+        try {
+            if (versionNoticeKey && typeof window !== 'undefined' && window.localStorage) {
+                window.localStorage.setItem(versionNoticeKey, '1');
+            }
+        } catch (err) {
+            console.warn('version notice storage unavailable', err);
+        }
+        setShowVersionNotice(false);
+    };
     useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
             if (u) {
@@ -2421,11 +2432,21 @@ function App() {
 
 
 useEffect(() => {
-    if (!user || !currentUserInfo) return;
-    const noticeKey = `version_notice_${CURRENT_VERSION}_${user.uid}`;
-    const hasSeen = localStorage.getItem(noticeKey);
-    if (!hasSeen) setShowVersionNotice(true);
-}, [user, currentUserInfo]);
+    if (loading) return;
+    if (!user?.uid || !currentUserInfo?.uid) {
+        setShowVersionNotice(false);
+        return;
+    }
+    try {
+        const hasSeen = (typeof window !== 'undefined' && window.localStorage)
+            ? window.localStorage.getItem(`version_notice_${CURRENT_VERSION}_${user.uid}`)
+            : '1';
+        setShowVersionNotice(!hasSeen);
+    } catch (err) {
+        console.warn('version notice read failed', err);
+        setShowVersionNotice(false);
+    }
+}, [loading, user?.uid, currentUserInfo?.uid]);
 
     useEffect(() => {
         if (!user) return;
@@ -2776,27 +2797,26 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                 {renderView()}
             </main>
 
-{showVersionNotice && (
+{showVersionNotice && user?.uid && !loading && (
     <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
         <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
                 <div>
                     <div className="text-xs font-black tracking-widest opacity-80">VERSION UPDATE</div>
-                    <div className="text-lg font-black">{CURRENT_VERSION} 更新提醒</div>
+                    <div className="text-lg font-black">系統版本更新提醒</div>
                 </div>
-                <button onClick={() => { localStorage.setItem(`version_notice_${CURRENT_VERSION}_${user.uid}`, '1'); setShowVersionNotice(false); }} className="text-white/80 hover:text-white font-black">✕</button>
+                <button onClick={dismissVersionNotice} className="text-white/80 hover:text-white font-black">✕</button>
             </div>
             <div className="p-6 space-y-3 text-sm text-gray-700">
-                <div className="font-black text-gray-800">本次更新內容</div>
+                <div className="font-black text-gray-800">目前版本：{CURRENT_VERSION}</div>
                 <ul className="list-disc pl-5 space-y-2">
-                    <li>病假 / 事假申請與主管核准流程，新增「是否使用補休扣抵」選項。</li>
-                    <li>公司備忘錄 / 行程支援開始日期與結束日期，可設定活動區間。</li>
-                    <li>系統預設班別新增 09A、09B、12A、12B、0901，並保留舊制 09O 相容資料。</li>
-                    <li>系統設定開放新增特殊班別，供管理端自行維護。</li>
-                    <li>時數與欄位名稱已同步優化，方便員工與主管理解。</li>
+                    <li>簽約同意書畫面最後已加入「請假規則附錄」，員工簽約時可直接閱讀。</li>
+                    <li>0901 班別已調整為 09:00~13:00 / 17:00~21:00，班別時數同步更新為 8 小時。</li>
+                    <li>病假 / 事假申請與主管核准流程，保留補休扣抵規則。</li>
+                    <li>版本提醒已改為較保守寫法，避免登入初始化期間影響畫面。</li>
                 </ul>
                 <div className="pt-3">
-                    <button onClick={() => { localStorage.setItem(`version_notice_${CURRENT_VERSION}_${user.uid}`, '1'); setShowVersionNotice(false); }} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
+                    <button onClick={dismissVersionNotice} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
                 </div>
             </div>
         </div>
