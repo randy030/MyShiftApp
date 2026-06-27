@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.9-functional-startup-guard (Contract Appendix Edition)"; 
+const CURRENT_VERSION = "V13.2"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -327,13 +327,13 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4 animate-fade-in">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
-                <div className="bg-purple-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Megaphone className="w-5 h-5"/> 公司行程備忘錄</h3><button onClick={onClose} className="hover:bg-purple-700 p-1 rounded"><X size={20}/></button></div>
-                <div className="p-6 space-y-4">
-                    <div><label className="block text-xs font-bold text-gray-700 mb-1">標題 <span className="text-red-500">*</span></label><input type="text" value={formData.title} onChange={e=>setFormData({...formData, title: e.target.value})} className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:border-purple-500"/></div>
-                    <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-bold text-gray-700 mb-1">開始日期</label><input type="date" value={formData.startDate} onChange={e=>setFormData({...formData, startDate: e.target.value, endDate: formData.endDate || e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">結束日期</label><input type="date" value={formData.endDate || formData.startDate} onChange={e=>setFormData({...formData, endDate: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div></div>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm max-h-[85vh] overflow-hidden">
+                <div className="bg-purple-600 p-4 text-white flex justify-between items-center sticky top-0 z-10"><h3 className="font-bold flex items-center gap-2"><Megaphone className="w-5 h-5"/> 公司行程備忘錄</h3><button onClick={onClose} className="hover:bg-purple-700 p-2 rounded-full"><X size={22}/></button></div>
+                <div className="p-6 space-y-4 overflow-y-auto overscroll-contain">
+                    <div><label className="block text-xs font-bold text-gray-700 mb-1">標題 <span className="text-red-500">*</span></label><input type="text" value={formData.title} onChange={e=>setFormData({...formData, title: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:border-purple-500"/></div>
+                    <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-bold text-gray-700 mb-1">開始日期</label><input type="date" value={formData.startDate} onChange={e=>setFormData({...formData, startDate: e.target.value, endDate: formData.endDate || e.target.value})} className="w-full border rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">結束日期</label><input type="date" value={formData.endDate || formData.startDate} onChange={e=>setFormData({...formData, endDate: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div></div>
                     <div className="grid grid-cols-2 gap-3"><div className="col-span-2"><label className="block text-[11px] font-bold text-purple-600 mb-1">日期區間預設為同一天，可依活動期間調整</label></div><div><label className="block text-xs font-bold text-gray-700 mb-1">時間</label><input type="time" value={formData.time} onChange={e=>setFormData({...formData, time: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">重複</label><select value={formData.repeatType} onChange={e=>setFormData({...formData, repeatType: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none">{Object.entries(REPEAT_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}</select></div></div>
-                    <div><label className="block text-xs font-bold text-gray-700 mb-1">備註 (選填)</label><textarea value={formData.note || ''} onChange={e=>setFormData({...formData, note: e.target.value})} rows="2" className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"></textarea></div>
+                    <div><label className="block text-xs font-bold text-gray-700 mb-1">備註 (選填)</label><textarea value={formData.note || ''} onChange={e=>setFormData({...formData, note: e.target.value})} rows="2" className="w-full border rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none"></textarea></div>
                     <div className="flex gap-3 pt-4 border-t">{formData.id && <button onClick={()=>onDelete(formData.id)} className="p-2.5 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg"><Trash2 size={18}/></button>}<button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold hover:bg-gray-200">取消</button><button onClick={() => { if(!formData.title) return alert("請輸入標題"); if(!formData.startDate) return alert("請選擇開始日期"); const safeEndDate = formData.endDate || formData.startDate; if (safeEndDate < formData.startDate) return alert("結束日期不可早於開始日期"); onSave({ ...formData, endDate: safeEndDate }); }} className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg font-bold shadow hover:bg-purple-700">儲存</button></div>
                 </div>
             </div>
@@ -1591,7 +1591,7 @@ const getYearlyBalance = (uid, yearToFind) => {
             <div className="border-t pt-3 mt-2">
                 <div className="flex gap-2 items-center mb-1"><StickyNote className="w-4 h-4 text-gray-500" /><span className="text-xs font-bold text-gray-600">當日備註 (顯示於右上角紅點)</span></div>
                 <div className="flex gap-2">
-                    <input value={note} disabled={isReadOnly} onChange={e=>setNote(e.target.value)} className={`border flex-1 rounded px-2 py-1 text-sm focus:outline-none focus:border-indigo-500 ${isReadOnly ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white'}`} placeholder="例如: 衛生局檢查..."/>
+                    <input value={note} disabled={isReadOnly} onChange={e=>setNote(e.target.value)} className={`border flex-1 rounded px-2 py-1 text-base sm:text-sm focus:outline-none focus:border-indigo-500 ${isReadOnly ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white'}`} placeholder="例如: 衛生局檢查..."/>
                     {!isReadOnly && <button onClick={()=>setDoc(doc(db,'artifacts',appId,'public', 'data', 'shifts',dateStr),{...dayData,note},{merge:true})} className="bg-indigo-600 text-white px-3 rounded hover:bg-indigo-700"><Save size={16}/></button>}
                 </div>
             </div>
