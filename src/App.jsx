@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.9 (Contract Appendix Edition)"; 
+const CURRENT_VERSION = "v12.8.4.9-safe (Contract Appendix Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -504,15 +504,11 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
                                 <p className="pl-4 mt-2">嚴禁代打卡、偷料。若因乙方重大過失造成損失，應負損害賠償責任（依法甲方不得預扣薪資）。</p>
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第八條：機密保密</p>
                                 <p className="pl-4 mt-2">乙方對職務上知悉之營業機密負絕對保密義務，離職後亦同。如有違反願負一切法律責任。</p>
-                                <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-                                    <p className="font-bold text-amber-900 text-base">請假規則附錄</p>
-                                    <p className="text-xs text-amber-800 mt-1">本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則。</p>
-                                    <ol className="list-decimal pl-6 mt-3 space-y-2 text-sm text-amber-900">
-                                        <li><strong>生理假</strong>：以年度為單位，每年最多 3 天，且每月最多 1 天。</li>
-                                        <li><strong>特休</strong>：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</li>
-                                        <li><strong>病假 / 事假</strong>：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</li>
-                                    </ol>
-                                </div>
+                                <p className="font-bold text-gray-900 mt-4 bg-amber-50 px-2 py-1 rounded inline-block">請假規則附錄</p>
+                                <p className="pl-4 mt-2">本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則。</p>
+                                <p className="pl-4 mt-1">1. 生理假：每年最多 3 天，每月最多 1 天。</p>
+                                <p className="pl-4 mt-1">2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</p>
+                                <p className="pl-4 mt-1">3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
                             </>
                         )}
                     </div>
@@ -564,7 +560,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
                                 <p><strong>第六條：法定保障與福利</strong><br/>甲方依法提撥 6% 勞工退休金、提供勞保及職災協助。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
                                 <p><strong>第七條：懲處與賠償制度</strong><br/>嚴禁代打卡、偷料。若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣）。</p>
                                 <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
-                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：以年度為單位，每年最多 3 天，且每月最多 1 天。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
+                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每年最多 3 天，每月最多 1 天。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
                             </>
                         )}
                         <div className="bg-gray-100 p-3 text-sm font-bold text-center border mt-6">☑️ 本人已詳細審閱、充分了解且同意上述條款，並以下方親筆簽名為憑。</div>
@@ -2793,11 +2789,11 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
             <div className="p-6 space-y-3 text-sm text-gray-700">
                 <div className="font-black text-gray-800">本次更新內容</div>
                 <ul className="list-disc pl-5 space-y-2">
-                    <li>簽約同意書畫面末尾已直接嵌入「請假規則附錄」，員工簽約時可同步查看附件內容。</li>
-                    <li>0901 班別工時調整為 09:00~13:00 / 17:00~21:00，班別時數同步更新為 8 小時。</li>
-                    <li>病假 / 事假申請與主管核准流程，可設定是否使用補休時數扣抵。</li>
+                    <li>病假 / 事假申請與主管核准流程，新增「是否使用補休扣抵」選項。</li>
                     <li>公司備忘錄 / 行程支援開始日期與結束日期，可設定活動區間。</li>
-                    <li>系統設定可維護預設與特殊班別，保留舊制 09O 相容資料。</li>
+                    <li>系統預設班別新增 09A、09B、12A、12B、0901，並保留舊制 09O 相容資料。</li>
+                    <li>系統設定開放新增特殊班別，供管理端自行維護。</li>
+                    <li>時數與欄位名稱已同步優化，方便員工與主管理解。</li>
                 </ul>
                 <div className="pt-3">
                     <button onClick={() => { localStorage.setItem(`version_notice_${CURRENT_VERSION}_${user.uid}`, '1'); setShowVersionNotice(false); }} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
