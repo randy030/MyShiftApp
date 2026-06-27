@@ -6,7 +6,7 @@ import {
     Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Trash2, 
     BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, 
     FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, 
-    Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Map, Package, 
+    Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Package, 
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
