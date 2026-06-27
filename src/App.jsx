@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.6 (Master Integration Edition)"; 
+const CURRENT_VERSION = "v12.8.4.9 (Contract Appendix Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -137,8 +137,7 @@ const getAnnualLeaveHours = (startDateStr) => getAnnualLeaveDays(startDateStr) *
 const calculateShiftHours = (shiftCode, shiftTypes = DEFAULT_SHIFT_TYPES) => {
     const shift = (shiftTypes || []).find(st => st.id === shiftCode);
     if (!shift) return 8;
-    if (shift.id === '09A') return 8;
-    if (shift.id === '09O') return 12;
+    if (Number(shift?.hours) > 0) return Number(shift.hours);
     if (!shift.start || !shift.end) return 8;
     const [startHour, startMinute] = String(shift.start).split(':').map(Number);
     const [endHour, endMinute] = String(shift.end).split(':').map(Number);
@@ -155,7 +154,7 @@ const resolveLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
     if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
     return 8;
 };
-const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = '', leaveTypes = [] }) => {
+const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = '', leaveTypes = [], shiftTypes = DEFAULT_SHIFT_TYPES }) => {
     let monthStats = { ot: 0, leaves: {} };
     let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnualHours: 0 };
     let otHistory = [];
@@ -171,7 +170,7 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
         if (assign.type === 'LEAVE') {
             const lType = assign.leaveType || 'unknown';
             const typeInfo = (leaveTypes || []).find(t => t.id === lType);
-            const hrs = resolveLeaveHours(assign, DEFAULT_SHIFT_TYPES);
+            const hrs = resolveLeaveHours(assign, shiftTypes);
             if (!yearStats.leaves[lType]) yearStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
             yearStats.leaves[lType].days += 1;
             if (lType !== 'menstrual') yearStats.leaves[lType].hours += hrs;
@@ -228,9 +227,29 @@ const DEFAULT_LEAVE_TYPES = [
     { id: 'personal', label: '事假', deduct: true },
 ];
 const DEFAULT_SHIFT_TYPES = [
-    { id: '09A', label: '09A', start: '09:00', end: '17:30' }, 
-    { id: '09O', label: '09O', start: '09:00', end: '21:00' }
+    { id: '09A', label: '09A', start: '09:00', end: '17:30', hours: 8, display: '09:00~17:30' },
+    { id: '09B', label: '09B', start: '09:30', end: '18:00', hours: 8, display: '09:30~18:00' },
+    { id: '12A', label: '12A', start: '12:00', end: '20:30', hours: 8, display: '12:00~20:30' },
+    { id: '12B', label: '12B', start: '12:30', end: '21:00', hours: 8, display: '12:30~21:00' },
+    { id: '0901', label: '0901', start: '09:00', end: '21:00', hours: 8, display: '09:00~13:00 / 17:00~21:00' },
+    { id: '09O', label: '09O', start: '09:00', end: '21:00', hours: 12, display: '09:00~21:00（舊制保留）' }
 ];
+const mergeShiftTypes = (customShiftTypes = []) => {
+    const baseMap = new Map(DEFAULT_SHIFT_TYPES.map(item => [item.id, item]));
+    (Array.isArray(customShiftTypes) ? customShiftTypes : []).forEach(item => {
+        const id = String(item?.id || '').trim();
+        if (!id || baseMap.has(id)) return;
+        baseMap.set(id, {
+            id,
+            label: String(item?.label || id).trim() || id,
+            start: String(item?.start || '').trim(),
+            end: String(item?.end || '').trim(),
+            hours: Number(item?.hours) > 0 ? Number(item.hours) : 8,
+            display: String(item?.display || '').trim() || `${String(item?.start || '').trim()}~${String(item?.end || '').trim()}`
+        });
+    });
+    return Array.from(baseMap.values());
+};
 const DEFAULT_INVENTORY_ITEMS = [
     { id: 'i1', category: '茶葉類', name: '高山青茶', spec: '斤', price: 370 },
     { id: 'i6', category: '果汁與糖漿', name: '梅果漿', spec: '包', price: 165 },
@@ -247,8 +266,9 @@ const getMonthData = (year, month) => ({ firstDay: new Date(year, month, 1).getD
 const getLocalDate = (dateStr) => { const [y, m, d] = dateStr.split('-'); return new Date(y, m - 1, d); };
 const checkEventOnDate = (event, checkDateStr) => {
     if (!event.startDate) return false;
-    if (checkDateStr < event.startDate) return false;
-    if (event.repeatType === 'none') return checkDateStr === event.startDate;
+    const eventEndDate = event.endDate || event.startDate;
+    if (checkDateStr < event.startDate || checkDateStr > eventEndDate) return false;
+    if (event.repeatType === 'none') return checkDateStr >= event.startDate && checkDateStr <= eventEndDate;
     const checkDate = getLocalDate(checkDateStr);
     const startDate = getLocalDate(event.startDate);
     if (event.repeatType === 'daily') return true;
@@ -278,7 +298,8 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
     const { user, balance } = modalData;
     const numHours = parseFloat(hours);
     const isExceeding = numHours < 0 && Math.abs(numHours) > balance;
-    return (
+  
+  return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
                 <div className="bg-indigo-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> 加班 / 補休申請</h3><button onClick={onClose} className="hover:bg-indigo-700 p-1 rounded"><X size={20}/></button></div>
@@ -294,8 +315,15 @@ const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
     );
 };
 const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => {
-    const [formData, setFormData] = useState({ title: '', startDate: '', time: '', repeatType: 'none', note: '' });
-    useEffect(() => { if(isOpen && eventData) setFormData(eventData); }, [isOpen, eventData]);
+    const [formData, setFormData] = useState({ title: '', startDate: '', endDate: '', time: '', repeatType: 'none', note: '' });
+    useEffect(() => {
+        if (isOpen && eventData) {
+            setFormData({
+                ...eventData,
+                endDate: eventData.endDate || eventData.startDate || ''
+            });
+        }
+    }, [isOpen, eventData]);
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4 animate-fade-in">
@@ -303,10 +331,10 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
                 <div className="bg-purple-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Megaphone className="w-5 h-5"/> 公司行程備忘錄</h3><button onClick={onClose} className="hover:bg-purple-700 p-1 rounded"><X size={20}/></button></div>
                 <div className="p-6 space-y-4">
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">標題 <span className="text-red-500">*</span></label><input type="text" value={formData.title} onChange={e=>setFormData({...formData, title: e.target.value})} className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:border-purple-500"/></div>
-                    <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-bold text-gray-700 mb-1">日期</label><input type="date" value={formData.startDate} onChange={e=>setFormData({...formData, startDate: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">時間</label><input type="time" value={formData.time} onChange={e=>setFormData({...formData, time: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div></div>
-                    <div><label className="block text-xs font-bold text-gray-700 mb-1">重複</label><select value={formData.repeatType} onChange={e=>setFormData({...formData, repeatType: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none">{Object.entries(REPEAT_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}</select></div>
+                    <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-bold text-gray-700 mb-1">開始日期</label><input type="date" value={formData.startDate} onChange={e=>setFormData({...formData, startDate: e.target.value, endDate: formData.endDate || e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">結束日期</label><input type="date" value={formData.endDate || formData.startDate} onChange={e=>setFormData({...formData, endDate: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div></div>
+                    <div className="grid grid-cols-2 gap-3"><div className="col-span-2"><label className="block text-[11px] font-bold text-purple-600 mb-1">日期區間預設為同一天，可依活動期間調整</label></div><div><label className="block text-xs font-bold text-gray-700 mb-1">時間</label><input type="time" value={formData.time} onChange={e=>setFormData({...formData, time: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">重複</label><select value={formData.repeatType} onChange={e=>setFormData({...formData, repeatType: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none">{Object.entries(REPEAT_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}</select></div></div>
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">備註 (選填)</label><textarea value={formData.note || ''} onChange={e=>setFormData({...formData, note: e.target.value})} rows="2" className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"></textarea></div>
-                    <div className="flex gap-3 pt-4 border-t">{formData.id && <button onClick={()=>onDelete(formData.id)} className="p-2.5 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg"><Trash2 size={18}/></button>}<button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold hover:bg-gray-200">取消</button><button onClick={() => { if(!formData.title) return alert("請輸入標題"); onSave(formData); }} className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg font-bold shadow hover:bg-purple-700">儲存</button></div>
+                    <div className="flex gap-3 pt-4 border-t">{formData.id && <button onClick={()=>onDelete(formData.id)} className="p-2.5 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg"><Trash2 size={18}/></button>}<button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold hover:bg-gray-200">取消</button><button onClick={() => { if(!formData.title) return alert("請輸入標題"); if(!formData.startDate) return alert("請選擇開始日期"); const safeEndDate = formData.endDate || formData.startDate; if (safeEndDate < formData.startDate) return alert("結束日期不可早於開始日期"); onSave({ ...formData, endDate: safeEndDate }); }} className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg font-bold shadow hover:bg-purple-700">儲存</button></div>
                 </div>
             </div>
         </div>
@@ -476,11 +504,20 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
                                 <p className="pl-4 mt-2">嚴禁代打卡、偷料。若因乙方重大過失造成損失，應負損害賠償責任（依法甲方不得預扣薪資）。</p>
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第八條：機密保密</p>
                                 <p className="pl-4 mt-2">乙方對職務上知悉之營業機密負絕對保密義務，離職後亦同。如有違反願負一切法律責任。</p>
+                                <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                                    <p className="font-bold text-amber-900 text-base">請假規則附錄</p>
+                                    <p className="text-xs text-amber-800 mt-1">本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則。</p>
+                                    <ol className="list-decimal pl-6 mt-3 space-y-2 text-sm text-amber-900">
+                                        <li><strong>生理假</strong>：以年度為單位，每年最多 3 天，且每月最多 1 天。</li>
+                                        <li><strong>特休</strong>：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</li>
+                                        <li><strong>病假 / 事假</strong>：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</li>
+                                    </ol>
+                                </div>
                             </>
                         )}
                     </div>
                     <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 cursor-pointer hover:bg-blue-100 transition-colors" onClick={()=>setAgree(!agree)}>
-                        <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="w-5 h-5 accent-blue-600 cursor-pointer"/><span className="font-bold text-blue-900 leading-tight">本人已詳細審閱、充分了解且同意上述條款，並以下方親筆簽名為憑。</span></label>
+                        <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="w-5 h-5 accent-blue-600 cursor-pointer"/><span className="font-bold text-blue-900 leading-tight">本人已詳細審閱、充分了解且同意上述條款及請假規則附錄，並以下方親筆簽名為憑。</span></label>
                     </div>
                     <div className="border-2 border-gray-300 rounded-lg overflow-hidden relative">
                         <div className="bg-gray-100 p-2 text-xs font-bold text-gray-600 flex justify-between items-center border-b border-gray-300">
@@ -527,6 +564,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
                                 <p><strong>第六條：法定保障與福利</strong><br/>甲方依法提撥 6% 勞工退休金、提供勞保及職災協助。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
                                 <p><strong>第七條：懲處與賠償制度</strong><br/>嚴禁代打卡、偷料。若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣）。</p>
                                 <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
+                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：以年度為單位，每年最多 3 天，且每月最多 1 天。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
                             </>
                         )}
                         <div className="bg-gray-100 p-3 text-sm font-bold text-center border mt-6">☑️ 本人已詳細審閱、充分了解且同意上述條款，並以下方親筆簽名為憑。</div>
@@ -1012,7 +1050,7 @@ const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => 
 // ==========================================
 // 📋 出勤明細頁面 (AttendanceView)
 // ==========================================
-const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) => {
+const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes = DEFAULT_SHIFT_TYPES }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [attendanceList, setAttendanceList] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -1050,7 +1088,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
     }, [targetMonth, db, appId, shifts, shiftTypes]);
     const handleExportCSV = () => {
         const rows = [['日期', '員工', '班別', '上班打卡', '下班打卡', '狀態']];
-        attendanceList.forEach(r => { const shiftStr = r.shiftInfo ? `${r.shiftInfo.start}~${r.shiftInfo.end}` : '-'; rows.push([r.date, r.name, shiftStr, r.in || '', r.out || '', r.status.join(', ')]); });
+        attendanceList.forEach(r => { const shiftStr = r.shiftInfo ? (r.shiftInfo.display || `${r.shiftInfo.start}~${r.shiftInfo.end}`) : '-'; rows.push([r.date, r.name, shiftStr, r.in || '', r.out || '', r.status.join(', ')]); });
         exportToCSV(`出勤紀錄_${targetMonth}`, rows);
     };
     return (
@@ -1062,7 +1100,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes }) =
                                 {attendanceList.map((r, i) => {
                                     const isAbnormal = r.status.includes('遲到') || r.status.includes('早退') || r.status.includes('缺卡');
                                     return (
-                                    <tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{r.date.substring(5)}</td><td className="p-3 font-bold">{r.name}</td><td className="p-3 text-center text-gray-500 text-xs">{r.shiftInfo ? <span className="bg-gray-100 px-2 py-0.5 rounded">{r.shiftInfo.label} ({r.shiftInfo.start}~{r.shiftInfo.end})</span> : <span className="text-gray-300">-</span>}</td><td className={`p-3 text-center font-bold ${r.in && r.shiftInfo && r.in > r.shiftInfo.start ? 'text-red-500' : 'text-gray-800'}`}>{r.in || '-'}</td><td className={`p-3 text-center font-bold ${r.out && r.shiftInfo && r.out < r.shiftInfo.end ? 'text-red-500' : 'text-gray-800'}`}>{r.out || '-'}</td><td className="p-3 font-bold">{isAbnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span>}</td></tr>
+                                    <tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{r.date.substring(5)}</td><td className="p-3 font-bold">{r.name}</td><td className="p-3 text-center text-gray-500 text-xs">{r.shiftInfo ? <span className="bg-gray-100 px-2 py-0.5 rounded">{r.shiftInfo.label} ({r.shiftInfo.display || `${r.shiftInfo.start}~${r.shiftInfo.end}`})</span> : <span className="text-gray-300">-</span>}</td><td className={`p-3 text-center font-bold ${r.in && r.shiftInfo && r.in > r.shiftInfo.start ? 'text-red-500' : 'text-gray-800'}`}>{r.in || '-'}</td><td className={`p-3 text-center font-bold ${r.out && r.shiftInfo && r.out < r.shiftInfo.end ? 'text-red-500' : 'text-gray-800'}`}>{r.out || '-'}</td><td className="p-3 font-bold">{isAbnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span>}</td></tr>
                                 )})}
                     </tbody></table></div>
                 )}
@@ -1086,10 +1124,11 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
   
     const handleSaveEvent = async (eventData) => {
         const isEditing = !!eventData.id;
-        if (eventData.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventData.id), eventData);
-        else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), eventData);
+        const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
+        if (normalizedEvent.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
+        else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
         setEditingEvent(null);
-        alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。系統將於事件當天早上 9:00 或有人開啟系統時，自動發送 LINE 提醒。`);
+        alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。系統將於事件區間內每日早上 9:00 或有人開啟系統時，自動發送 LINE 提醒。`);
     };
     
     const handleDeleteEvent = async (eventId) => {
@@ -1214,7 +1253,7 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
   
 
 const getYearlyBalance = (uid, yearToFind) => {
-    const stats = getUserYearlyTimeStats({ shifts, uid, targetYear: yearToFind, leaveTypes: leaves });
+    const stats = getUserYearlyTimeStats({ shifts, uid, targetYear: yearToFind, leaveTypes: leaves, shiftTypes: shiftsDef || DEFAULT_SHIFT_TYPES });
     return stats.balance;
 };
 
@@ -1245,7 +1284,7 @@ const getYearlyBalance = (uid, yearToFind) => {
     };
   
     // 🟢 手術一：修改請假邏輯，不論有無代班，員工申請皆須簽核
-    const toggle = async (uid, type, lType = null, subUid = null) => {
+    const toggle = async (uid, type, lType = null, subUid = null, useComp = false) => {
         const isMe = uid === currentUserInfo.uid;
         if (!isSuperAdmin && !isMe) return alert("無權限");
         if (isClosed) return alert("本日店休");
@@ -1257,7 +1296,7 @@ const getYearlyBalance = (uid, yearToFind) => {
                 const idx = next.findIndex(a => a.uid === uid);
                 const baseAssign = idx >= 0 ? next[idx] : null;
                 const leaveHours = resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
-                const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, timestamp: Date.now() };
+                const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, useComp: ['sick', 'personal'].includes(lType) ? useComp : false, timestamp: Date.now() };
                 if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
                 await update({ assignments: next });
                 setExpanded(null);
@@ -1277,6 +1316,7 @@ const getYearlyBalance = (uid, yearToFind) => {
                         leaveLabel: leaveLabel,
                         subUid: subUid || null,
                         subName: subUid ? (users[subUid]?.name || '') : '',
+                        useComp: ['sick', 'personal'].includes(lType) ? useComp : false,
                         timestamp: new Date(),
                         status: 'pending'
                     });
@@ -1285,7 +1325,8 @@ const getYearlyBalance = (uid, yearToFind) => {
                         const sent = await sendLineNotification(approverLineIds, `🔔 【新假單申請】
 申請人：${currentUserInfo.name}
 日期：${dateStr}
-類別：${leaveLabel}${subUid ? `
+類別：${leaveLabel}${['sick', 'personal'].includes(lType) ? `
+補休扣抵：${useComp ? '是' : '否'}` : ''}${subUid ? `
 代理人：${users[subUid]?.name || '已填寫'}` : ''}
 請至系統「通知中心」進行審核。`);
                         if (sent) {
@@ -1395,11 +1436,11 @@ const getYearlyBalance = (uid, yearToFind) => {
           <div className="p-4 overflow-y-auto space-y-3 flex-1 relative">
             
             <div className="bg-purple-50 p-3 rounded-lg mb-3 border border-purple-200 shadow-sm">
-                <div className="flex justify-between items-center mb-2"><h4 className="font-bold text-purple-800 flex items-center gap-1"><Megaphone size={14}/> 公司備忘錄 / 行程</h4>{!isReadOnly && isSuperAdmin && <button onClick={()=>setEditingEvent({ startDate: dateStr, repeatType: 'none', time: '', title: '' })} className="text-purple-600 bg-white px-2 py-0.5 rounded border border-purple-200 text-xs font-bold shadow-sm hover:bg-purple-100 transition-colors">+ 新增</button>}</div>
+                <div className="flex justify-between items-center mb-2"><h4 className="font-bold text-purple-800 flex items-center gap-1"><Megaphone size={14}/> 公司備忘錄 / 行程</h4>{!isReadOnly && isSuperAdmin && <button onClick={()=>setEditingEvent({ startDate: dateStr, endDate: dateStr, repeatType: 'none', time: '', title: '', note: '' })} className="text-purple-600 bg-white px-2 py-0.5 rounded border border-purple-200 text-xs font-bold shadow-sm hover:bg-purple-100 transition-colors">+ 新增</button>}</div>
                 {todaysEvents.length === 0 ? <div className="text-xs text-purple-400">今日無行程</div> : (
                     todaysEvents.map(e => (
                         <div key={e.id} className="flex justify-between items-center bg-white p-2 rounded border border-purple-100 mb-1 shadow-sm">
-                            <div><div className="text-sm font-bold text-gray-800">{e.time && <span className="text-purple-600 mr-1">{e.time}</span>}{e.title}</div>{(e.repeatType !== 'none' || e.note) && (<div className="text-[10px] text-gray-500 mt-0.5 flex gap-1 items-center">{e.repeatType !== 'none' && <span className="bg-gray-100 px-1 rounded flex items-center gap-0.5"><Repeat size={8}/> {REPEAT_LABELS[e.repeatType]}</span>}{e.note && <span className="truncate max-w-[150px]">{e.note}</span>}</div>)}</div>
+                            <div><div className="text-sm font-bold text-gray-800">{e.time && <span className="text-purple-600 mr-1">{e.time}</span>}{e.title}</div>{((e.endDate && e.endDate !== e.startDate) || e.repeatType !== 'none' || e.note) && (<div className="text-[10px] text-gray-500 mt-0.5 flex gap-1 items-center flex-wrap">{e.endDate && e.endDate !== e.startDate && <span className="bg-purple-100 text-purple-700 px-1 rounded">{e.startDate} ～ {e.endDate}</span>}{e.repeatType !== 'none' && <span className="bg-gray-100 px-1 rounded flex items-center gap-0.5"><Repeat size={8}/> {REPEAT_LABELS[e.repeatType]}</span>}{e.note && <span className="truncate max-w-[150px]">{e.note}</span>}</div>)}</div>
                             {!isReadOnly && isSuperAdmin && <button onClick={()=>setEditingEvent(e)} className="text-indigo-500 text-xs font-bold bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100">編輯</button>}
                         </div>
                     ))
@@ -1491,6 +1532,10 @@ const getYearlyBalance = (uid, yearToFind) => {
                               <span className="text-xs text-gray-600 font-bold whitespace-nowrap">找人代班:</span>
                               <select id={`sub-select-${u.uid}`} className="text-xs border border-gray-300 rounded p-1.5 flex-1 bg-white shadow-sm focus:border-indigo-500 focus:outline-none"><option value="">-- 不需代班 --</option>{availableSubs.map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}</select>
                           </div>
+                          <label className="flex items-center gap-2 mb-3 text-xs text-indigo-700 font-bold bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+                              <input id={`use-comp-${u.uid}`} type="checkbox" className="accent-indigo-600" />
+                              病假 / 事假申請時，使用補休時數扣抵
+                          </label>
                           <div className="grid grid-cols-3 gap-2">
                               {leaves.map(lt => {
                                   if (lt.id === 'official') return null;
@@ -1526,7 +1571,7 @@ const getYearlyBalance = (uid, yearToFind) => {
   
                                   const btnClass = limitReached ? (isSuperAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed') : (lt.id === 'rostered' || lt.id === 'official' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-sm' : 'bg-white hover:bg-gray-100 shadow-sm');
                                   return (
-                                      <button key={lt.id} onClick={() => { if (limitReached) { if (isSuperAdmin) { if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return; } else { alert(`🚫 拒絕：${limitMsg}`); return; } } const subVal = document.getElementById(`sub-select-${u.uid}`).value; toggle(u.uid,'LEAVE',lt.id, subVal || null); }} className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}>
+                                      <button key={lt.id} onClick={() => { if (limitReached) { if (isSuperAdmin) { if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return; } else { alert(`🚫 拒絕：${limitMsg}`); return; } } const subVal = document.getElementById(`sub-select-${u.uid}`).value; const useCompChecked = ['sick', 'personal'].includes(lt.id) ? !!document.getElementById(`use-comp-${u.uid}`)?.checked : false; toggle(u.uid,'LEAVE',lt.id, subVal || null, useCompChecked); }} className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}>
                                           {limitReached && isSuperAdmin && <span className="mr-1">⚠️</span>}{lt.label}
                                       </button>
                                   )
@@ -1556,7 +1601,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 // ==========================================
 // 📊 統計明細 (SalaryView) - V12 發票登錄版
 // ==========================================
-const SalaryView = ({ users, shifts, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
+const SalaryView = ({ users, shifts, shiftTypes = DEFAULT_SHIFT_TYPES, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [showResigned, setShowResigned] = useState(false);
     const [gasModalData, setGasModalData] = useState(null);
@@ -1586,7 +1631,8 @@ const calc = (uid) => {
         uid,
         targetYear,
         targetMonth,
-        leaveTypes
+        leaveTypes,
+        shiftTypes
     });
     const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
     return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimitHours, gasTotal, tenureText };
@@ -1758,7 +1804,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
 // ==========================================
 
 
-const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId, storeConfig, db, isSuperAdmin }) => {
+const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftTypes = DEFAULT_SHIFT_TYPES, appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
   const [showResigned, setShowResigned] = useState(false);
@@ -1766,11 +1812,19 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
   const [editingItemId, setEditingItemId] = useState(null);
   const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
   const [sequenceInputs, setSequenceInputs] = useState({});
+  const defaultShiftTypeIds = useMemo(() => DEFAULT_SHIFT_TYPES.map(item => item.id), []);
+  const [customShiftList, setCustomShiftList] = useState((Array.isArray(shiftTypes) ? shiftTypes : []).filter(item => !defaultShiftTypeIds.includes(item.id)));
+  const [editingShiftId, setEditingShiftId] = useState(null);
+  const [shiftForm, setShiftForm] = useState({ id: '', label: '', display: '', start: '', end: '', hours: '' });
   const canManageInventory = isSuperAdmin || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor';
 
   useEffect(() => {
       setInventoryList(prepareInventoryItems(inventoryItems));
   }, [inventoryItems]);
+
+  useEffect(() => {
+      setCustomShiftList((Array.isArray(shiftTypes) ? shiftTypes : []).filter(item => !defaultShiftTypeIds.includes(item.id)));
+  }, [shiftTypes, defaultShiftTypeIds]);
 
   const buildInventoryGroups = (sourceItems = []) => {
       const groups = [];
@@ -1948,6 +2002,70 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
       await persistInventoryList(flattenInventoryGroups(groups));
   };
 
+  const persistCustomShiftList = async (nextList) => {
+      const normalized = (Array.isArray(nextList) ? nextList : []).map(item => ({
+          id: String(item?.id || '').trim(),
+          label: String(item?.label || item?.id || '').trim(),
+          start: String(item?.start || '').trim(),
+          end: String(item?.end || '').trim(),
+          display: String(item?.display || '').trim(),
+          hours: Number(item?.hours) > 0 ? Number(item.hours) : 8
+      })).filter(item => item.id && item.label);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftConfig'), { customShiftTypes: normalized }, { merge: true });
+      setCustomShiftList(normalized);
+      return normalized;
+  };
+
+  const resetShiftForm = () => {
+      setEditingShiftId(null);
+      setShiftForm({ id: '', label: '', display: '', start: '', end: '', hours: '' });
+  };
+
+  const startEditShift = (item) => {
+      if (!isSuperAdmin) return alert('只有最高管理員可以設定特殊班別');
+      setEditingShiftId(item.id);
+      setShiftForm({
+          id: item.id || '',
+          label: item.label || '',
+          display: item.display || '',
+          start: item.start || '',
+          end: item.end || '',
+          hours: item.hours ?? ''
+      });
+  };
+
+  const saveCustomShift = async () => {
+      if (!isSuperAdmin) return alert('只有最高管理員可以設定特殊班別');
+      const id = String(shiftForm.id || '').trim().toUpperCase();
+      const label = String(shiftForm.label || id).trim();
+      const start = String(shiftForm.start || '').trim();
+      const end = String(shiftForm.end || '').trim();
+      const display = String(shiftForm.display || '').trim() || `${start}~${end}`;
+      const hours = Number(shiftForm.hours);
+      if (!id) return alert('請填寫班別代號');
+      if (defaultShiftTypeIds.includes(id) && editingShiftId !== id) return alert('此代號已是系統預設班別，請改用其他代號');
+      if (!label) return alert('請填寫班別名稱');
+      if ((!start || !end) && !display) return alert('請至少填寫顯示時段，建議同時設定開始與結束時間');
+      if (!Number.isFinite(hours) || hours <= 0) return alert('請填寫正確的小時數');
+      let nextList = Array.isArray(customShiftList) ? [...customShiftList] : [];
+      const idx = nextList.findIndex(item => item.id === editingShiftId || item.id === id);
+      const nextItem = { id, label, start, end, display, hours };
+      if (idx >= 0) nextList[idx] = nextItem;
+      else nextList.push(nextItem);
+      await persistCustomShiftList(nextList);
+      resetShiftForm();
+      alert(`✅ 特殊班別已${idx >= 0 ? '更新' : '新增'}！`);
+  };
+
+  const deleteCustomShift = async (shiftId) => {
+      if (!isSuperAdmin) return alert('只有最高管理員可以刪除特殊班別');
+      if (!window.confirm(`確定要刪除特殊班別「${shiftId}」嗎？`)) return;
+      const nextList = customShiftList.filter(item => item.id !== shiftId);
+      await persistCustomShiftList(nextList);
+      if (editingShiftId === shiftId) resetShiftForm();
+      alert('✅ 特殊班別已刪除！');
+  };
+
   return (
     <div className="space-y-8 pb-20 max-w-5xl mx-auto animate-fade-in">
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
@@ -2040,6 +2158,68 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], appId,
             })}
           </div>
       </div>
+
+
+<div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
+    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
+        <div>
+            <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+              <Clock className="text-indigo-600" size={24}/> 班別設定
+            </h3>
+            <p className="text-sm text-gray-500 mt-2">系統預設班別已建立；如有臨時活動班、教育訓練班或特殊時段，可在此新增「特殊班別」。</p>
+        </div>
+        <div className="bg-indigo-50 rounded-2xl px-4 py-3 border border-indigo-100 text-center min-w-[220px]">
+            <div className="text-[10px] font-black text-indigo-400">目前可用班別數</div>
+            <div className="text-2xl font-black text-indigo-700">{(shiftTypes || []).length}</div>
+        </div>
+    </div>
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="bg-gray-50 rounded-[2rem] border border-gray-100 p-6 space-y-3">
+            <div className="font-black text-gray-800">系統預設班別</div>
+            <div className="space-y-2">
+                {DEFAULT_SHIFT_TYPES.map(item => (
+                    <div key={item.id} className="flex items-center justify-between bg-white rounded-2xl border border-gray-100 px-4 py-3 text-sm">
+                        <div>
+                            <div className="font-black text-gray-800">{item.label}</div>
+                            <div className="text-[11px] text-gray-500">{item.display || `${item.start}~${item.end}`}</div>
+                        </div>
+                        <div className="text-xs font-black text-indigo-600">{item.hours} 小時</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+        <div className="bg-gray-50 rounded-[2rem] border border-gray-100 p-6 space-y-4">
+            <div className="font-black text-gray-800">特殊班別新增 / 編輯</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input value={shiftForm.id} onChange={e=>setShiftForm({...shiftForm, id: e.target.value.toUpperCase()})} placeholder="班別代號，例如: EVT1" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+                <input value={shiftForm.label} onChange={e=>setShiftForm({...shiftForm, label: e.target.value})} placeholder="顯示名稱" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+                <input type="time" value={shiftForm.start} onChange={e=>setShiftForm({...shiftForm, start: e.target.value})} className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+                <input type="time" value={shiftForm.end} onChange={e=>setShiftForm({...shiftForm, end: e.target.value})} className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+                <input value={shiftForm.display} onChange={e=>setShiftForm({...shiftForm, display: e.target.value})} placeholder="顯示時段，例如: 09:00~12:00 / 17:00~21:00" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500 md:col-span-2" disabled={!isSuperAdmin} />
+                <input type="number" value={shiftForm.hours} onChange={e=>setShiftForm({...shiftForm, hours: e.target.value})} placeholder="實際工時（小時）" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500 md:col-span-2" disabled={!isSuperAdmin} />
+            </div>
+            <div className="flex gap-3">
+                <button onClick={resetShiftForm} className="px-5 py-3 rounded-2xl bg-gray-100 text-gray-500 text-xs font-black">清空</button>
+                <button onClick={saveCustomShift} disabled={!isSuperAdmin} className="flex-1 bg-indigo-600 text-white py-3 rounded-2xl font-black text-sm shadow hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400">{editingShiftId ? '儲存特殊班別' : '新增特殊班別'}</button>
+            </div>
+            <div className="pt-2 border-t border-gray-200 space-y-2">
+                <div className="text-xs font-black text-gray-500">已建立的特殊班別</div>
+                {customShiftList.length === 0 ? <div className="text-xs text-gray-400">目前尚未新增特殊班別</div> : customShiftList.map(item => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 bg-white rounded-2xl border border-gray-100 px-4 py-3 text-sm">
+                        <div className="min-w-0">
+                            <div className="font-black text-gray-800">{item.label} <span className="text-[10px] text-gray-400 ml-1">({item.id})</span></div>
+                            <div className="text-[11px] text-gray-500 truncate">{item.display || `${item.start}~${item.end}`} / {item.hours} 小時</div>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                            <button onClick={()=>startEditShift(item)} disabled={!isSuperAdmin} className="px-3 py-2 rounded-xl bg-indigo-50 text-indigo-600 text-xs font-black disabled:bg-gray-100 disabled:text-gray-400">編輯</button>
+                            <button onClick={()=>deleteCustomShift(item.id)} disabled={!isSuperAdmin} className="px-3 py-2 rounded-xl bg-red-50 text-red-500 text-xs font-black disabled:bg-gray-100 disabled:text-gray-400">刪除</button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    </div>
+</div>
 
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
@@ -2202,12 +2382,13 @@ function App() {
     const [currentUserInfo, setCurrentUserInfo] = useState(null);
     const [dbData, setDbData] = useState({ 
         users: {}, shifts: {}, events: [], requests: [], signatures: [], 
-        gasReceipts: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS 
+        gasReceipts: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES 
     });
     const [view, setView] = useState('calendar');
     const [loading, setLoading] = useState(true);
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
+    const [showVersionNotice, setShowVersionNotice] = useState(false);
     useEffect(() => {
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
             if (u) {
@@ -2235,8 +2416,20 @@ function App() {
         const unsubInv = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), (snap) => {
             setDbData(prev => ({ ...prev, inventoryItems: snap.exists() && snap.data().items ? snap.data().items : DEFAULT_INVENTORY_ITEMS }));
         });
-        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); };
+        const unsubShiftCfg = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftConfig'), (snap) => {
+            const customShiftTypes = snap.exists() && Array.isArray(snap.data().customShiftTypes) ? snap.data().customShiftTypes : [];
+            setDbData(prev => ({ ...prev, shiftTypes: mergeShiftTypes(customShiftTypes) }));
+        });
+        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); unsubShiftCfg(); };
     }, [user]);
+
+
+useEffect(() => {
+    if (!user || !currentUserInfo) return;
+    const noticeKey = `version_notice_${CURRENT_VERSION}_${user.uid}`;
+    const hasSeen = localStorage.getItem(noticeKey);
+    if (!hasSeen) setShowVersionNotice(true);
+}, [user, currentUserInfo]);
 
     useEffect(() => {
         if (!user) return;
@@ -2348,6 +2541,10 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                 const idx = assigns.findIndex(a => a.uid === req.uid);
                 const baseAssign = idx >= 0 ? assigns[idx] : null;
                 const leaveHours = resolveLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES);
+                const requestedUseComp = req.useComp === true;
+                const finalUseComp = ['sick', 'personal'].includes(req.leaveType)
+                    ? window.confirm(`是否在核准 ${requesterName} 的${req.leaveLabel || '假單'}時，使用補休時數扣抵？\n\n員工申請偏好：${requestedUseComp ? '使用補休扣抵' : '不使用補休扣抵'}\n按「確定」= 使用補休扣抵；按「取消」= 不使用補休扣抵`)
+                    : false;
                 const leaveEntry = { 
                     uid: req.uid, 
                     type: 'LEAVE', 
@@ -2355,6 +2552,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                     leaveHours, 
                     shiftCode: baseAssign?.shiftCode || null,
                     subUid: req.subUid || null,
+                    useComp: finalUseComp,
                     timestamp: Date.now() 
                 };
                 if (idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
@@ -2362,7 +2560,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                 await writeReviewLog('approved');
                 await deleteDoc(requestRef);
                 await clearSiblingRequests();
-                if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。
+                if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。${['sick', 'personal'].includes(req.leaveType) ? `\n補休扣抵：${finalUseComp ? '是' : '否'}` : ''}
 審核人：${reviewerName}`);
                 alert(`✅ ${requesterName} 的假單已核准，班表已更新，並已通知員工。`);
             } else if (req.type === 'admin_ot_approve') {
@@ -2408,7 +2606,8 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                     ? `🔔 【待審核假單提醒】
 申請人：${requesterName}
 日期：${req.date}
-類別：${req.leaveLabel || '假單'}${req.subName ? `
+類別：${req.leaveLabel || '假單'}${['sick', 'personal'].includes(req.leaveType) ? `
+補休扣抵：${req.useComp ? '是' : '否'}` : ''}${req.subName ? `
 代理人：${req.subName}` : ''}
 請至系統「通知中心」進行審核。`
                     : `🔔 【待審核時數提醒】
@@ -2437,16 +2636,16 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
             return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
         }
         switch (view) {
-            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
+            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: dbData.shiftTypes || DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} currentUserInfo={currentUserInfo} />;
             case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
-            case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
+            case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
             case 'payroll': return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
-            case 'attendance': return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={DEFAULT_SHIFT_TYPES} />;
+            case 'attendance': return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} />;
             
             // 🟢 修正：只保留一個 settings，並加上空值保護
-            case 'settings': return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || []} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            case 'settings': return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || []} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
             
             case 'inbox': return (
                 <div className="max-w-md mx-auto space-y-4">
@@ -2473,6 +2672,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
                                 </div>
                                 <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700 space-y-1">
                                     <div>{req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}</div>
+                                    {req.type === 'leave_request' && ['sick', 'personal'].includes(req.leaveType) && <div className="text-xs text-amber-600">補休扣抵：{req.useComp ? '是（主管可改）' : '否（主管可改）'}</div>}
                                     {req.type === 'leave_request' && req.subName && <div className="text-xs text-indigo-500">代理人：{req.subName}</div>}
                                     {req.type === 'admin_ot_approve' && <div className="text-xs text-indigo-500">原因：{req.reason || '無備註'}</div>}
                                 </div>
@@ -2579,6 +2779,34 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">
                 {renderView()}
             </main>
+
+{showVersionNotice && (
+    <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
+            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+                <div>
+                    <div className="text-xs font-black tracking-widest opacity-80">VERSION UPDATE</div>
+                    <div className="text-lg font-black">{CURRENT_VERSION} 更新提醒</div>
+                </div>
+                <button onClick={() => { localStorage.setItem(`version_notice_${CURRENT_VERSION}_${user.uid}`, '1'); setShowVersionNotice(false); }} className="text-white/80 hover:text-white font-black">✕</button>
+            </div>
+            <div className="p-6 space-y-3 text-sm text-gray-700">
+                <div className="font-black text-gray-800">本次更新內容</div>
+                <ul className="list-disc pl-5 space-y-2">
+                    <li>簽約同意書畫面末尾已直接嵌入「請假規則附錄」，員工簽約時可同步查看附件內容。</li>
+                    <li>0901 班別工時調整為 09:00~13:00 / 17:00~21:00，班別時數同步更新為 8 小時。</li>
+                    <li>病假 / 事假申請與主管核准流程，可設定是否使用補休時數扣抵。</li>
+                    <li>公司備忘錄 / 行程支援開始日期與結束日期，可設定活動區間。</li>
+                    <li>系統設定可維護預設與特殊班別，保留舊制 09O 相容資料。</li>
+                </ul>
+                <div className="pt-3">
+                    <button onClick={() => { localStorage.setItem(`version_notice_${CURRENT_VERSION}_${user.uid}`, '1'); setShowVersionNotice(false); }} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
+                </div>
+            </div>
+        </div>
+    </div>
+)}
+
             {isLocked && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
                     <Lock size={16}/> 
