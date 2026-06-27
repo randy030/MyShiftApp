@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "v12.8.4.9-recovery-hotfix (Contract Appendix Edition)"; 
+const CURRENT_VERSION = "v12.8.4.9-recovery-hardened (Contract Appendix Edition)"; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -2495,13 +2495,18 @@ useEffect(() => {
         };
     }, [user, dbData.events, dbData.users]);
 
+    const safeUsers = dbData?.users || {};
+    const safeRequests = Array.isArray(dbData?.requests) ? dbData.requests : [];
+    const safeSignatures = Array.isArray(dbData?.signatures) ? dbData.signatures : [];
+    const safeShiftTypes = Array.isArray(dbData?.shiftTypes) ? dbData.shiftTypes : DEFAULT_SHIFT_TYPES;
+    const safeInventoryItems = Array.isArray(dbData?.inventoryItems) ? dbData.inventoryItems : DEFAULT_INVENTORY_ITEMS;
     const isSuperAdmin = currentUserInfo?.isAdmin === true;
     const canApproveLeaveRequests = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true;
-    const hasSignedContract = dbData.signatures.some(s => s.uid === user?.uid && s.formType === 'contract');
+    const hasSignedContract = safeSignatures.some(s => s.uid === user?.uid && s.formType === 'contract');
     const isLocked = !isSuperAdmin && !hasSignedContract;
 // 🟢 手術二：處理核准的「大腦」邏輯
 // 🟢 請貼在這裡 (handleRequest 的上方)
-const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
+const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
     const handleRequest = async (req, action) => {
         if (!canApproveLeaveRequests) return alert("您沒有審核權限");
         const requestRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id);
@@ -2510,7 +2515,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         const requesterName = req.userName || req.fromName || targetUser?.name || '未知員工';
         const reviewerName = currentUserInfo?.name || '未知審核人';
         const reviewedAt = Date.now();
-        const siblingRequests = getSiblingPendingRequests(dbData.requests, req);
+        const siblingRequests = getSiblingPendingRequests(safeRequests, req);
         const writeReviewLog = async (result) => {
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requestReviewLogs'), {
                 requestId: req.id,
@@ -2604,13 +2609,13 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
     };
     
     // 🔔 計算主管需要看到的通知數量
-    const myNotifications = dbData.requests?.filter(r => 
+    const myNotifications = safeRequests.filter(r => 
         (r.type === 'leave_request' && canApproveLeaveRequests) || 
         (r.type === 'admin_ot_approve' && canApproveLeaveRequests)
     ) || [];
 
     useEffect(() => {
-        const pendingRequests = (dbData.requests || []).filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt);
+        const pendingRequests = safeRequests.filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt);
         if (pendingRequests.length === 0) return;
         const approverLineIds = getApproverLineIds(dbData.users);
         if (approverLineIds.length === 0) return;
@@ -2645,24 +2650,25 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         };
         backfillPendingNotifications();
         return () => { cancelled = true; };
-    }, [dbData.requests, dbData.users]);
+    }, [safeRequests, safeUsers]);
 
     const renderView = () => {
         // 如果還沒簽約，強制跳轉到表單頁
+        if (!currentUserInfo) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">LOADING PROFILE...</div>;
         if (isLocked && view !== 'forms') {
-            return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
+            return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
         }
         switch (view) {
-            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: dbData.shiftTypes || DEFAULT_SHIFT_TYPES }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
+            case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: safeShiftTypes, shiftTypes: safeShiftTypes, users: safeUsers, requests: safeRequests, signatures: safeSignatures, inventoryItems: safeInventoryItems }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
-            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={dbData.inventoryItems} currentUserInfo={currentUserInfo} />;
-            case 'forms': return <FormsView users={Object.values(dbData.users || {})} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={dbData.signatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
-            case 'salary': return <SalaryView users={dbData.users} shifts={dbData.shifts} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
-            case 'payroll': return <PayrollView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
-            case 'attendance': return <AttendanceView users={Object.values(dbData.users || {})} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} />;
+            case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={safeInventoryItems} currentUserInfo={currentUserInfo} />;
+            case 'forms': return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
+            case 'salary': return <SalaryView users={safeUsers} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
+            case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
+            case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} />;
             
             // 🟢 修正：只保留一個 settings，並加上空值保護
-            case 'settings': return <SettingsView users={dbData.users || {}} currentUserInfo={currentUserInfo} inventoryItems={dbData.inventoryItems || []} shiftTypes={dbData.shiftTypes || DEFAULT_SHIFT_TYPES} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            case 'settings': return <SettingsView users={safeUsers} currentUserInfo={currentUserInfo} inventoryItems={safeInventoryItems} shiftTypes={safeShiftTypes} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
             
             case 'inbox': return (
                 <div className="max-w-md mx-auto space-y-4">
@@ -2706,6 +2712,7 @@ const needsSetupCount = Object.values(dbData.users || {}).filter(u => !u.isResig
         }
     };
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
+    if (user && !currentUserInfo) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">LOADING PROFILE...</div>;
     // 🟠 1. TEATOP 台中東山店：最終純淨版大門 (已移除 T 與小字，修復點擊)
     if (!user) return (
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
