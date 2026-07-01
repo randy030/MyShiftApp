@@ -10,12 +10,12 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha4";
+const CURRENT_VERSION = "V14.0.0-alpha5";
 const CURRENT_RELEASE_NOTES = [
-    '排班月曆的休假卡片改為依假別固定顏色，避免所有休假資訊使用同一個顏色造成誤判。',
-    '新增假別顏色說明：自畫假、排休、特休、生理假、病假、事假可一眼辨識。',
-    '保留小型門市的休假優先模式：未標示休假的在職人員預設上班，並持續顯示剩餘上班人數。',
-    '完整保留薪資結算、近 10 個月明細與每版本僅提醒一次的更新通知功能。'
+    '排班月曆改為依人員固定跳色：藍、黃、綠、紫、橘、紅，高對比不易誤看。',
+    '同一位員工不論休自畫假、特休、病假或事假，休假卡片均維持同一個人員顏色。',
+    '新增人員顏色總覽，直接對照姓名與本月休假天數。',
+    '保留小型門市休假優先模式、薪資結算與每版本僅提醒一次的更新通知功能。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -1129,112 +1129,60 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const month = currentDate.getMonth();
     const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
     const { firstDay, days } = getMonthData(year, month);
-    const { shifts, events, users, leaves } = dbData;
+    const { shifts, events, users } = dbData;
 
     const activeUsers = useMemo(() => {
         return Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer);
     }, [users]);
 
-    const sortedUserIds = useMemo(() => Object.keys(users || {}).sort(), [users]);
+    const sortedUserIds = useMemo(() => {
+        return activeUsers
+            .map(user => user.uid)
+            .sort((a, b) => String(users[a]?.name || '').localeCompare(String(users[b]?.name || ''), 'zh-Hant'));
+    }, [activeUsers, users]);
 
-    const getUserColor = (uid) => {
+    // 以「人員」為固定跳色，而不是以假別著色。
+    // 顏色刻意選藍、黃、綠、紫、橘、紅，避免相近色造成誤判。
+    const PERSON_COLOR_STYLES = [
+        { cardClassName: 'bg-blue-50 border-blue-400 text-blue-900', badgeClassName: 'bg-blue-100 border-blue-300 text-blue-800', dotClassName: 'bg-blue-600' },
+        { cardClassName: 'bg-yellow-50 border-yellow-400 text-yellow-900', badgeClassName: 'bg-yellow-100 border-yellow-300 text-yellow-800', dotClassName: 'bg-yellow-500' },
+        { cardClassName: 'bg-green-50 border-green-400 text-green-900', badgeClassName: 'bg-green-100 border-green-300 text-green-800', dotClassName: 'bg-green-600' },
+        { cardClassName: 'bg-purple-50 border-purple-400 text-purple-900', badgeClassName: 'bg-purple-100 border-purple-300 text-purple-800', dotClassName: 'bg-purple-600' },
+        { cardClassName: 'bg-orange-50 border-orange-400 text-orange-900', badgeClassName: 'bg-orange-100 border-orange-300 text-orange-800', dotClassName: 'bg-orange-500' },
+        { cardClassName: 'bg-rose-50 border-rose-400 text-rose-900', badgeClassName: 'bg-rose-100 border-rose-300 text-rose-800', dotClassName: 'bg-rose-600' }
+    ];
+
+    const getPersonColor = (uid) => {
         const idx = sortedUserIds.indexOf(uid);
-        return idx === -1 ? 'bg-gray-100 text-gray-800 border-gray-300' : USER_COLORS[idx % USER_COLORS.length];
+        if (idx < 0) return { cardClassName: 'bg-gray-50 border-gray-300 text-gray-700', badgeClassName: 'bg-gray-100 border-gray-300 text-gray-700', dotClassName: 'bg-gray-500' };
+        return PERSON_COLOR_STYLES[idx % PERSON_COLOR_STYLES.length];
     };
 
+    const getUserColor = (uid) => getPersonColor(uid).cardClassName;
     const getDateString = (day) => `${monthStr}-${String(day).padStart(2, '0')}`;
 
-    // 假別顏色固定，讓月曆不會因為全部使用同一個紅色而誤判假別。
-    // 如日後在系統設定新增假別，未設定顏色的假別會自動使用灰色樣式。
-    const LEAVE_DISPLAY_STYLES = {
-        rostered: {
-            label: '自畫假',
-            className: 'bg-sky-50 border-sky-300 text-sky-800',
-            badgeClassName: 'bg-sky-100 text-sky-700 border-sky-200',
-            dotClassName: 'bg-sky-500'
-        },
-        official: {
-            label: '排休',
-            className: 'bg-slate-100 border-slate-300 text-slate-800',
-            badgeClassName: 'bg-slate-200 text-slate-700 border-slate-300',
-            dotClassName: 'bg-slate-500'
-        },
-        annual: {
-            label: '特休',
-            className: 'bg-violet-50 border-violet-300 text-violet-800',
-            badgeClassName: 'bg-violet-100 text-violet-700 border-violet-200',
-            dotClassName: 'bg-violet-500'
-        },
-        menstrual: {
-            label: '生理假',
-            className: 'bg-pink-50 border-pink-300 text-pink-800',
-            badgeClassName: 'bg-pink-100 text-pink-700 border-pink-200',
-            dotClassName: 'bg-pink-500'
-        },
-        sick: {
-            label: '病假',
-            className: 'bg-amber-50 border-amber-300 text-amber-900',
-            badgeClassName: 'bg-amber-100 text-amber-800 border-amber-200',
-            dotClassName: 'bg-amber-500'
-        },
-        personal: {
-            label: '事假',
-            className: 'bg-rose-50 border-rose-300 text-rose-800',
-            badgeClassName: 'bg-rose-100 text-rose-700 border-rose-200',
-            dotClassName: 'bg-rose-500'
-        },
-        unknown: {
-            label: '休假',
-            className: 'bg-gray-50 border-gray-300 text-gray-700',
-            badgeClassName: 'bg-gray-100 text-gray-600 border-gray-200',
-            dotClassName: 'bg-gray-400'
-        }
-    };
-
-    const getLeaveDisplay = (leaveType) => {
-        const fallback = LEAVE_DISPLAY_STYLES.unknown;
-        const configuredLabel = leaves.find(item => item.id === leaveType)?.label;
-        const style = LEAVE_DISPLAY_STYLES[leaveType] || fallback;
-        return {
-            ...style,
-            label: configuredLabel || style.label || fallback.label
-        };
+    const getLeaveLabel = (leaveType) => {
+        const fallbackLabels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
+        return dbData.leaves.find(item => item.id === leaveType)?.label || fallbackLabels[leaveType] || '休假';
     };
 
     const monthLeaveSummary = useMemo(() => {
         return activeUsers.map(user => {
             let leaveDays = 0;
-            const details = [];
             for (let day = 1; day <= days; day += 1) {
                 const dateStr = getDateString(day);
                 const assignment = (shifts[dateStr]?.assignments || []).find(item => item.uid === user.uid);
-                if (assignment?.type === 'LEAVE') {
-                    leaveDays += 1;
-                    details.push({ date: dateStr, leaveType: assignment.leaveType || 'unknown' });
-                }
+                if (assignment?.type === 'LEAVE') leaveDays += 1;
             }
-            return { ...user, leaveDays, details };
+            return { ...user, leaveDays };
         });
-    }, [activeUsers, days, monthStr, shifts, leaves]);
-
-    const daysWithLeave = useMemo(() => {
-        let count = 0;
-        for (let day = 1; day <= days; day += 1) {
-            const dateStr = getDateString(day);
-            const leaveCount = (shifts[dateStr]?.assignments || []).filter(item => item.type === 'LEAVE').length;
-            if (leaveCount > 0) count += 1;
-        }
-        return count;
-    }, [days, monthStr, shifts]);
+    }, [activeUsers, days, monthStr, shifts]);
 
     const handleSaveEvent = async (eventData) => {
         const isEditing = !!eventData.id;
         const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
-        if (normalizedEvent.id) {
-            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
-        } else {
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
-        }
+        if (normalizedEvent.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
+        else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
         setEditingEvent(null);
         alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。`);
     };
@@ -1250,10 +1198,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             <div className="space-y-4">
                 <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div className="text-center sm:text-left">
-                        <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2">
-                            <Calendar size={20} className="text-indigo-600" /> 小型門市休假班表
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">本店採「休假優先」顯示：未標示休假的在職人員，預設皆為上班。</div>
+                        <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2"><Calendar size={20} className="text-indigo-600" /> 小型門市休假班表</div>
+                        <div className="text-xs text-gray-500 mt-1">休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。</div>
                     </div>
                     <div className="flex items-center justify-center gap-3">
                         <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
@@ -1263,45 +1209,25 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                 </div>
 
                 <div className="bg-white p-4 rounded-xl border shadow-sm">
-                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                        <div>
-                            <div className="font-bold text-gray-800 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> 本月休假總覽</div>
-                            <div className="text-xs text-gray-500 mt-1">本月共有 {daysWithLeave} 天有人休假；點選日期可查看或調整詳細班表。</div>
-                        </div>
-                        <div className="text-xs font-bold text-gray-500">在職人員：{activeUsers.length} 人</div>
-                    </div>
+                    <div className="font-bold text-gray-800 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> 人員顏色與本月休假總覽</div>
+                    <div className="text-xs text-gray-500 mt-1">每位員工固定使用一個高對比顏色，無論休哪一種假都不會變色。</div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                        {monthLeaveSummary.map(user => (
-                            <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${user.leaveDays > 0 ? 'bg-indigo-50 text-indigo-800 border-indigo-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
-                                <span>{user.name}</span>
-                                <span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
-                            </div>
-                        ))}
+                        {monthLeaveSummary.map(user => {
+                            const personColor = getPersonColor(user.uid);
+                            return (
+                                <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${personColor.badgeClassName}`}>
+                                    <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1.5 ${personColor.dotClassName}`} />
+                                    <span>{user.name}</span><span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
+                                </div>
+                            );
+                        })}
                         {activeUsers.length === 0 && <div className="text-sm text-gray-400">尚無在職員工資料</div>}
-                    </div>
-                    <div className="mt-4 pt-3 border-t">
-                        <div className="text-xs font-bold text-gray-600 mb-2">假別顏色說明</div>
-                        <div className="flex flex-wrap gap-2">
-                            {['rostered', 'official', 'annual', 'menstrual', 'sick', 'personal'].map(leaveType => {
-                                const leaveDisplay = getLeaveDisplay(leaveType);
-                                return (
-                                    <span key={leaveType} className={`inline-flex items-center gap-1 border rounded-full px-2 py-1 text-[11px] font-bold ${leaveDisplay.badgeClassName}`}>
-                                        <span className={`w-2 h-2 rounded-full ${leaveDisplay.dotClassName}`} />
-                                        {leaveDisplay.label}
-                                    </span>
-                                );
-                            })}
-                        </div>
                     </div>
                 </div>
 
                 <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
-                    {['日', '一', '二', '三', '四', '五', '六'].map(day => (
-                        <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>
-                    ))}
-                    {Array.from({ length: firstDay }).map((_, index) => (
-                        <div key={`empty-${index}`} className="min-h-[148px] border-b border-r bg-gray-50/30" />
-                    ))}
+                    {['日', '一', '二', '三', '四', '五', '六'].map(day => <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>)}
+                    {Array.from({ length: firstDay }).map((_, index) => <div key={`empty-${index}`} className="min-h-[148px] border-b border-r bg-gray-50/30" />)}
                     {Array.from({ length: days }).map((_, index) => {
                         const day = index + 1;
                         const dateStr = getDateString(day);
@@ -1311,43 +1237,19 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                         const leaveUserIds = new Set(leaveAssignments.map(assignment => assignment.uid));
                         const workingUsers = activeUsers.filter(user => !leaveUserIds.has(user.uid));
                         const isStaffShortage = !data.isClosed && activeUsers.length > 1 && workingUsers.length <= 1;
-
                         return (
                             <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
-                                <div className="flex justify-between items-start mb-1">
-                                    <span className="text-sm font-bold text-gray-700 ml-1">{day}</span>
-                                    <div className="flex gap-1">
-                                        {data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}
-                                        {leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}
-                                    </div>
-                                </div>
-                                {todaysEvents.map(event => (
-                                    <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate">
-                                        <Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}
-                                    </div>
-                                ))}
-                                {data.isClosed ? (
-                                    <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div>
-                                ) : (
+                                <div className="flex justify-between items-start mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
+                                {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
+                                {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div> : (
                                     <div className="space-y-1 flex-1">
-                                        {leaveAssignments.length === 0 ? (
-                                            <div className="text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1.5 font-bold">✓ 全員上班</div>
-                                        ) : (
-                                            leaveAssignments.map((assignment, assignmentIndex) => {
-                                                const user = users[assignment.uid];
-                                                const leaveDisplay = getLeaveDisplay(assignment.leaveType || 'unknown');
-                                                if (!user) return null;
-                                                return (
-                                                    <div key={assignmentIndex} className={`border rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1 ${leaveDisplay.className}`}>
-                                                        <span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${leaveDisplay.dotClassName}`} />{user.name}</span>
-                                                        <span className="shrink-0">{leaveDisplay.label}</span>
-                                                    </div>
-                                                );
-                                            })
-                                        )}
-                                        <div className={`text-[11px] font-bold px-2 py-1 rounded ${isStaffShortage ? 'bg-amber-100 text-amber-800' : 'bg-gray-50 text-gray-600'}`}>
-                                            {isStaffShortage ? `⚠️ 僅剩 ${workingUsers.length} 人上班` : `其餘 ${workingUsers.length} 人上班`}
-                                        </div>
+                                        {leaveAssignments.length === 0 ? <div className="text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1.5 font-bold">✓ 全員上班</div> : leaveAssignments.map((assignment, assignmentIndex) => {
+                                            const user = users[assignment.uid];
+                                            const personColor = getPersonColor(assignment.uid);
+                                            if (!user) return null;
+                                            return <div key={assignmentIndex} className={`border rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1 ${personColor.cardClassName}`}><span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />{user.name}</span><span className="shrink-0">{getLeaveLabel(assignment.leaveType || 'unknown')}</span></div>;
+                                        })}
+                                        <div className={`text-[11px] font-bold px-2 py-1 rounded ${isStaffShortage ? 'bg-amber-100 text-amber-800' : 'bg-gray-50 text-gray-600'}`}>{isStaffShortage ? `⚠️ 僅剩 ${workingUsers.length} 人上班` : `其餘 ${workingUsers.length} 人上班`}</div>
                                     </div>
                                 )}
                             </div>
@@ -1360,7 +1262,6 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         </>
     );
 };
-
 // --- 排班細節 Modal ---
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
