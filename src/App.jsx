@@ -10,13 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha8";
+const CURRENT_VERSION = "V14.0.0-alpha9";
 const CURRENT_RELEASE_NOTES = [
-    '請假送出與待審卡片新增扣薪預估：病假半薪、事假全薪，並以薪資結算基數 ÷ 30 ÷ 8 計算。',
-    '通知中心新增分類、未讀提示與審核資訊；同一筆申請維持單一待審通知，避免重複。',
-    '薪資結算新增未結算 / 已結算待確認 / 已鎖定狀態；鎖定後不可任意修改。',
-    '新增薪資單列印 / 另存 PDF 功能，並保留近 10 個月的薪資明細。',
-    '重要作業會寫入操作紀錄：請假核准或駁回、薪資狀態變更與薪資欄位調整。'
+    '薪資結算頁新增可見的「確認結算 / 鎖定薪資 / 解除鎖定」按鍵與鎖定資訊。',
+    '薪資鎖定後，所有薪資輸入欄位會直接停用並以灰色顯示，避免誤改。',
+    '新增特休明細：逐筆日期、時數、備註與扣薪 $0；同時顯示本月及年度已用 / 剩餘特休時數。',
+    '近 10 個月薪資明細新增特休時數欄位，月底核對更完整。',
+    '薪資單列印內容加入特休使用時數與特休不扣薪說明。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -2057,7 +2057,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
     const printPayrollSlip = (user, summary) => {
         const printWindow = window.open('', '_blank', 'width=800,height=900');
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
-        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>薪資結算基數</td><td>${formatMoney(summary.settlementBase)}</td></tr><tr><td>油資 / 津貼 / 獎金</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>預估實領</td><td>${formatMoney(summary.netPay)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>薪資結算基數</td><td>${formatMoney(summary.settlementBase)}</td></tr><tr><td>油資 / 津貼 / 獎金</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>預估實領</td><td>${formatMoney(summary.netPay)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
         printWindow.document.close();
     };
 
@@ -2075,8 +2075,10 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         const summary = {
             sickHours: 0,
             personalHours: 0,
+            annualHours: 0,
             sickDetails: [],
-            personalDetails: []
+            personalDetails: [],
+            annualDetails: []
         };
 
         Object.keys(shifts || {}).forEach(dateStr => {
@@ -2108,12 +2110,32 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                 summary.personalHours += leaveHours;
                 summary.personalDetails.push(detail);
             }
+
+            if (assignment.leaveType === 'annual') {
+                summary.annualHours += leaveHours;
+                summary.annualDetails.push(detail);
+            }
         });
 
         summary.sickDetails.sort((a, b) => a.date.localeCompare(b.date));
         summary.personalDetails.sort((a, b) => a.date.localeCompare(b.date));
+        summary.annualDetails.sort((a, b) => a.date.localeCompare(b.date));
 
         return summary;
+    };
+
+    const getAnnualLeaveYearStats = (uid, yearStr) => {
+        let usedHours = 0;
+        Object.keys(shifts || {}).forEach(dateStr => {
+            if (!dateStr.startsWith(yearStr)) return;
+            const dayData = shifts[dateStr];
+            if (dayData?.isClosed) return;
+            const assignment = Array.isArray(dayData?.assignments)
+                ? dayData.assignments.find(item => item.uid === uid && item.type === 'LEAVE' && item.leaveType === 'annual')
+                : null;
+            if (assignment) usedHours += resolveLeaveHours(assignment, shiftTypes);
+        });
+        return usedHours;
     };
 
     const getSettlementBase = (user, record = {}) => {
@@ -2124,6 +2146,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         const settlementBase = getSettlementBase(user, record);
         const hourlyRate = settlementBase > 0 ? settlementBase / 30 / 8 : 0;
         const leaveSummary = getLeaveSummary(user.uid, monthStr);
+        const annualUsedYearHours = getAnnualLeaveYearStats(user.uid, String(monthStr || targetMonth).slice(0, 4));
+        const annualEntitledHours = getAnnualLeaveHours(user?.startDate || user?.hireDate || user?.contractStart || '');
+        const annualRemainingHours = Math.max(0, annualEntitledHours - annualUsedYearHours);
         const sickDeduction = leaveSummary.sickHours * hourlyRate * 0.5;
         const personalDeduction = leaveSummary.personalHours * hourlyRate;
         const gasRecords = gasReceipts?.[monthStr]?.[user.uid] || [];
@@ -2143,6 +2168,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             settlementBase,
             hourlyRate,
             leaveSummary,
+            annualUsedYearHours,
+            annualEntitledHours,
+            annualRemainingHours,
             sickDeduction,
             personalDeduction,
             gasTotal,
@@ -2277,11 +2305,12 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                             </div>
                         </div>
 
+                        {payrollStatus === 'locked' && <div className="mx-4 mt-4 bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-xs font-black text-gray-600">🔒 已鎖定：本月薪資欄位已停止編輯。管理員可在頁面上方按「解除鎖定」後再調整。</div>}
                         <div className="p-4 grid xl:grid-cols-3 gap-4">
                             <div className="space-y-3">
                                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
                                     <label className="block text-xs font-black text-indigo-800 mb-1">薪資結算基數</label>
-                                    <input type="number" min="0" placeholder="例如：37500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.settlementBase ?? user.salaryAmount ?? record.base ?? ''} onChange={event => updatePayroll(user.uid, 'settlementBase', event.target.value)} />
+                                    <input type="number" min="0" placeholder="例如：37500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.settlementBase ?? user.salaryAmount ?? record.base ?? ''} onChange={event => updatePayroll(user.uid, 'settlementBase', event.target.value)} disabled={payrollStatus === 'locked'} />
                                     <div className="text-[11px] text-indigo-600 mt-2">每小時薪資：{formatMoney(summary.hourlyRate)} / hr</div>
                                 </div>
 
@@ -2294,7 +2323,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                     </div>
                                     <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
                                         <label className="block text-xs font-black text-gray-700 mb-1">補助 / 津貼</label>
-                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={event => updatePayroll(user.uid, 'subsidy', event.target.value)} />
+                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={event => updatePayroll(user.uid, 'subsidy', event.target.value)} disabled={payrollStatus === 'locked'} />
                                         <div className="text-[10px] text-gray-500 mt-2">計入：{formatMoney(summary.subsidy)}</div>
                                     </div>
                                 </div>
@@ -2321,17 +2350,22 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                             <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.personalHours} hr × {formatMoney(summary.hourlyRate)} × 100%</div>
                                             {summary.leaveSummary.personalDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.personalDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
                                         </div>
+                                        <div className="bg-emerald-50 rounded-lg p-2 border border-emerald-100">
+                                            <div className="flex justify-between text-xs font-bold text-emerald-800"><span>特休：{summary.leaveSummary.annualHours} hr</span><span className="text-emerald-700">扣薪 $0</span></div>
+                                            <div className="text-[10px] text-emerald-700 mt-1">本月特休 {summary.leaveSummary.annualHours} hr｜年度已用 {summary.annualUsedYearHours} hr｜剩餘 {summary.annualRemainingHours} hr</div>
+                                            {summary.leaveSummary.annualDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.annualDetails.map(detail => <div key={`annual_${detail.date}_${detail.hours}`} className="text-[10px] text-gray-600 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr / 不扣薪</span></div>)}</div>}
+                                        </div>
                                     </div>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-2">
                                     <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
                                         <label className="block text-xs font-black text-amber-800 mb-1">其他加項</label>
-                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-amber-500" value={record.manualAdjustment || ''} onChange={event => updatePayroll(user.uid, 'manualAdjustment', event.target.value)} />
+                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-amber-500" value={record.manualAdjustment || ''} onChange={event => updatePayroll(user.uid, 'manualAdjustment', event.target.value)} disabled={payrollStatus === 'locked'} />
                                     </div>
                                     <div className="bg-orange-50 border border-orange-100 rounded-xl p-3">
                                         <label className="block text-xs font-black text-orange-800 mb-1">其他扣款</label>
-                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.manualDeduction || ''} onChange={event => updatePayroll(user.uid, 'manualDeduction', event.target.value)} />
+                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.manualDeduction || ''} onChange={event => updatePayroll(user.uid, 'manualDeduction', event.target.value)} disabled={payrollStatus === 'locked'} />
                                     </div>
                                 </div>
                             </div>
@@ -2341,9 +2375,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                     <div className="p-3 font-black text-sm text-gray-700 border-b">獎金與結算摘要</div>
                                     <div className="p-3 space-y-2 text-xs">
                                         <div className="grid grid-cols-3 gap-2">
-                                            <label className="bg-pink-50 border border-pink-100 rounded-lg p-2"><span className="block font-bold text-pink-700 mb-1">生日禮金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_bday || ''} onChange={event => updatePayroll(user.uid, 'bonus_bday', event.target.value)} /></label>
-                                            <label className="bg-purple-50 border border-purple-100 rounded-lg p-2"><span className="block font-bold text-purple-700 mb-1">三節獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_festival || ''} onChange={event => updatePayroll(user.uid, 'bonus_festival', event.target.value)} /></label>
-                                            <label className="bg-yellow-50 border border-yellow-100 rounded-lg p-2"><span className="block font-bold text-yellow-700 mb-1">年終獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_year || ''} onChange={event => updatePayroll(user.uid, 'bonus_year', event.target.value)} /></label>
+                                            <label className="bg-pink-50 border border-pink-100 rounded-lg p-2"><span className="block font-bold text-pink-700 mb-1">生日禮金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_bday || ''} onChange={event => updatePayroll(user.uid, 'bonus_bday', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+                                            <label className="bg-purple-50 border border-purple-100 rounded-lg p-2"><span className="block font-bold text-purple-700 mb-1">三節獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_festival || ''} onChange={event => updatePayroll(user.uid, 'bonus_festival', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+                                            <label className="bg-yellow-50 border border-yellow-100 rounded-lg p-2"><span className="block font-bold text-yellow-700 mb-1">年終獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_year || ''} onChange={event => updatePayroll(user.uid, 'bonus_year', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
                                         </div>
                                         <div className="border-t pt-2 space-y-1">
                                             <div className="flex justify-between"><span className="text-gray-500">薪資結算基數</span><span className="font-bold">{formatMoney(summary.settlementBase)}</span></div>
@@ -2354,7 +2388,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                     </div>
                                 </div>
 
-                                <label className="block text-xs font-bold text-gray-600">結算備註<textarea rows="3" placeholder="例如：本月獎勵、扣款原因、匯款備註..." className="mt-1 w-full border rounded-lg px-2 py-2 text-sm font-normal focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={event => updatePayroll(user.uid, 'note', event.target.value)} /></label>
+                                <label className="block text-xs font-bold text-gray-600">結算備註<textarea rows="3" placeholder="例如：本月獎勵、扣款原因、匯款備註..." className="mt-1 w-full border rounded-lg px-2 py-2 text-sm font-normal focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={event => updatePayroll(user.uid, 'note', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
                             </div>
                         </div>
 
@@ -2363,12 +2397,12 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                             {isHistoryExpanded && (
                                 <div className="mt-3 overflow-x-auto">
                                     <table className="w-full min-w-[760px] text-xs text-left bg-white border rounded-lg overflow-hidden">
-                                        <thead className="bg-indigo-50 text-indigo-800"><tr><th className="p-2">月份</th><th className="p-2">結算基數</th><th className="p-2">病假</th><th className="p-2">事假</th><th className="p-2">請假扣薪</th><th className="p-2">加項</th><th className="p-2">其他扣款</th><th className="p-2">預估實領</th></tr></thead>
+                                        <thead className="bg-indigo-50 text-indigo-800"><tr><th className="p-2">月份</th><th className="p-2">結算基數</th><th className="p-2">病假</th><th className="p-2">事假</th><th className="p-2">特休</th><th className="p-2">請假扣薪</th><th className="p-2">加項</th><th className="p-2">其他扣款</th><th className="p-2">預估實領</th></tr></thead>
                                         <tbody>{recentMonthOptions.map(monthStr => {
                                             const historyRecord = payrollHistory?.[monthStr]?.[user.uid] || {};
                                             const historySummary = getPayrollSummary(user, historyRecord, monthStr);
                                             const hasRecord = Object.keys(historyRecord).length > 0 || historySummary.leaveSummary.sickHours > 0 || historySummary.leaveSummary.personalHours > 0;
-                                            return <tr key={monthStr} className={`border-t ${monthStr === targetMonth ? 'bg-yellow-50' : ''}`}><td className="p-2 font-bold">{monthStr}{monthStr === targetMonth ? '（本月）' : ''}</td><td className="p-2">{hasRecord ? formatMoney(historySummary.settlementBase) : '—'}</td><td className="p-2">{historySummary.leaveSummary.sickHours} hr</td><td className="p-2">{historySummary.leaveSummary.personalHours} hr</td><td className="p-2 text-red-700">-{formatMoney(historySummary.sickDeduction + historySummary.personalDeduction)}</td><td className="p-2 text-green-700">+{formatMoney(historySummary.totalAdditions)}</td><td className="p-2 text-red-700">-{formatMoney(historySummary.manualDeduction)}</td><td className="p-2 font-black text-indigo-700">{hasRecord ? formatMoney(historySummary.netPay) : '—'}</td></tr>;
+                                            return <tr key={monthStr} className={`border-t ${monthStr === targetMonth ? 'bg-yellow-50' : ''}`}><td className="p-2 font-bold">{monthStr}{monthStr === targetMonth ? '（本月）' : ''}</td><td className="p-2">{hasRecord ? formatMoney(historySummary.settlementBase) : '—'}</td><td className="p-2">{historySummary.leaveSummary.sickHours} hr</td><td className="p-2">{historySummary.leaveSummary.personalHours} hr</td><td className="p-2 text-emerald-700">{historySummary.leaveSummary.annualHours} hr</td><td className="p-2 text-red-700">-{formatMoney(historySummary.sickDeduction + historySummary.personalDeduction)}</td><td className="p-2 text-green-700">+{formatMoney(historySummary.totalAdditions)}</td><td className="p-2 text-red-700">-{formatMoney(historySummary.manualDeduction)}</td><td className="p-2 font-black text-indigo-700">{hasRecord ? formatMoney(historySummary.netPay) : '—'}</td></tr>;
                                         })}</tbody>
                                     </table>
                                 </div>
