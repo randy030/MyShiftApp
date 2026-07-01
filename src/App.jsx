@@ -10,12 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha5";
+const CURRENT_VERSION = "V14.0.0-alpha6";
 const CURRENT_RELEASE_NOTES = [
-    '排班月曆改為依人員固定跳色：藍、黃、綠、紫、橘、紅，高對比不易誤看。',
-    '同一位員工不論休自畫假、特休、病假或事假，休假卡片均維持同一個人員顏色。',
-    '新增人員顏色總覽，直接對照姓名與本月休假天數。',
-    '保留小型門市休假優先模式、薪資結算與每版本僅提醒一次的更新通知功能。'
+    '恢復「自動填補當月空班」按鍵，僅超級管理員可操作。',
+    '六、日空白班別自動填入 09O；週一至週五一般員工填入 09A。',
+    '主管、店長不分平日或假日，空白班別一律自動填入 09O。',
+    '只補空白班別，既有班別、休假與店休日完全不覆蓋。',
+    '保留人員固定跳色的休假月曆、薪資結算與版本通知功能。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -1125,6 +1126,7 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes = DE
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
     const [editingEvent, setEditingEvent] = useState(null);
+    const [isAutoFilling, setIsAutoFilling] = useState(false);
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
@@ -1178,6 +1180,86 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         });
     }, [activeUsers, days, monthStr, shifts]);
 
+    const getDefaultShiftCode = (user, dateObj) => {
+        const dayOfWeek = dateObj.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const isManagement = user?.role === 'boss' || user?.role === 'supervisor' || user?.isAdmin === true || user?.isManager === true;
+
+        // 六、日：所有在職人員補 09O。
+        // 週一至週五：主管、店長補 09O；其餘員工補 09A。
+        if (isWeekend || isManagement) return '09O';
+        return '09A';
+    };
+
+    const handleAutoFillMonthlyShifts = async () => {
+        if (isReadOnly || !isSuperAdmin) return;
+        if (activeUsers.length === 0) return alert('目前沒有可填補班別的在職員工。');
+
+        const confirmed = window.confirm(
+            `確定要自動填補 ${year} 年 ${month + 1} 月所有「空白班別」嗎？\n\n` +
+            '• 六、日：自動填入 09O\n' +
+            '• 週一至週五：一般員工填入 09A\n' +
+            '• 主管、店長：不分平假日皆填入 09O\n\n' +
+            '系統只會補空白班別，不會覆蓋既有班別、休假或店休。'
+        );
+        if (!confirmed) return;
+
+        setIsAutoFilling(true);
+        let filledCount = 0;
+        let affectedDateCount = 0;
+
+        try {
+            for (let day = 1; day <= days; day += 1) {
+                const dateStr = getDateString(day);
+                const dayData = shifts[dateStr] || { assignments: [] };
+                if (dayData.isClosed) continue;
+
+                const nextAssignments = Array.isArray(dayData.assignments) ? dayData.assignments.map(item => ({ ...item })) : [];
+                const dateObj = new Date(year, month, day);
+                let changed = false;
+
+                activeUsers.forEach(user => {
+                    const existingAssignment = nextAssignments.find(item => item.uid === user.uid);
+
+                    // 休假資料完全保留；有班別者亦不修改。
+                    if (existingAssignment?.type === 'LEAVE') return;
+                    if (existingAssignment?.shiftCode) return;
+
+                    const shiftCode = getDefaultShiftCode(user, dateObj);
+
+                    if (existingAssignment) {
+                        existingAssignment.type = 'WORK';
+                        existingAssignment.shiftCode = shiftCode;
+                    } else {
+                        nextAssignments.push({ uid: user.uid, type: 'WORK', shiftCode });
+                    }
+
+                    filledCount += 1;
+                    changed = true;
+                });
+
+                if (changed) {
+                    affectedDateCount += 1;
+                    await setDoc(
+                        doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr),
+                        { ...dayData, assignments: nextAssignments },
+                        { merge: true }
+                    );
+                }
+            }
+
+            alert(filledCount > 0
+                ? `✅ 自動填補完成！已補上 ${filledCount} 筆空白班別，共影響 ${affectedDateCount} 天。`
+                : '✅ 本月沒有需要填補的空白班別。'
+            );
+        } catch (error) {
+            console.error('自動填補班別失敗', error);
+            alert('❌ 自動填補失敗，請確認網路與 Firebase 權限後再試一次。');
+        } finally {
+            setIsAutoFilling(false);
+        }
+    };
+
     const handleSaveEvent = async (eventData) => {
         const isEditing = !!eventData.id;
         const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
@@ -1196,16 +1278,35 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     return (
         <>
             <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="text-center sm:text-left">
-                        <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2"><Calendar size={20} className="text-indigo-600" /> 小型門市休假班表</div>
-                        <div className="text-xs text-gray-500 mt-1">休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。</div>
+                <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col gap-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="text-center sm:text-left">
+                            <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2"><Calendar size={20} className="text-indigo-600" /> 小型門市休假班表</div>
+                            <div className="text-xs text-gray-500 mt-1">休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。</div>
+                        </div>
+                        <div className="flex items-center justify-center gap-3">
+                            <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
+                            <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month + 1}月</div>
+                            <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
+                        </div>
                     </div>
-                    <div className="flex items-center justify-center gap-3">
-                        <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
-                        <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month + 1}月</div>
-                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
-                    </div>
+
+                    {!isReadOnly && isSuperAdmin && (
+                        <div className="flex justify-center sm:justify-end border-t pt-3">
+                            <button
+                                onClick={handleAutoFillMonthlyShifts}
+                                disabled={isAutoFilling}
+                                className={`text-sm border px-4 py-2 rounded-lg items-center gap-2 font-bold shadow-sm transition-colors flex ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+                            >
+                                <Clock size={16} />
+                                {isAutoFilling ? '正在填補班別...' : '自動填補當月空班'}
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 text-xs text-indigo-900">
+                    <span className="font-bold">自動填補規則：</span> 六、日填入 <span className="font-bold">09O</span>；週一至週五一般員工填入 <span className="font-bold">09A</span>；主管、店長不分平假日填入 <span className="font-bold">09O</span>。只填補空白班別，休假與已排班別不會變動。
                 </div>
 
                 <div className="bg-white p-4 rounded-xl border shadow-sm">
