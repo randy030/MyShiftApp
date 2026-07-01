@@ -10,12 +10,12 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha2";
+const CURRENT_VERSION = "V14.0.0-alpha3";
 const CURRENT_RELEASE_NOTES = [
-    '薪資結算中心：病假扣半薪、事假扣全薪，並自動列出每筆請假扣薪明細。',
-    '薪資結算基數可由每位員工設定；時薪固定以「結算基數 ÷ 30 ÷ 8」計算。',
-    '薪資頁面新增員工勾選篩選與近 10 個月薪資明細。',
-    '版本更新提醒改為每位使用者每個版本僅顯示一次。'
+    '排班頁改回小型門市的「休假優先」顯示方式，未標示休假的在職人員預設為上班。',
+    '月曆格子優先顯示休假姓名與假別，取消大型門市用的員工勾選、批次套班與複製班表工具。',
+    '新增本月休假總覽與人力提醒：同日多人休假時，會顯示剩餘上班人數。',
+    '完整保留薪資結算、近 10 個月明細與每版本僅提醒一次的更新通知功能。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -1125,218 +1125,165 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes = DE
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
     const [editingEvent, setEditingEvent] = useState(null);
-    const [employeeKeyword, setEmployeeKeyword] = useState('');
-    const [selectedUserIds, setSelectedUserIds] = useState([]);
-    const [batchShiftCode, setBatchShiftCode] = useState('');
-    const [batchStartDate, setBatchStartDate] = useState('');
-    const [batchEndDate, setBatchEndDate] = useState('');
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
     const { firstDay, days } = getMonthData(year, month);
-    const { shifts, events, users, leaves, shiftsDef } = dbData;
+    const { shifts, events, users, leaves } = dbData;
 
-    const activeUsers = useMemo(() => Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer), [users]);
+    const activeUsers = useMemo(() => {
+        return Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer);
+    }, [users]);
+
     const sortedUserIds = useMemo(() => Object.keys(users || {}).sort(), [users]);
-    const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
 
-    const filteredUsers = useMemo(() => {
-        const keyword = employeeKeyword.trim().toLowerCase();
-        if (!keyword) return activeUsers;
-        return activeUsers.filter(user => String(user.name || '').toLowerCase().includes(keyword));
-    }, [activeUsers, employeeKeyword]);
-
-    useEffect(() => {
-        setSelectedUserIds(previous => previous.filter(uid => activeUsers.some(user => user.uid === uid)));
-    }, [activeUsers]);
-
-    const visibleUserIds = selectedUserIds.length > 0 ? selectedUserIds : activeUsers.map(user => user.uid);
-    const visibleUserSet = new Set(visibleUserIds);
+    const getUserColor = (uid) => {
+        const idx = sortedUserIds.indexOf(uid);
+        return idx === -1 ? 'bg-gray-100 text-gray-800 border-gray-300' : USER_COLORS[idx % USER_COLORS.length];
+    };
 
     const getDateString = (day) => `${monthStr}-${String(day).padStart(2, '0')}`;
 
-    const getMonthWarnings = useMemo(() => {
-        const warnings = [];
-        activeUsers.forEach(user => {
-            let consecutiveWorkDays = 0;
-            let maxConsecutiveWorkDays = 0;
-            let monthlyHours = 0;
+    const getLeaveLabel = (leaveType) => {
+        return leaves.find(item => item.id === leaveType)?.label || '休假';
+    };
+
+    const monthLeaveSummary = useMemo(() => {
+        return activeUsers.map(user => {
+            let leaveDays = 0;
+            const details = [];
             for (let day = 1; day <= days; day += 1) {
                 const dateStr = getDateString(day);
                 const assignment = (shifts[dateStr]?.assignments || []).find(item => item.uid === user.uid);
-                if (assignment?.type === 'WORK' && assignment?.shiftCode) {
-                    consecutiveWorkDays += 1;
-                    maxConsecutiveWorkDays = Math.max(maxConsecutiveWorkDays, consecutiveWorkDays);
-                    monthlyHours += calculateShiftHours(assignment.shiftCode, shiftsDef || DEFAULT_SHIFT_TYPES);
-                } else {
-                    consecutiveWorkDays = 0;
+                if (assignment?.type === 'LEAVE') {
+                    leaveDays += 1;
+                    details.push({ date: dateStr, leaveType: assignment.leaveType || 'unknown' });
                 }
             }
-            if (maxConsecutiveWorkDays > 6) warnings.push({ uid: user.uid, type: 'consecutive', message: `${user.name} 連續排班 ${maxConsecutiveWorkDays} 天` });
-            if (monthlyHours > 240) warnings.push({ uid: user.uid, type: 'hours', message: `${user.name} 本月排班 ${monthlyHours} 小時` });
+            return { ...user, leaveDays, details };
         });
-        return warnings;
-    }, [activeUsers, days, monthStr, shifts, shiftsDef]);
+    }, [activeUsers, days, monthStr, shifts, leaves]);
+
+    const daysWithLeave = useMemo(() => {
+        let count = 0;
+        for (let day = 1; day <= days; day += 1) {
+            const dateStr = getDateString(day);
+            const leaveCount = (shifts[dateStr]?.assignments || []).filter(item => item.type === 'LEAVE').length;
+            if (leaveCount > 0) count += 1;
+        }
+        return count;
+    }, [days, monthStr, shifts]);
 
     const handleSaveEvent = async (eventData) => {
         const isEditing = !!eventData.id;
         const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
-        if (normalizedEvent.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
-        else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
+        if (normalizedEvent.id) {
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
+        } else {
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
+        }
         setEditingEvent(null);
         alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。`);
     };
 
     const handleDeleteEvent = async (eventId) => {
-        if (window.confirm('確定要刪除這個行程嗎？')) {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId));
-            setEditingEvent(null);
-        }
-    };
-
-    const handleAutoSchedule = async () => {
-        if (!isSuperAdmin) return;
-        if (!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month + 1}月」尚未排班的員工補上預設班別。\n\n確定執行嗎？`)) return;
-        for (let day = 1; day <= days; day += 1) {
-            const dateStr = getDateString(day);
-            const dayData = shifts[dateStr] || { assignments: [] };
-            if (dayData.isClosed) continue;
-            const assignments = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            const isWeekend = new Date(year, month, day).getDay() === 0 || new Date(year, month, day).getDay() === 6;
-            let changed = false;
-            activeUsers.forEach(user => {
-                const existing = assignments.find(item => item.uid === user.uid);
-                if (!existing || (!existing.shiftCode && existing.type !== 'LEAVE')) {
-                    const shiftCode = isWeekend ? '09O' : ((user.isAdmin || user.isManager) ? '09O' : '09A');
-                    if (existing) {
-                        existing.type = 'WORK';
-                        existing.shiftCode = shiftCode;
-                    } else {
-                        assignments.push({ uid: user.uid, type: 'WORK', shiftCode });
-                    }
-                    changed = true;
-                }
-            });
-            if (changed) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, assignments }, { merge: true });
-        }
-        alert('✅ 自動填補完成。');
-    };
-
-    const handleCopyPreviousMonth = async () => {
-        if (!isSuperAdmin) return;
-        const previousDate = new Date(year, month - 1, 1);
-        const previousYear = previousDate.getFullYear();
-        const previousMonth = previousDate.getMonth();
-        if (!window.confirm(`📋 確定複製 ${previousYear}年${previousMonth + 1}月的班表到本月嗎？\n\n只會複製目前尚未有排班的日期，既有資料不會被覆蓋。`)) return;
-        const sourceDays = new Date(previousYear, previousMonth + 1, 0).getDate();
-        let copiedCount = 0;
-        for (let day = 1; day <= Math.min(days, sourceDays); day += 1) {
-            const sourceDate = `${previousYear}-${String(previousMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const targetDate = getDateString(day);
-            const sourceData = shifts[sourceDate];
-            const targetData = shifts[targetDate];
-            if (!sourceData || targetData?.isClosed || (targetData?.assignments || []).length > 0) continue;
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', targetDate), {
-                ...sourceData,
-                copiedFrom: sourceDate,
-                copiedAt: Date.now()
-            }, { merge: true });
-            copiedCount += 1;
-        }
-        alert(copiedCount > 0 ? `✅ 已複製 ${copiedCount} 天班表。` : '⚠️ 沒有可複製的空白日期。');
-    };
-
-    const handleBatchSchedule = async () => {
-        if (!isSuperAdmin) return;
-        if (selectedUserIds.length === 0) return alert('請先勾選要批次排班的員工。');
-        if (!batchShiftCode || !batchStartDate || !batchEndDate) return alert('請完整選擇班別與日期區間。');
-        if (batchEndDate < batchStartDate) return alert('結束日期不可早於開始日期。');
-        if (!window.confirm(`確定將 ${selectedUserIds.length} 位員工於 ${batchStartDate} 至 ${batchEndDate} 排為 ${batchShiftCode}？\n\n請假、店休日不會覆蓋。`)) return;
-        const cursor = new Date(`${batchStartDate}T00:00:00`);
-        const end = new Date(`${batchEndDate}T00:00:00`);
-        let updated = 0;
-        while (cursor <= end) {
-            const dateStr = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
-            const dayData = shifts[dateStr] || { assignments: [] };
-            if (!dayData.isClosed) {
-                const assignments = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-                selectedUserIds.forEach(uid => {
-                    const existing = assignments.find(item => item.uid === uid);
-                    if (existing?.type === 'LEAVE') return;
-                    if (existing) {
-                        existing.type = 'WORK';
-                        existing.shiftCode = batchShiftCode;
-                    } else {
-                        assignments.push({ uid, type: 'WORK', shiftCode: batchShiftCode });
-                    }
-                    updated += 1;
-                });
-                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, assignments }, { merge: true });
-            }
-            cursor.setDate(cursor.getDate() + 1);
-        }
-        alert(`✅ 已完成 ${updated} 筆批次排班。`);
+        if (!window.confirm('確定要刪除這個行程嗎？')) return;
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId));
+        setEditingEvent(null);
     };
 
     return (
         <>
             <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border shadow-sm grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] items-center gap-3">
-                    <div className="flex flex-wrap gap-2 justify-center lg:justify-start">
-                        {!isReadOnly && isSuperAdmin && <button onClick={handleCopyPreviousMonth} className="text-xs bg-white text-indigo-600 border border-indigo-200 px-3 py-2 rounded-lg font-bold hover:bg-indigo-50">📋 複製上月空白班表</button>}
-                        {!isReadOnly && isSuperAdmin && <button onClick={handleAutoSchedule} className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-3 py-2 rounded-lg font-bold hover:bg-indigo-100">🤖 自動填補空班</button>}
+                <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="text-center sm:text-left">
+                        <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2">
+                            <Calendar size={20} className="text-indigo-600" /> 小型門市休假班表
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">本店採「休假優先」顯示：未標示休假的在職人員，預設皆為上班。</div>
                     </div>
                     <div className="flex items-center justify-center gap-3">
                         <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
                         <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month + 1}月</div>
                         <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
                     </div>
-                    <div className="text-center lg:text-right text-xs font-bold text-gray-500">顯示 {visibleUserIds.length} / {activeUsers.length} 位員工</div>
                 </div>
 
-                <div className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
-                    <div className="flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
+                <div className="bg-white p-4 rounded-xl border shadow-sm">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                         <div>
-                            <div className="font-bold text-gray-800 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> 排班顯示人員與批次工具</div>
-                            <div className="text-xs text-gray-500 mt-1">未勾選時預設顯示全部；勾選後月曆僅顯示選定員工。</div>
+                            <div className="font-bold text-gray-800 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> 本月休假總覽</div>
+                            <div className="text-xs text-gray-500 mt-1">本月共有 {daysWithLeave} 天有人休假；點選日期可查看或調整詳細班表。</div>
                         </div>
-                        <input value={employeeKeyword} onChange={event => setEmployeeKeyword(event.target.value)} placeholder="搜尋員工姓名" className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+                        <div className="text-xs font-bold text-gray-500">在職人員：{activeUsers.length} 人</div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                        <label className="text-xs font-bold border rounded-lg px-3 py-2 bg-gray-50 cursor-pointer"><input type="checkbox" checked={filteredUsers.length > 0 && filteredUsers.every(user => selectedUserIds.includes(user.uid))} onChange={event => setSelectedUserIds(event.target.checked ? [...new Set([...selectedUserIds, ...filteredUsers.map(user => user.uid)])] : selectedUserIds.filter(uid => !filteredUsers.some(user => user.uid === uid)))} className="mr-1 accent-indigo-600" />全選目前搜尋結果</label>
-                        {filteredUsers.map(user => <label key={user.uid} className={`text-xs font-bold border rounded-lg px-3 py-2 cursor-pointer ${selectedUserIds.includes(user.uid) ? 'bg-indigo-50 text-indigo-700 border-indigo-300' : 'bg-white text-gray-600'}`}><input type="checkbox" checked={selectedUserIds.includes(user.uid)} onChange={event => setSelectedUserIds(event.target.checked ? [...selectedUserIds, user.uid] : selectedUserIds.filter(uid => uid !== user.uid))} className="mr-1 accent-indigo-600" />{user.name}</label>)}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        {monthLeaveSummary.map(user => (
+                            <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${user.leaveDays > 0 ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
+                                <span>{user.name}</span>
+                                <span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
+                            </div>
+                        ))}
+                        {activeUsers.length === 0 && <div className="text-sm text-gray-400">尚無在職員工資料</div>}
                     </div>
-                    {!isReadOnly && isSuperAdmin && <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 pt-3 border-t">
-                        <select value={batchShiftCode} onChange={event => setBatchShiftCode(event.target.value)} className="border rounded-lg px-3 py-2 text-sm"><option value="">批次班別</option>{(shiftsDef || []).map(shift => <option key={shift.id} value={shift.id}>{shift.label}</option>)}</select>
-                        <input type="date" value={batchStartDate} onChange={event => setBatchStartDate(event.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
-                        <input type="date" value={batchEndDate} onChange={event => setBatchEndDate(event.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
-                        <button onClick={handleBatchSchedule} className="bg-indigo-600 text-white rounded-lg font-bold text-sm px-3 py-2 hover:bg-indigo-700">批次套用班別</button>
-                    </div>}
                 </div>
-
-                {getMonthWarnings.length > 0 && <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl shadow-sm"><div className="font-bold text-amber-800 flex items-center gap-2"><AlertTriangle size={18} /> 排班提醒</div><div className="mt-2 flex flex-wrap gap-2">{getMonthWarnings.map((warning, index) => <span key={`${warning.uid}-${warning.type}-${index}`} className="text-xs font-bold bg-white border border-amber-200 text-amber-800 px-2 py-1 rounded">⚠️ {warning.message}</span>)}</div></div>}
 
                 <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
-                    {['日', '一', '二', '三', '四', '五', '六'].map(day => <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>)}
-                    {Array.from({ length: firstDay }).map((_, index) => <div key={`empty-${index}`} className="min-h-[150px] border-b border-r bg-gray-50/30" />)}
+                    {['日', '一', '二', '三', '四', '五', '六'].map(day => (
+                        <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>
+                    ))}
+                    {Array.from({ length: firstDay }).map((_, index) => (
+                        <div key={`empty-${index}`} className="min-h-[148px] border-b border-r bg-gray-50/30" />
+                    ))}
                     {Array.from({ length: days }).map((_, index) => {
                         const day = index + 1;
                         const dateStr = getDateString(day);
                         const data = shifts[dateStr] || {};
                         const todaysEvents = (events || []).filter(event => checkEventOnDate(event, dateStr));
-                        const assignments = (data.assignments || []).filter(assignment => visibleUserSet.has(assignment.uid));
-                        return <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
-                            <div className="flex justify-between mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{day}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}</div>
-                            {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
-                            {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div> : <div className="space-y-1 overflow-y-auto flex-1">{assignments.map((assignment, assignmentIndex) => {
-                                const user = users[assignment.uid];
-                                if (!user) return null;
-                                const shortName = user.name?.length > 2 ? user.name.slice(-2) : user.name;
-                                const color = getUserColor(assignment.uid);
-                                if (assignment.type === 'LEAVE') return <div key={assignmentIndex} className={`p-1 rounded border ${color} bg-opacity-30 text-[11px] font-bold`}><span>{shortName}</span><span className="float-right">{leaves.find(item => item.id === assignment.leaveType)?.label || '假'}</span></div>;
-                                return <div key={assignmentIndex} className={`p-1 rounded border ${color} bg-opacity-30 text-[11px] font-bold flex justify-between`}><span>{shortName}</span><span>{assignment.shiftCode || '未排'}</span></div>;
-                            })}</div>}
-                        </div>;
+                        const leaveAssignments = (data.assignments || []).filter(assignment => assignment.type === 'LEAVE');
+                        const leaveUserIds = new Set(leaveAssignments.map(assignment => assignment.uid));
+                        const workingUsers = activeUsers.filter(user => !leaveUserIds.has(user.uid));
+                        const isStaffShortage = !data.isClosed && activeUsers.length > 1 && workingUsers.length <= 1;
+
+                        return (
+                            <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
+                                <div className="flex justify-between items-start mb-1">
+                                    <span className="text-sm font-bold text-gray-700 ml-1">{day}</span>
+                                    <div className="flex gap-1">
+                                        {data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}
+                                        {leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-rose-600 bg-rose-100 px-1 rounded">休假 {leaveAssignments.length}</span>}
+                                    </div>
+                                </div>
+                                {todaysEvents.map(event => (
+                                    <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate">
+                                        <Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}
+                                    </div>
+                                ))}
+                                {data.isClosed ? (
+                                    <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div>
+                                ) : (
+                                    <div className="space-y-1 flex-1">
+                                        {leaveAssignments.length === 0 ? (
+                                            <div className="text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1.5 font-bold">✓ 全員上班</div>
+                                        ) : (
+                                            leaveAssignments.map((assignment, assignmentIndex) => {
+                                                const user = users[assignment.uid];
+                                                if (!user) return null;
+                                                return (
+                                                    <div key={assignmentIndex} className="bg-rose-50 border border-rose-200 text-rose-800 rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1">
+                                                        <span className="truncate">{user.name}</span>
+                                                        <span className="shrink-0">{getLeaveLabel(assignment.leaveType)}</span>
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                        <div className={`text-[11px] font-bold px-2 py-1 rounded ${isStaffShortage ? 'bg-amber-100 text-amber-800' : 'bg-gray-50 text-gray-600'}`}>
+                                            {isStaffShortage ? `⚠️ 僅剩 ${workingUsers.length} 人上班` : `其餘 ${workingUsers.length} 人上班`}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
                     })}
                 </div>
                 {selectedDate && <ShiftModal dateStr={selectedDate} onClose={() => setSelectedDate(null)} dbData={dbData} currentUserInfo={currentUserInfo} setEditingEvent={setEditingEvent} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} getUserColor={getUserColor} db={db} appId={appId} isReadOnly={isReadOnly} />}
@@ -1345,6 +1292,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         </>
     );
 };
+
 // --- 排班細節 Modal ---
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
