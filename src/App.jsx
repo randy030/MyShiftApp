@@ -10,13 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha6";
+const CURRENT_VERSION = "V14.0.0-alpha7";
 const CURRENT_RELEASE_NOTES = [
-    '恢復「自動填補當月空班」按鍵，僅超級管理員可操作。',
-    '六、日空白班別自動填入 09O；週一至週五一般員工填入 09A。',
-    '主管、店長不分平日或假日，空白班別一律自動填入 09O。',
-    '只補空白班別，既有班別、休假與店休日完全不覆蓋。',
-    '保留人員固定跳色的休假月曆、薪資結算與版本通知功能。'
+    '新增「門市總覽」首頁，快速查看今日休假、上班人數、待審請假與本月薪資資料狀態。',
+    '排班頁標題改為「TEATOP 台中東山店｜門市排班與休假總覽」。',
+    '月曆保留人員固定跳色，並提示可點日期查看當日班別、休假與調班明細。',
+    '保留自動填補空班：六日 09O、平日一般員工 09A、主管與店長 09O。',
+    '保留薪資結算、版本通知只顯示一次與既有排班資料。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -1123,6 +1123,85 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes = DE
 // ==========================================
 // 📅 月曆排班模組 (CalendarView)
 // ==========================================
+// ==========================================
+// 📊 門市總覽 Dashboard - V14.0.0-alpha7
+// ==========================================
+const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const currentMonthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+    const activeUsers = Object.values(dbData.users || {}).filter(user => !user.isResigned && !user.isViewer);
+    const todayShiftData = dbData.shifts?.[todayStr] || { assignments: [] };
+    const todayAssignments = Array.isArray(todayShiftData.assignments) ? todayShiftData.assignments : [];
+    const todayLeaves = todayAssignments
+        .filter(assignment => assignment.type === 'LEAVE')
+        .map(assignment => ({ ...assignment, user: dbData.users?.[assignment.uid] }))
+        .filter(item => item.user);
+    const workingCount = todayShiftData.isClosed ? 0 : Math.max(0, activeUsers.length - todayLeaves.length);
+    const pendingLeaveRequests = (dbData.requests || []).filter(request => request.type === 'leave_request' && request.status === 'pending');
+    const monthPayrollRecords = dbData.payrollRecords || {};
+    const hasPayrollRecords = Object.keys(monthPayrollRecords).length > 0;
+
+    const getLeaveLabel = (leaveType) => {
+        const labels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
+        return labels[leaveType] || '休假';
+    };
+
+    return (
+        <div className="max-w-6xl mx-auto space-y-5 pb-20">
+            <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-2 text-indigo-700 font-black text-xl"><FileBarChart size={22} /> TEATOP 台中東山店</div>
+                    <div className="text-sm text-gray-500 mt-1">門市營運總覽｜快速掌握今天的人力與待辦狀況。</div>
+                </div>
+                <button onClick={() => setView('calendar')} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-indigo-700 shadow-sm">查看本月排班</button>
+            </div>
+
+            <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <button onClick={() => setView('calendar')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
+                    <div className="text-xs font-black text-indigo-600">今日休假</div>
+                    <div className="mt-2 text-3xl font-black text-gray-800">{todayLeaves.length}<span className="text-base ml-1">人</span></div>
+                    <div className="mt-2 text-xs text-gray-500">{todayLeaves.length > 0 ? todayLeaves.map(item => item.user.name).join('、') : '今日無人休假'}</div>
+                </button>
+                <button onClick={() => setView('calendar')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-green-200 transition-all">
+                    <div className="text-xs font-black text-green-600">今日上班人數</div>
+                    <div className="mt-2 text-3xl font-black text-gray-800">{workingCount}<span className="text-base ml-1">/ {activeUsers.length} 人</span></div>
+                    <div className="mt-2 text-xs text-gray-500">{todayShiftData.isClosed ? '今日設定為店休' : workingCount <= 1 && activeUsers.length > 1 ? '請留意今日人力安排' : '未標休假者預設上班'}</div>
+                </button>
+                <button onClick={() => setView('inbox')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-amber-200 transition-all">
+                    <div className="text-xs font-black text-amber-600">待審請假</div>
+                    <div className="mt-2 text-3xl font-black text-gray-800">{pendingLeaveRequests.length}<span className="text-base ml-1">筆</span></div>
+                    <div className="mt-2 text-xs text-gray-500">{pendingLeaveRequests.length > 0 ? '點此進入通知中心處理' : '目前沒有待審請假'}</div>
+                </button>
+                <button onClick={() => setView('salary')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-purple-200 transition-all">
+                    <div className="text-xs font-black text-purple-600">{currentMonthStr} 薪資</div>
+                    <div className="mt-2 text-xl font-black text-gray-800">{hasPayrollRecords ? '已建立資料' : '尚未結算'}</div>
+                    <div className="mt-2 text-xs text-gray-500">{isSuperAdmin ? '點此進入薪資結算中心' : '可查看個人時數與薪資資料'}</div>
+                </button>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-4">
+                <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+                    <div className="p-4 border-b bg-gray-50 font-black text-gray-800 flex items-center gap-2"><Calendar size={17} className="text-indigo-600" /> 今日休假與人力</div>
+                    <div className="p-4 space-y-2">
+                        {todayShiftData.isClosed ? <div className="bg-gray-100 text-gray-700 rounded-xl p-3 font-bold">今日為店休日</div> : todayLeaves.length === 0 ? <div className="bg-green-50 border border-green-100 text-green-700 rounded-xl p-3 font-bold">✓ 今日全員正常上班</div> : todayLeaves.map(item => <div key={`${item.uid}_${item.leaveType}`} className="flex justify-between items-center bg-gray-50 rounded-xl p-3"><span className="font-bold text-gray-800">{item.user.name}</span><span className="text-sm font-bold text-gray-500">{getLeaveLabel(item.leaveType)}</span></div>)}
+                        {!todayShiftData.isClosed && <div className="text-xs text-gray-500 pt-2">今日預計上班：<span className="font-bold text-gray-800">{workingCount} 人</span></div>}
+                    </div>
+                </div>
+                <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+                    <div className="p-4 border-b bg-gray-50 font-black text-gray-800 flex items-center gap-2"><Bell size={17} className="text-indigo-600" /> 今日快速操作</div>
+                    <div className="p-4 grid sm:grid-cols-2 gap-3">
+                        <button onClick={() => setView('calendar')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">查看／調整班表</div><div className="text-xs text-gray-500 mt-1">點日期可查看班別、休假與調班。</div></button>
+                        <button onClick={() => setView('clock')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">前往打卡</div><div className="text-xs text-gray-500 mt-1">查看今日出勤與打卡狀況。</div></button>
+                        <button onClick={() => setView('inbox')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">處理通知</div><div className="text-xs text-gray-500 mt-1">請假、換班與系統通知集中查看。</div></button>
+                        <button onClick={() => setView('salary')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">薪資結算</div><div className="text-xs text-gray-500 mt-1">查看病假、事假與本月結算。</div></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
     const [editingEvent, setEditingEvent] = useState(null);
@@ -1281,8 +1360,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                 <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col gap-3">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         <div className="text-center sm:text-left">
-                            <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2"><Calendar size={20} className="text-indigo-600" /> 小型門市休假班表</div>
-                            <div className="text-xs text-gray-500 mt-1">休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。</div>
+                            <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2"><Calendar size={20} className="text-indigo-600" /> TEATOP 台中東山店</div>
+                            <div className="text-xs text-gray-500 mt-1">門市排班與休假總覽｜休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
                         </div>
                         <div className="flex items-center justify-center gap-3">
                             <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
@@ -2829,12 +2908,13 @@ function App() {
     const [currentUserInfo, setCurrentUserInfo] = useState(null);
     const [dbData, setDbData] = useState({ 
         users: {}, shifts: {}, events: [], requests: [], signatures: [], 
-        gasReceipts: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES 
+        gasReceipts: {}, payrollRecords: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES 
     });
     const [view, setView] = useState('calendar');
     const [loading, setLoading] = useState(true);
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
+    const currentPayrollMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
     const [showVersionNotice, setShowVersionNotice] = useState(false);
     const versionNoticeKey = user?.uid ? `version_notice_last_seen_${user.uid}` : '';
     const dismissVersionNotice = () => {
@@ -2880,6 +2960,14 @@ function App() {
         });
         return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); unsubShiftCfg(); };
     }, [user]);
+
+    useEffect(() => {
+        if (!user) return;
+        const unsubPayroll = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', currentPayrollMonth), (snap) => {
+            setDbData(prev => ({ ...prev, payrollRecords: snap.exists() ? (snap.data().records || {}) : {} }));
+        });
+        return () => unsubPayroll();
+    }, [user, currentPayrollMonth]);
 
 
 useEffect(() => {
@@ -3122,6 +3210,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
         }
         switch (view) {
+            case 'dashboard': return <DashboardView dbData={{ ...dbData, users: safeUsers, requests: safeRequests }} currentDate={currentDate} setView={setView} isSuperAdmin={isSuperAdmin} />;
             case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: safeShiftTypes, shiftTypes: safeShiftTypes, users: safeUsers, requests: safeRequests, signatures: safeSignatures, inventoryItems: safeInventoryItems }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={safeInventoryItems} currentUserInfo={currentUserInfo} />;
@@ -3233,6 +3322,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                         <h1 className="font-black text-xl text-gray-800 hidden xs:block tracking-tight">TEATOP 東山店</h1>
                     </div>
                     <nav className="flex items-center gap-2">
+                        <NavBtn active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={FileBarChart} label="總覽" />
                         <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
                         <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
                         <NavBtn active={view === 'inventory'} onClick={() => setView('inventory')} icon={Package} label="盤點" />
