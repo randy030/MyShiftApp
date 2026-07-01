@@ -10,7 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V13.2"; 
+const CURRENT_VERSION = "V14.0.0-alpha1";
+const CURRENT_RELEASE_NOTES = [
+    '薪資結算中心：病假扣半薪、事假扣全薪，並自動列出每筆請假扣薪明細。',
+    '薪資結算基數可由每位員工設定；時薪固定以「結算基數 ÷ 30 ÷ 8」計算。',
+    '薪資頁面新增員工勾選篩選與近 10 個月薪資明細。',
+    '版本更新提醒改為每位使用者每個版本僅顯示一次。'
+]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1306,13 +1312,28 @@ const getYearlyBalance = (uid, yearToFind) => {
                 await update({ assignments: next });
                 setExpanded(null);
             } 
-            // B. 如果是員工本人申請：改為送出簽核通知給主管
+            // B. 如果是員工本人申請
             else {
                 const leaveLabel = leaves.find(l => l.id === lType)?.label || '假別';
                 try {
+                    // 自畫假：員工可直接寫入班表，不需送審、不發審核通知
+                    if (lType === 'rostered') {
+                        let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+                        const idx = next.findIndex(a => a.uid === uid);
+                        const baseAssign = idx >= 0 ? next[idx] : null;
+                        const leaveHours = resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+                        const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, useComp: false, timestamp: Date.now() };
+                        if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
+                        await update({ assignments: next });
+                        setExpanded(null);
+                        onClose();
+                        alert("✅ 自畫假已直接寫入班表，無需主管審核。");
+                        return;
+                    }
+
                     const duplicatedReqs = (requests || []).filter(r => r.type === 'leave_request' && (r.uid === currentUserInfo.uid) && r.date === dateStr);
                     await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
-                    const newRequestRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
                         type: 'leave_request',
                         uid: currentUserInfo.uid,
                         userName: currentUserInfo.name,
@@ -1325,25 +1346,8 @@ const getYearlyBalance = (uid, yearToFind) => {
                         timestamp: new Date(),
                         status: 'pending'
                     });
-                    const approverLineIds = getApproverLineIds(users);
-                    if (approverLineIds.length > 0) {
-                        const sent = await sendLineNotification(approverLineIds, `🔔 【新假單申請】
-申請人：${currentUserInfo.name}
-日期：${dateStr}
-類別：${leaveLabel}${['sick', 'personal'].includes(lType) ? `
-補休扣抵：${useComp ? '是' : '否'}` : ''}${subUid ? `
-代理人：${users[subUid]?.name || '已填寫'}` : ''}
-請至系統「通知中心」進行審核。`);
-                        if (sent) {
-                            await updateDoc(newRequestRef, {
-                                lineNotifiedAt: Date.now(),
-                                notifiedApproverCount: approverLineIds.length,
-                                lastNotificationType: 'create'
-                            });
-                        }
-                    }
                     alert(`✅ ${leaveLabel} 申請已送出！
-不論是否填寫代理人，皆需主管或管理員審核後才會上班表。`);
+請等待主管或管理員於「通知中心」審核。`);
                     setExpanded(null);
                     onClose(); // 申請完自動關閉彈窗
                 } catch (e) {
@@ -1736,62 +1740,384 @@ const calc = (uid) => {
 // ==========================================
 // 💰 薪資管理 (PayrollView)
 // ==========================================
-const PayrollView = ({ users, currentDate, db, appId, gasReceipts }) => {
+const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
+    const [payrollHistory, setPayrollHistory] = useState({});
     const [showResigned, setShowResigned] = useState(false);
     const [gasModalUser, setGasModalUser] = useState(null);
-    
-    useEffect(() => { 
-        const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => { 
-            if (docSnap.exists()) setPayrollData(docSnap.data().records || {}); else setPayrollData({}); 
-        }); 
-        return () => unsub(); 
-    }, [targetMonth, db, appId]);
-    const updatePayroll = async (uid, field, value) => { 
-        const newData = { ...payrollData, [uid]: { ...(payrollData[uid] || {}), [field]: value } }; 
-        setPayrollData(newData); 
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), { records: newData }, { merge: true }); 
+    const [employeeKeyword, setEmployeeKeyword] = useState('');
+    const [selectedUserIds, setSelectedUserIds] = useState([]);
+    const [expandedHistoryIds, setExpandedHistoryIds] = useState([]);
+
+    const getRecentMonthOptions = () => {
+        const options = [];
+        const baseDate = new Date(`${targetMonth}-01T00:00:00`);
+        if (Number.isNaN(baseDate.getTime())) return [targetMonth];
+
+        for (let index = 0; index < 10; index += 1) {
+            const date = new Date(baseDate.getFullYear(), baseDate.getMonth() - index, 1);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            options.push(`${year}-${month}`);
+        }
+
+        return options;
     };
-    const visibleUsers = users.filter(u => showResigned ? true : !u.isResigned);
+
+    const recentMonthOptions = useMemo(() => getRecentMonthOptions(), [targetMonth]);
+
+    useEffect(() => {
+        const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => {
+            if (docSnap.exists()) setPayrollData(docSnap.data().records || {});
+            else setPayrollData({});
+        });
+
+        return () => unsub();
+    }, [targetMonth, db, appId]);
+
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'payrolls'), (snap) => {
+            const nextHistory = {};
+            snap.forEach(docSnap => {
+                if (recentMonthOptions.includes(docSnap.id)) {
+                    nextHistory[docSnap.id] = docSnap.data().records || {};
+                }
+            });
+            setPayrollHistory(nextHistory);
+        });
+
+        return () => unsub();
+    }, [db, appId, recentMonthOptions.join('|')]);
+
+    const updatePayroll = async (uid, field, value) => {
+        const newData = {
+            ...payrollData,
+            [uid]: {
+                ...(payrollData[uid] || {}),
+                [field]: value
+            }
+        };
+
+        setPayrollData(newData);
+        await setDoc(
+            doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth),
+            { records: newData },
+            { merge: true }
+        );
+    };
+
+    const getNumber = (value) => {
+        const numberValue = Number(value);
+        return Number.isFinite(numberValue) ? numberValue : 0;
+    };
+
+    const formatMoney = (value) => {
+        const roundedValue = Math.round(getNumber(value));
+        return `$${roundedValue.toLocaleString('zh-TW')}`;
+    };
+
+    const getLeaveSummary = (uid, monthStr) => {
+        const summary = {
+            sickHours: 0,
+            personalHours: 0,
+            sickDetails: [],
+            personalDetails: []
+        };
+
+        Object.keys(shifts || {}).forEach(dateStr => {
+            if (!dateStr.startsWith(monthStr)) return;
+
+            const dayData = shifts[dateStr];
+            if (dayData?.isClosed) return;
+
+            const assignment = Array.isArray(dayData?.assignments)
+                ? dayData.assignments.find(item => item.uid === uid && item.type === 'LEAVE')
+                : null;
+
+            if (!assignment) return;
+
+            const leaveHours = resolveLeaveHours(assignment, shiftTypes);
+            const detail = {
+                date: dateStr,
+                hours: leaveHours,
+                note: assignment.note || '',
+                useComp: assignment.useComp === true
+            };
+
+            if (assignment.leaveType === 'sick') {
+                summary.sickHours += leaveHours;
+                summary.sickDetails.push(detail);
+            }
+
+            if (assignment.leaveType === 'personal') {
+                summary.personalHours += leaveHours;
+                summary.personalDetails.push(detail);
+            }
+        });
+
+        summary.sickDetails.sort((a, b) => a.date.localeCompare(b.date));
+        summary.personalDetails.sort((a, b) => a.date.localeCompare(b.date));
+
+        return summary;
+    };
+
+    const getSettlementBase = (user, record = {}) => {
+        return getNumber(record.settlementBase || user?.salaryAmount || record.base);
+    };
+
+    const getPayrollSummary = (user, record = {}, monthStr = targetMonth) => {
+        const settlementBase = getSettlementBase(user, record);
+        const hourlyRate = settlementBase > 0 ? settlementBase / 30 / 8 : 0;
+        const leaveSummary = getLeaveSummary(user.uid, monthStr);
+        const sickDeduction = leaveSummary.sickHours * hourlyRate * 0.5;
+        const personalDeduction = leaveSummary.personalHours * hourlyRate;
+        const gasRecords = gasReceipts?.[monthStr]?.[user.uid] || [];
+        const gasTotal = gasRecords.reduce((sum, item) => sum + getNumber(item.amount), 0);
+        const gasCapped = Math.min(gasTotal, 500);
+        const subsidy = getNumber(record.subsidy);
+        const birthdayBonus = getNumber(record.bonus_bday);
+        const festivalBonus = getNumber(record.bonus_festival);
+        const yearBonus = getNumber(record.bonus_year);
+        const manualAdjustment = getNumber(record.manualAdjustment);
+        const manualDeduction = getNumber(record.manualDeduction);
+        const totalAdditions = gasCapped + subsidy + birthdayBonus + festivalBonus + yearBonus + manualAdjustment;
+        const totalDeductions = sickDeduction + personalDeduction + manualDeduction;
+        const netPay = settlementBase + totalAdditions - totalDeductions;
+
+        return {
+            settlementBase,
+            hourlyRate,
+            leaveSummary,
+            sickDeduction,
+            personalDeduction,
+            gasTotal,
+            gasCapped,
+            subsidy,
+            birthdayBonus,
+            festivalBonus,
+            yearBonus,
+            manualAdjustment,
+            manualDeduction,
+            totalAdditions,
+            totalDeductions,
+            netPay
+        };
+    };
+
+    const availableUsers = useMemo(() => {
+        return users.filter(user => showResigned ? true : !user.isResigned);
+    }, [users, showResigned]);
+
+    const filteredUsers = useMemo(() => {
+        const normalizedKeyword = employeeKeyword.trim().toLowerCase();
+
+        return availableUsers.filter(user => {
+            if (!normalizedKeyword) return true;
+            return String(user.name || '').toLowerCase().includes(normalizedKeyword);
+        });
+    }, [availableUsers, employeeKeyword]);
+
+    useEffect(() => {
+        const activeUserIds = availableUsers.map(user => user.uid);
+
+        setSelectedUserIds(previousIds => {
+            if (previousIds.length === 0) return activeUserIds;
+            return previousIds.filter(uid => activeUserIds.includes(uid));
+        });
+    }, [availableUsers.map(user => user.uid).join('|')]);
+
+    const displayedUsers = filteredUsers.filter(user => selectedUserIds.includes(user.uid));
+    const isAllFilteredSelected = filteredUsers.length > 0 && filteredUsers.every(user => selectedUserIds.includes(user.uid));
+
+    const toggleUserSelection = (uid) => {
+        setSelectedUserIds(previousIds => {
+            if (previousIds.includes(uid)) return previousIds.filter(id => id !== uid);
+            return [...previousIds, uid];
+        });
+    };
+
+    const toggleAllFilteredUsers = () => {
+        const filteredIds = filteredUsers.map(user => user.uid);
+
+        setSelectedUserIds(previousIds => {
+            if (isAllFilteredSelected) {
+                return previousIds.filter(uid => !filteredIds.includes(uid));
+            }
+
+            return [...new Set([...previousIds, ...filteredIds])];
+        });
+    };
+
+    const toggleHistory = (uid) => {
+        setExpandedHistoryIds(previousIds => {
+            if (previousIds.includes(uid)) return previousIds.filter(id => id !== uid);
+            return [...previousIds, uid];
+        });
+    };
+
     return (
         <div className="space-y-4 pb-20">
-            <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
-                <h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資與福利管理 (機密)</h2>
-                <div className="flex gap-3 items-center w-full sm:w-auto justify-between sm:justify-end">
-                    <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
-                        <input type="checkbox" checked={showResigned} onChange={e=>setShowResigned(e.target.checked)} className="accent-indigo-600" />
-                        顯示已離職
-                    </label>
-                    <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none"/>
+            <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
+                <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3">
+                    <div>
+                        <h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資結算中心 (機密)</h2>
+                        <p className="text-xs text-gray-400 mt-1">病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 items-center">
+                        <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
+                            <input type="checkbox" checked={showResigned} onChange={event => setShowResigned(event.target.checked)} className="accent-indigo-600" />
+                            顯示已離職
+                        </label>
+                        <input type="month" value={targetMonth} onChange={event => setTargetMonth(event.target.value)} className="border rounded px-2 py-1.5 focus:outline-none focus:border-indigo-500" />
+                    </div>
+                </div>
+
+                <div className="border-t pt-3 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div className="font-bold text-sm text-gray-700 flex items-center gap-2"><Users size={16}/> 顯示員工 ({displayedUsers.length} / {availableUsers.length})</div>
+                        <input type="text" value={employeeKeyword} onChange={event => setEmployeeKeyword(event.target.value)} placeholder="搜尋員工姓名" className="w-full sm:w-52 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+                    </div>
+                    <div className="flex flex-wrap gap-2 items-center">
+                        <label className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-1.5 rounded cursor-pointer">
+                            <input type="checkbox" checked={isAllFilteredSelected} onChange={toggleAllFilteredUsers} className="mr-1 accent-indigo-600" />
+                            全選目前篩選結果
+                        </label>
+                        {filteredUsers.map(user => (
+                            <label key={user.uid} className="text-xs font-bold text-gray-600 bg-gray-50 border border-gray-200 px-2 py-1.5 rounded cursor-pointer hover:bg-gray-100">
+                                <input type="checkbox" checked={selectedUserIds.includes(user.uid)} onChange={() => toggleUserSelection(user.uid)} className="mr-1 accent-indigo-600" />
+                                {user.name || '未命名員工'}
+                            </label>
+                        ))}
+                        {filteredUsers.length === 0 && <span className="text-xs text-gray-400">找不到符合的員工</span>}
+                    </div>
                 </div>
             </div>
-            
-            <div className="bg-white rounded-xl border overflow-x-auto shadow-sm">
-                <table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">姓名</th><th className="p-3 w-24">本薪</th><th className="p-3 w-32 bg-teal-50 text-teal-700 text-center">油資核銷 / 發票</th><th className="p-3 w-24">補助/津貼</th><th className="p-3 w-24 bg-pink-50 text-pink-700">生日禮金</th><th className="p-3 w-24 bg-purple-50 text-purple-700">三節獎金</th><th className="p-3 w-24 bg-yellow-50 text-yellow-700">年終獎金</th><th className="p-3">備註</th></tr></thead>
-                <tbody>{visibleUsers.map(u => { 
-                    const record = payrollData[u.uid] || {}; 
-                    const userGasRecords = gasReceipts?.[targetMonth]?.[u.uid] || [];
-                    const gasTotal = userGasRecords.reduce((sum, r) => sum + r.amount, 0);
-                    const gasCapped = Math.min(gasTotal, 500);
-                    return (
-                        <tr key={u.uid} className={`border-b hover:bg-gray-50 ${u.isResigned ? 'opacity-60 bg-gray-50' : ''}`}>
-                            <td className="p-3 font-bold flex items-center gap-1 mt-1">{u.name}{u.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1 py-0.5 rounded ml-1 border border-red-200">離職</span>}</td>
-                            <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.base || ''} onChange={e=>updatePayroll(u.uid, 'base', e.target.value)}/></td>
-                            <td className="p-3 bg-teal-50 text-center">
-                                <div className="font-bold text-teal-800">${gasCapped}</div>
-                                <div className="text-[10px] text-teal-600">登錄 ${gasTotal} / {userGasRecords.length} 張</div>
-                                <button onClick={() => setGasModalUser(u)} className="mt-1 text-[10px] font-bold text-white bg-teal-600 hover:bg-teal-700 px-2 py-1 rounded">發票列表</button>
-                            </td>
-                            <td className="p-3"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={e=>updatePayroll(u.uid, 'subsidy', e.target.value)}/></td>
-                            <td className="p-3 bg-pink-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_bday || ''} onChange={e=>updatePayroll(u.uid, 'bonus_bday', e.target.value)}/></td>
-                            <td className="p-3 bg-purple-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_festival || ''} onChange={e=>updatePayroll(u.uid, 'bonus_festival', e.target.value)}/></td>
-                            <td className="p-3 bg-yellow-50"><input type="number" placeholder="0" className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500 bg-transparent" value={record.bonus_year || ''} onChange={e=>updatePayroll(u.uid, 'bonus_year', e.target.value)}/></td>
-                            <td className="p-3"><input type="text" placeholder="..." className="w-full border rounded px-1 py-1 focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={e=>updatePayroll(u.uid, 'note', e.target.value)}/></td>
-                        </tr>
-                    ); 
-                })}</tbody></table>
-            </div>
+
+            {displayedUsers.length === 0 ? (
+                <div className="bg-white border rounded-xl p-10 text-center text-gray-400 font-bold">請在上方勾選至少一位員工後查看薪資結算。</div>
+            ) : displayedUsers.map(user => {
+                const record = payrollData[user.uid] || {};
+                const summary = getPayrollSummary(user, record, targetMonth);
+                const isHistoryExpanded = expandedHistoryIds.includes(user.uid);
+
+                return (
+                    <div key={user.uid} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${user.isResigned ? 'opacity-70' : ''}`}>
+                        <div className="p-4 bg-gray-50 border-b flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                            <div>
+                                <div className="font-black text-lg text-gray-800 flex items-center gap-2">
+                                    {user.name || '未命名員工'}
+                                    {user.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded border border-red-200">已離職</span>}
+                                </div>
+                                <div className="text-xs text-gray-500 mt-1">{targetMonth} 薪資結算 | 薪資結算基數為請假扣薪及遲到扣薪的計算基準。</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-xs text-gray-500 font-bold">預估實領薪資</div>
+                                <div className="text-2xl font-black text-indigo-700">{formatMoney(summary.netPay)}</div>
+                            </div>
+                        </div>
+
+                        <div className="p-4 grid xl:grid-cols-3 gap-4">
+                            <div className="space-y-3">
+                                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+                                    <label className="block text-xs font-black text-indigo-800 mb-1">薪資結算基數</label>
+                                    <input type="number" min="0" placeholder="例如：37500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.settlementBase ?? user.salaryAmount ?? record.base ?? ''} onChange={event => updatePayroll(user.uid, 'settlementBase', event.target.value)} />
+                                    <div className="text-[11px] text-indigo-600 mt-2">每小時薪資：{formatMoney(summary.hourlyRate)} / hr</div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="bg-teal-50 border border-teal-100 rounded-xl p-3">
+                                        <div className="text-xs font-black text-teal-800">油資核銷</div>
+                                        <div className="text-lg font-black text-teal-700 mt-1">{formatMoney(summary.gasCapped)}</div>
+                                        <div className="text-[10px] text-teal-600">登錄 {formatMoney(summary.gasTotal)} / {summary.gasTotal > 500 ? '上限 $500' : '未達上限'}</div>
+                                        <button onClick={() => setGasModalUser(user)} className="mt-2 text-[11px] font-bold text-white bg-teal-600 hover:bg-teal-700 px-2 py-1 rounded">管理發票</button>
+                                    </div>
+                                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                                        <label className="block text-xs font-black text-gray-700 mb-1">補助 / 津貼</label>
+                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={event => updatePayroll(user.uid, 'subsidy', event.target.value)} />
+                                        <div className="text-[10px] text-gray-500 mt-2">計入：{formatMoney(summary.subsidy)}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-3">
+                                <div className="bg-red-50 border border-red-100 rounded-xl p-3">
+                                    <div className="flex justify-between items-start gap-2">
+                                        <div>
+                                            <div className="text-sm font-black text-red-800">請假扣薪明細</div>
+                                            <div className="text-[11px] text-red-600 mt-1">病假固定扣半薪；事假固定扣全薪。</div>
+                                        </div>
+                                        <div className="text-right font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.personalDeduction)}</div>
+                                    </div>
+
+                                    <div className="mt-3 space-y-2">
+                                        <div className="bg-white/80 rounded-lg p-2 border border-red-100">
+                                            <div className="flex justify-between text-xs font-bold text-gray-700"><span>病假：{summary.leaveSummary.sickHours} hr</span><span className="text-red-700">-{formatMoney(summary.sickDeduction)}</span></div>
+                                            <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.sickHours} hr × {formatMoney(summary.hourlyRate)} × 50%</div>
+                                            {summary.leaveSummary.sickDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.sickDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
+                                        </div>
+                                        <div className="bg-white/80 rounded-lg p-2 border border-red-100">
+                                            <div className="flex justify-between text-xs font-bold text-gray-700"><span>事假：{summary.leaveSummary.personalHours} hr</span><span className="text-red-700">-{formatMoney(summary.personalDeduction)}</span></div>
+                                            <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.personalHours} hr × {formatMoney(summary.hourlyRate)} × 100%</div>
+                                            {summary.leaveSummary.personalDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.personalDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                                        <label className="block text-xs font-black text-amber-800 mb-1">其他加項</label>
+                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-amber-500" value={record.manualAdjustment || ''} onChange={event => updatePayroll(user.uid, 'manualAdjustment', event.target.value)} />
+                                    </div>
+                                    <div className="bg-orange-50 border border-orange-100 rounded-xl p-3">
+                                        <label className="block text-xs font-black text-orange-800 mb-1">其他扣款</label>
+                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.manualDeduction || ''} onChange={event => updatePayroll(user.uid, 'manualDeduction', event.target.value)} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-3">
+                                <div className="bg-white border rounded-xl overflow-hidden">
+                                    <div className="p-3 font-black text-sm text-gray-700 border-b">獎金與結算摘要</div>
+                                    <div className="p-3 space-y-2 text-xs">
+                                        <div className="grid grid-cols-3 gap-2">
+                                            <label className="bg-pink-50 border border-pink-100 rounded-lg p-2"><span className="block font-bold text-pink-700 mb-1">生日禮金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_bday || ''} onChange={event => updatePayroll(user.uid, 'bonus_bday', event.target.value)} /></label>
+                                            <label className="bg-purple-50 border border-purple-100 rounded-lg p-2"><span className="block font-bold text-purple-700 mb-1">三節獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_festival || ''} onChange={event => updatePayroll(user.uid, 'bonus_festival', event.target.value)} /></label>
+                                            <label className="bg-yellow-50 border border-yellow-100 rounded-lg p-2"><span className="block font-bold text-yellow-700 mb-1">年終獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_year || ''} onChange={event => updatePayroll(user.uid, 'bonus_year', event.target.value)} /></label>
+                                        </div>
+                                        <div className="border-t pt-2 space-y-1">
+                                            <div className="flex justify-between"><span className="text-gray-500">薪資結算基數</span><span className="font-bold">{formatMoney(summary.settlementBase)}</span></div>
+                                            <div className="flex justify-between"><span className="text-gray-500">加項合計</span><span className="font-bold text-green-700">+{formatMoney(summary.totalAdditions)}</span></div>
+                                            <div className="flex justify-between"><span className="text-gray-500">扣款合計</span><span className="font-bold text-red-700">-{formatMoney(summary.totalDeductions)}</span></div>
+                                            <div className="flex justify-between border-t pt-2 text-base"><span className="font-black text-gray-800">預估實領</span><span className="font-black text-indigo-700">{formatMoney(summary.netPay)}</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <label className="block text-xs font-bold text-gray-600">結算備註<textarea rows="3" placeholder="例如：本月獎勵、扣款原因、匯款備註..." className="mt-1 w-full border rounded-lg px-2 py-2 text-sm font-normal focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={event => updatePayroll(user.uid, 'note', event.target.value)} /></label>
+                            </div>
+                        </div>
+
+                        <div className="border-t bg-gray-50 px-4 py-3">
+                            <button onClick={() => toggleHistory(user.uid)} className="text-xs font-black text-indigo-600 hover:text-indigo-800 flex items-center gap-1"><History size={14}/>{isHistoryExpanded ? '收合近 10 個月薪資明細' : '查看近 10 個月薪資明細'}</button>
+                            {isHistoryExpanded && (
+                                <div className="mt-3 overflow-x-auto">
+                                    <table className="w-full min-w-[760px] text-xs text-left bg-white border rounded-lg overflow-hidden">
+                                        <thead className="bg-indigo-50 text-indigo-800"><tr><th className="p-2">月份</th><th className="p-2">結算基數</th><th className="p-2">病假</th><th className="p-2">事假</th><th className="p-2">請假扣薪</th><th className="p-2">加項</th><th className="p-2">其他扣款</th><th className="p-2">預估實領</th></tr></thead>
+                                        <tbody>{recentMonthOptions.map(monthStr => {
+                                            const historyRecord = payrollHistory?.[monthStr]?.[user.uid] || {};
+                                            const historySummary = getPayrollSummary(user, historyRecord, monthStr);
+                                            const hasRecord = Object.keys(historyRecord).length > 0 || historySummary.leaveSummary.sickHours > 0 || historySummary.leaveSummary.personalHours > 0;
+                                            return <tr key={monthStr} className={`border-t ${monthStr === targetMonth ? 'bg-yellow-50' : ''}`}><td className="p-2 font-bold">{monthStr}{monthStr === targetMonth ? '（本月）' : ''}</td><td className="p-2">{hasRecord ? formatMoney(historySummary.settlementBase) : '—'}</td><td className="p-2">{historySummary.leaveSummary.sickHours} hr</td><td className="p-2">{historySummary.leaveSummary.personalHours} hr</td><td className="p-2 text-red-700">-{formatMoney(historySummary.sickDeduction + historySummary.personalDeduction)}</td><td className="p-2 text-green-700">+{formatMoney(historySummary.totalAdditions)}</td><td className="p-2 text-red-700">-{formatMoney(historySummary.manualDeduction)}</td><td className="p-2 font-black text-indigo-700">{hasRecord ? formatMoney(historySummary.netPay) : '—'}</td></tr>;
+                                        })}</tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            })}
+
             <GasReceiptModal
                 isOpen={!!gasModalUser}
                 onClose={() => setGasModalUser(null)}
@@ -2394,11 +2720,11 @@ function App() {
     const [menuOpen, setMenuOpen] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
     const [showVersionNotice, setShowVersionNotice] = useState(false);
-    const versionNoticeKey = user?.uid ? `version_notice_${CURRENT_VERSION}_${user.uid}` : '';
+    const versionNoticeKey = user?.uid ? `version_notice_last_seen_${user.uid}` : '';
     const dismissVersionNotice = () => {
         try {
             if (versionNoticeKey && typeof window !== 'undefined' && window.localStorage) {
-                window.localStorage.setItem(versionNoticeKey, '1');
+                window.localStorage.setItem(versionNoticeKey, CURRENT_VERSION);
             }
         } catch (err) {
             console.warn('version notice storage unavailable', err);
@@ -2447,10 +2773,10 @@ useEffect(() => {
         return;
     }
     try {
-        const hasSeen = (typeof window !== 'undefined' && window.localStorage)
-            ? window.localStorage.getItem(`version_notice_${CURRENT_VERSION}_${user.uid}`)
-            : '1';
-        setShowVersionNotice(!hasSeen);
+        const lastSeenVersion = (typeof window !== 'undefined' && window.localStorage)
+            ? window.localStorage.getItem(`version_notice_last_seen_${user.uid}`)
+            : CURRENT_VERSION;
+        setShowVersionNotice(lastSeenVersion !== CURRENT_VERSION);
     } catch (err) {
         console.warn('version notice read failed', err);
         setShowVersionNotice(false);
@@ -2626,7 +2952,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
     const coreDataReady = !!user && !!currentUserInfo && Array.isArray(safeSignatures) && Array.isArray(safeRequests) && !!safeUsers;
 
     useEffect(() => {
-        const pendingRequests = safeRequests.filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt);
+        const pendingRequests = safeRequests.filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt && !r.lineNotifyProcessingAt);
         if (pendingRequests.length === 0) return;
         const approverLineIds = getApproverLineIds(dbData.users);
         if (approverLineIds.length === 0) return;
@@ -2634,6 +2960,11 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
         const backfillPendingNotifications = async () => {
             for (const req of pendingRequests) {
                 if (cancelled) return;
+                const reqRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id);
+                await updateDoc(reqRef, {
+                    lineNotifyProcessingAt: Date.now(),
+                    lastNotificationType: 'queue'
+                }).catch(() => null);
                 const requesterName = req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工';
                 const msg = req.type === 'leave_request'
                     ? `🔔 【待審核假單提醒】
@@ -2651,10 +2982,15 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
 請至系統「通知中心」進行審核。`;
                 const sent = await sendLineNotification(approverLineIds, msg);
                 if (sent) {
-                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id), {
+                    await updateDoc(reqRef, {
                         lineNotifiedAt: Date.now(),
                         notifiedApproverCount: approverLineIds.length,
-                        lastNotificationType: 'backfill'
+                        lastNotificationType: 'backfill',
+                        lineNotifyProcessingAt: null
+                    }).catch(() => null);
+                } else {
+                    await updateDoc(reqRef, {
+                        lineNotifyProcessingAt: null
                     }).catch(() => null);
                 }
             }
@@ -2675,7 +3011,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={safeInventoryItems} currentUserInfo={currentUserInfo} />;
             case 'forms': return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
             case 'salary': return <SalaryView users={safeUsers} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
-            case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} />;
+            case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} />;
             case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} />;
             
             // 🟢 修正：只保留一個 settings，並加上空值保護
@@ -2834,12 +3170,10 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                 <button onClick={dismissVersionNotice} className="text-white/80 hover:text-white font-black">✕</button>
             </div>
             <div className="p-6 space-y-3 text-sm text-gray-700">
-                <div className="font-black text-gray-800">目前版本：{CURRENT_VERSION}</div>
+                <div className="font-black text-gray-800">已更新至：{CURRENT_VERSION}</div>
+                <div className="text-xs text-gray-500">本視窗只會在本版本第一次開啟時顯示。</div>
                 <ul className="list-disc pl-5 space-y-2">
-                    <li>簽約同意書畫面最後已加入「請假規則附錄」，員工簽約時可直接閱讀。</li>
-                    <li>0901 班別已調整為 09:00~13:00 / 17:00~21:00，班別時數同步更新為 8 小時。</li>
-                    <li>病假 / 事假申請與主管核准流程，保留補休扣抵規則。</li>
-                    <li>版本提醒已改為較保守寫法，避免登入初始化期間影響畫面。</li>
+                    {CURRENT_RELEASE_NOTES.map(note => <li key={note}>{note}</li>)}
                 </ul>
                 <div className="pt-3">
                     <button onClick={dismissVersionNotice} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
