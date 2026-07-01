@@ -10,13 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha7";
+const CURRENT_VERSION = "V14.0.0-alpha8";
 const CURRENT_RELEASE_NOTES = [
-    '新增「門市總覽」首頁，快速查看今日休假、上班人數、待審請假與本月薪資資料狀態。',
-    '排班頁標題改為「TEATOP 台中東山店｜門市排班與休假總覽」。',
-    '月曆保留人員固定跳色，並提示可點日期查看當日班別、休假與調班明細。',
-    '保留自動填補空班：六日 09O、平日一般員工 09A、主管與店長 09O。',
-    '保留薪資結算、版本通知只顯示一次與既有排班資料。'
+    '請假送出與待審卡片新增扣薪預估：病假半薪、事假全薪，並以薪資結算基數 ÷ 30 ÷ 8 計算。',
+    '通知中心新增分類、未讀提示與審核資訊；同一筆申請維持單一待審通知，避免重複。',
+    '薪資結算新增未結算 / 已結算待確認 / 已鎖定狀態；鎖定後不可任意修改。',
+    '新增薪資單列印 / 另存 PDF 功能，並保留近 10 個月的薪資明細。',
+    '重要作業會寫入操作紀錄：請假核准或駁回、薪資狀態變更與薪資欄位調整。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -89,6 +89,21 @@ const formatDateTime = (value) => {
     return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 };
 
+const writeAuditLog = async ({ db, appId, actor, action, targetType, targetId = '', detail = {}, createdAt = Date.now() }) => {
+    try {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'auditLogs'), {
+            actorUid: actor?.uid || '',
+            actorName: actor?.name || '系統',
+            action,
+            targetType,
+            targetId,
+            detail,
+            createdAt
+        });
+    } catch (error) {
+        console.warn('操作紀錄寫入失敗', error);
+    }
+};
 const sortInventoryItems = (items = []) => {
     const safeItems = Array.isArray(items) ? [...items] : [];
     return safeItems
@@ -1944,6 +1959,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
     const [employeeKeyword, setEmployeeKeyword] = useState('');
     const [selectedUserIds, setSelectedUserIds] = useState([]);
     const [expandedHistoryIds, setExpandedHistoryIds] = useState([]);
+    const [payrollStatus, setPayrollStatus] = useState('draft');
+    const [payrollLockedAt, setPayrollLockedAt] = useState(null);
+    const [payrollLockedBy, setPayrollLockedBy] = useState('');
 
     const getRecentMonthOptions = () => {
         const options = [];
@@ -1964,8 +1982,18 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => {
-            if (docSnap.exists()) setPayrollData(docSnap.data().records || {});
-            else setPayrollData({});
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                setPayrollData(data.records || {});
+                setPayrollStatus(data.status || 'draft');
+                setPayrollLockedAt(data.lockedAt || null);
+                setPayrollLockedBy(data.lockedByName || '');
+            } else {
+                setPayrollData({});
+                setPayrollStatus('draft');
+                setPayrollLockedAt(null);
+                setPayrollLockedBy('');
+            }
         });
 
         return () => unsub();
@@ -1986,6 +2014,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
     }, [db, appId, recentMonthOptions.join('|')]);
 
     const updatePayroll = async (uid, field, value) => {
+        if (payrollStatus === 'locked') return alert('本月薪資已鎖定。如需調整，請先由管理員解除鎖定。');
         const newData = {
             ...payrollData,
             [uid]: {
@@ -1997,9 +2026,39 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         setPayrollData(newData);
         await setDoc(
             doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth),
-            { records: newData },
+            { records: newData, status: payrollStatus, updatedAt: Date.now() },
             { merge: true }
         );
+    };
+
+    const getPayrollStatusLabel = () => {
+        if (payrollStatus === 'locked') return '已鎖定';
+        if (payrollStatus === 'confirmed') return '已結算待鎖定';
+        return '未結算';
+    };
+
+    const changePayrollStatus = async (nextStatus) => {
+        const isLocking = nextStatus === 'locked';
+        const confirmed = nextStatus === 'confirmed';
+        if (isLocking && !window.confirm(`確定鎖定 ${targetMonth} 薪資？鎖定後將無法修改薪資欄位。`)) return;
+        if (nextStatus === 'draft' && payrollStatus === 'locked' && !window.confirm(`確定解除 ${targetMonth} 薪資鎖定？`)) return;
+        const payload = {
+            records: payrollData,
+            status: nextStatus,
+            updatedAt: Date.now(),
+            lockedAt: isLocking ? Date.now() : null,
+            lockedByName: isLocking ? '管理員' : '',
+            confirmedAt: confirmed ? Date.now() : null
+        };
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), payload, { merge: true });
+        await writeAuditLog({ db, appId, actor: { name: '管理員' }, action: isLocking ? 'lock_payroll' : (confirmed ? 'confirm_payroll' : 'unlock_payroll'), targetType: 'payroll', targetId: targetMonth, detail: { status: nextStatus } });
+    };
+
+    const printPayrollSlip = (user, summary) => {
+        const printWindow = window.open('', '_blank', 'width=800,height=900');
+        if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
+        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>薪資結算基數</td><td>${formatMoney(summary.settlementBase)}</td></tr><tr><td>油資 / 津貼 / 獎金</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>預估實領</td><td>${formatMoney(summary.netPay)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+        printWindow.document.close();
     };
 
     const getNumber = (value) => {
@@ -2165,8 +2224,13 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                             顯示已離職
                         </label>
                         <input type="month" value={targetMonth} onChange={event => setTargetMonth(event.target.value)} className="border rounded px-2 py-1.5 focus:outline-none focus:border-indigo-500" />
+                        <span className={`text-xs font-black px-3 py-1.5 rounded-full border ${payrollStatus === 'locked' ? 'bg-red-50 text-red-700 border-red-200' : payrollStatus === 'confirmed' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>薪資狀態：{getPayrollStatusLabel()}</span>
+                        {payrollStatus === 'draft' && <button onClick={() => changePayrollStatus('confirmed')} className="text-xs font-black bg-amber-500 text-white px-3 py-1.5 rounded-lg hover:bg-amber-600">確認結算</button>}
+                        {payrollStatus === 'confirmed' && <button onClick={() => changePayrollStatus('locked')} className="text-xs font-black bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700">鎖定薪資</button>}
+                        {payrollStatus === 'locked' && <button onClick={() => changePayrollStatus('draft')} className="text-xs font-black bg-white text-red-600 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50">解除鎖定</button>}
                     </div>
                 </div>
+                {payrollStatus === 'locked' && <div className="bg-red-50 border border-red-100 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">本月薪資已鎖定{payrollLockedAt ? `｜鎖定時間：${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜操作人：${payrollLockedBy}` : ''}</div>}
 
                 <div className="border-t pt-3 space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -2209,6 +2273,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                             <div className="text-right">
                                 <div className="text-xs text-gray-500 font-bold">預估實領薪資</div>
                                 <div className="text-2xl font-black text-indigo-700">{formatMoney(summary.netPay)}</div>
+                                <button onClick={() => printPayrollSlip(user, summary)} className="mt-2 text-[11px] font-black text-indigo-700 bg-white border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-50">列印 / 另存 PDF</button>
                             </div>
                         </div>
 
@@ -3056,6 +3121,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
         const reviewedAt = Date.now();
         const siblingRequests = getSiblingPendingRequests(safeRequests, req);
         const writeReviewLog = async (result) => {
+            await writeAuditLog({ db, appId, actor: currentUserInfo, action: `review_${result}`, targetType: 'request', targetId: req.id, detail: { requesterName, requestDate: req.date || '', leaveLabel: req.leaveLabel || '', requestType: req.type } });
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requestReviewLogs'), {
                 requestId: req.id,
                 requestType: req.type,
@@ -3225,8 +3291,9 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             case 'inbox': return (
                 <div className="max-w-md mx-auto space-y-4">
                     <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex items-center gap-3">
-                        <Bell className="text-indigo-600"/><h2 className="font-black text-xl">通知中心</h2>
+                        <Bell className="text-indigo-600"/><div><h2 className="font-black text-xl">通知中心</h2><p className="text-xs text-gray-400 font-bold mt-1">請假 / 調班 / 時數申請集中處理，核准或駁回後會同步寫入操作紀錄。</p></div>
                     </div>
+                    <div className="flex flex-wrap gap-2 text-xs font-black"><span className="px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">全部 {myNotifications?.length || 0}</span><span className="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">請假 {myNotifications?.filter(item => item.type === 'leave_request').length || 0}</span><span className="px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100">時數 / 調班 {myNotifications?.filter(item => item.type !== 'leave_request').length || 0}</span></div>
                     {/* 🟢 修正：確保 myNotifications 存在 */}
                     {(!myNotifications || myNotifications.length === 0) ? (
                         <div className="text-center py-20 text-gray-300 font-bold uppercase tracking-widest">No Notifications</div>
@@ -3247,7 +3314,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                                 </div>
                                 <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700 space-y-1">
                                     <div>{req.type === 'leave_request' ? `類別：${req.leaveLabel}` : `時數：${req.hours} hr`}</div>
-                                    {req.type === 'leave_request' && ['sick', 'personal'].includes(req.leaveType) && <div className="text-xs text-amber-600">補休扣抵：{req.useComp ? '是（主管可改）' : '否（主管可改）'}</div>}
+                                    {req.type === 'leave_request' && ['sick', 'personal'].includes(req.leaveType) && <><div className="text-xs text-amber-600">補休扣抵：{req.useComp ? '是（主管可改）' : '否（主管可改）'}</div><div className="text-xs text-red-600">扣薪規則：{req.leaveType === 'sick' ? '病假扣半薪' : '事假扣全薪'}｜時數：{req.hours || 8} hr</div></>}
                                     {req.type === 'leave_request' && req.subName && <div className="text-xs text-indigo-500">代理人：{req.subName}</div>}
                                     {req.type === 'admin_ot_approve' && <div className="text-xs text-indigo-500">原因：{req.reason || '無備註'}</div>}
                                 </div>
