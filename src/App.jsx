@@ -10,11 +10,11 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha3";
+const CURRENT_VERSION = "V14.0.0-alpha4";
 const CURRENT_RELEASE_NOTES = [
-    '排班頁改回小型門市的「休假優先」顯示方式，未標示休假的在職人員預設為上班。',
-    '月曆格子優先顯示休假姓名與假別，取消大型門市用的員工勾選、批次套班與複製班表工具。',
-    '新增本月休假總覽與人力提醒：同日多人休假時，會顯示剩餘上班人數。',
+    '排班月曆的休假卡片改為依假別固定顏色，避免所有休假資訊使用同一個顏色造成誤判。',
+    '新增假別顏色說明：自畫假、排休、特休、生理假、病假、事假可一眼辨識。',
+    '保留小型門市的休假優先模式：未標示休假的在職人員預設上班，並持續顯示剩餘上班人數。',
     '完整保留薪資結算、近 10 個月明細與每版本僅提醒一次的更新通知功能。'
 ]; 
 const LINE_API_URL = "/api/webhook"; 
@@ -1144,8 +1144,61 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
     const getDateString = (day) => `${monthStr}-${String(day).padStart(2, '0')}`;
 
-    const getLeaveLabel = (leaveType) => {
-        return leaves.find(item => item.id === leaveType)?.label || '休假';
+    // 假別顏色固定，讓月曆不會因為全部使用同一個紅色而誤判假別。
+    // 如日後在系統設定新增假別，未設定顏色的假別會自動使用灰色樣式。
+    const LEAVE_DISPLAY_STYLES = {
+        rostered: {
+            label: '自畫假',
+            className: 'bg-sky-50 border-sky-300 text-sky-800',
+            badgeClassName: 'bg-sky-100 text-sky-700 border-sky-200',
+            dotClassName: 'bg-sky-500'
+        },
+        official: {
+            label: '排休',
+            className: 'bg-slate-100 border-slate-300 text-slate-800',
+            badgeClassName: 'bg-slate-200 text-slate-700 border-slate-300',
+            dotClassName: 'bg-slate-500'
+        },
+        annual: {
+            label: '特休',
+            className: 'bg-violet-50 border-violet-300 text-violet-800',
+            badgeClassName: 'bg-violet-100 text-violet-700 border-violet-200',
+            dotClassName: 'bg-violet-500'
+        },
+        menstrual: {
+            label: '生理假',
+            className: 'bg-pink-50 border-pink-300 text-pink-800',
+            badgeClassName: 'bg-pink-100 text-pink-700 border-pink-200',
+            dotClassName: 'bg-pink-500'
+        },
+        sick: {
+            label: '病假',
+            className: 'bg-amber-50 border-amber-300 text-amber-900',
+            badgeClassName: 'bg-amber-100 text-amber-800 border-amber-200',
+            dotClassName: 'bg-amber-500'
+        },
+        personal: {
+            label: '事假',
+            className: 'bg-rose-50 border-rose-300 text-rose-800',
+            badgeClassName: 'bg-rose-100 text-rose-700 border-rose-200',
+            dotClassName: 'bg-rose-500'
+        },
+        unknown: {
+            label: '休假',
+            className: 'bg-gray-50 border-gray-300 text-gray-700',
+            badgeClassName: 'bg-gray-100 text-gray-600 border-gray-200',
+            dotClassName: 'bg-gray-400'
+        }
+    };
+
+    const getLeaveDisplay = (leaveType) => {
+        const fallback = LEAVE_DISPLAY_STYLES.unknown;
+        const configuredLabel = leaves.find(item => item.id === leaveType)?.label;
+        const style = LEAVE_DISPLAY_STYLES[leaveType] || fallback;
+        return {
+            ...style,
+            label: configuredLabel || style.label || fallback.label
+        };
     };
 
     const monthLeaveSummary = useMemo(() => {
@@ -1219,12 +1272,26 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                         {monthLeaveSummary.map(user => (
-                            <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${user.leaveDays > 0 ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
+                            <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${user.leaveDays > 0 ? 'bg-indigo-50 text-indigo-800 border-indigo-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
                                 <span>{user.name}</span>
                                 <span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
                             </div>
                         ))}
                         {activeUsers.length === 0 && <div className="text-sm text-gray-400">尚無在職員工資料</div>}
+                    </div>
+                    <div className="mt-4 pt-3 border-t">
+                        <div className="text-xs font-bold text-gray-600 mb-2">假別顏色說明</div>
+                        <div className="flex flex-wrap gap-2">
+                            {['rostered', 'official', 'annual', 'menstrual', 'sick', 'personal'].map(leaveType => {
+                                const leaveDisplay = getLeaveDisplay(leaveType);
+                                return (
+                                    <span key={leaveType} className={`inline-flex items-center gap-1 border rounded-full px-2 py-1 text-[11px] font-bold ${leaveDisplay.badgeClassName}`}>
+                                        <span className={`w-2 h-2 rounded-full ${leaveDisplay.dotClassName}`} />
+                                        {leaveDisplay.label}
+                                    </span>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
 
@@ -1251,7 +1318,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                                     <span className="text-sm font-bold text-gray-700 ml-1">{day}</span>
                                     <div className="flex gap-1">
                                         {data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}
-                                        {leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-rose-600 bg-rose-100 px-1 rounded">休假 {leaveAssignments.length}</span>}
+                                        {leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}
                                     </div>
                                 </div>
                                 {todaysEvents.map(event => (
@@ -1268,11 +1335,12 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                                         ) : (
                                             leaveAssignments.map((assignment, assignmentIndex) => {
                                                 const user = users[assignment.uid];
+                                                const leaveDisplay = getLeaveDisplay(assignment.leaveType || 'unknown');
                                                 if (!user) return null;
                                                 return (
-                                                    <div key={assignmentIndex} className="bg-rose-50 border border-rose-200 text-rose-800 rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1">
-                                                        <span className="truncate">{user.name}</span>
-                                                        <span className="shrink-0">{getLeaveLabel(assignment.leaveType)}</span>
+                                                    <div key={assignmentIndex} className={`border rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1 ${leaveDisplay.className}`}>
+                                                        <span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${leaveDisplay.dotClassName}`} />{user.name}</span>
+                                                        <span className="shrink-0">{leaveDisplay.label}</span>
                                                     </div>
                                                 );
                                             })
