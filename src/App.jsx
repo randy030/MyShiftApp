@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha1";
+const CURRENT_VERSION = "V14.0.0-alpha2";
 const CURRENT_RELEASE_NOTES = [
     '薪資結算中心：病假扣半薪、事假扣全薪，並自動列出每筆請假扣薪明細。',
     '薪資結算基數可由每位員工設定；時薪固定以「結算基數 ÷ 30 ÷ 8」計算。',
@@ -1124,127 +1124,225 @@ const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes = DE
 // ==========================================
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
-    const [editingEvent, setEditingEvent] = useState(null); 
+    const [editingEvent, setEditingEvent] = useState(null);
+    const [employeeKeyword, setEmployeeKeyword] = useState('');
+    const [selectedUserIds, setSelectedUserIds] = useState([]);
+    const [batchShiftCode, setBatchShiftCode] = useState('');
+    const [batchStartDate, setBatchStartDate] = useState('');
+    const [batchEndDate, setBatchEndDate] = useState('');
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
+    const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
     const { firstDay, days } = getMonthData(year, month);
-    const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
-  
-    const sortedUserIds = useMemo(() => Object.keys(users).sort(), [users]);
+    const { shifts, events, users, leaves, shiftsDef } = dbData;
+
+    const activeUsers = useMemo(() => Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer), [users]);
+    const sortedUserIds = useMemo(() => Object.keys(users || {}).sort(), [users]);
     const getUserColor = (uid) => { const idx = sortedUserIds.indexOf(uid); return idx === -1 ? 'bg-gray-100 text-gray-800' : USER_COLORS[idx % USER_COLORS.length]; };
-  
+
+    const filteredUsers = useMemo(() => {
+        const keyword = employeeKeyword.trim().toLowerCase();
+        if (!keyword) return activeUsers;
+        return activeUsers.filter(user => String(user.name || '').toLowerCase().includes(keyword));
+    }, [activeUsers, employeeKeyword]);
+
+    useEffect(() => {
+        setSelectedUserIds(previous => previous.filter(uid => activeUsers.some(user => user.uid === uid)));
+    }, [activeUsers]);
+
+    const visibleUserIds = selectedUserIds.length > 0 ? selectedUserIds : activeUsers.map(user => user.uid);
+    const visibleUserSet = new Set(visibleUserIds);
+
+    const getDateString = (day) => `${monthStr}-${String(day).padStart(2, '0')}`;
+
+    const getMonthWarnings = useMemo(() => {
+        const warnings = [];
+        activeUsers.forEach(user => {
+            let consecutiveWorkDays = 0;
+            let maxConsecutiveWorkDays = 0;
+            let monthlyHours = 0;
+            for (let day = 1; day <= days; day += 1) {
+                const dateStr = getDateString(day);
+                const assignment = (shifts[dateStr]?.assignments || []).find(item => item.uid === user.uid);
+                if (assignment?.type === 'WORK' && assignment?.shiftCode) {
+                    consecutiveWorkDays += 1;
+                    maxConsecutiveWorkDays = Math.max(maxConsecutiveWorkDays, consecutiveWorkDays);
+                    monthlyHours += calculateShiftHours(assignment.shiftCode, shiftsDef || DEFAULT_SHIFT_TYPES);
+                } else {
+                    consecutiveWorkDays = 0;
+                }
+            }
+            if (maxConsecutiveWorkDays > 6) warnings.push({ uid: user.uid, type: 'consecutive', message: `${user.name} 連續排班 ${maxConsecutiveWorkDays} 天` });
+            if (monthlyHours > 240) warnings.push({ uid: user.uid, type: 'hours', message: `${user.name} 本月排班 ${monthlyHours} 小時` });
+        });
+        return warnings;
+    }, [activeUsers, days, monthStr, shifts, shiftsDef]);
+
     const handleSaveEvent = async (eventData) => {
         const isEditing = !!eventData.id;
         const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
         if (normalizedEvent.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
         else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
         setEditingEvent(null);
-        alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。系統將於事件區間內每日早上 9:00 或有人開啟系統時，自動發送 LINE 提醒。`);
+        alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。`);
     };
-    
+
     const handleDeleteEvent = async (eventId) => {
-        if(window.confirm("確定要刪除這個行程嗎？")) { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId)); setEditingEvent(null); }
+        if (window.confirm('確定要刪除這個行程嗎？')) {
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId));
+            setEditingEvent(null);
+        }
     };
-    // 自動排班邏輯 (週末 09O 規則)
+
     const handleAutoSchedule = async () => {
         if (!isSuperAdmin) return;
-        if(!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month+1}月」整個月，尚未排班的員工補上預設班別。\n\n(規則：週六、週日一律 09O；平日主管 09O、一般員工 09A)\n確定執行嗎？`)) return;
-        
-        for(let i=1; i<=days; i++) {
-            const dStr = `${year}-${String(month+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
-            const dayData = shifts[dStr] || { assignments: [] };
+        if (!window.confirm(`🤖 【一鍵自動排班】\n即將自動將「${year}年${month + 1}月」尚未排班的員工補上預設班別。\n\n確定執行嗎？`)) return;
+        for (let day = 1; day <= days; day += 1) {
+            const dateStr = getDateString(day);
+            const dayData = shifts[dateStr] || { assignments: [] };
             if (dayData.isClosed) continue;
-            
+            const assignments = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+            const isWeekend = new Date(year, month, day).getDay() === 0 || new Date(year, month, day).getDay() === 6;
             let changed = false;
-            const newAssigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
-            const dObj = new Date(year, month, i);
-            const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
-            Object.values(users).forEach(u => {
-                if (u.isResigned || u.isViewer) return; 
-                const exist = newAssigns.find(a => a.uid === u.uid);
-                
-                if (!exist || (!exist.shiftCode && exist.type !== 'LEAVE')) {
-                    const isMgmt = u.isAdmin || u.isManager;
-                    const tShift = isWeekend ? '09O' : (isMgmt ? '09O' : '09A');
-                    
-                    if(exist) {
-                        exist.shiftCode = tShift;
-                        exist.type = 'WORK';
+            activeUsers.forEach(user => {
+                const existing = assignments.find(item => item.uid === user.uid);
+                if (!existing || (!existing.shiftCode && existing.type !== 'LEAVE')) {
+                    const shiftCode = isWeekend ? '09O' : ((user.isAdmin || user.isManager) ? '09O' : '09A');
+                    if (existing) {
+                        existing.type = 'WORK';
+                        existing.shiftCode = shiftCode;
                     } else {
-                        newAssigns.push({ uid: u.uid, type: 'WORK', shiftCode: tShift });
+                        assignments.push({ uid: user.uid, type: 'WORK', shiftCode });
                     }
                     changed = true;
                 }
             });
-            if (changed) { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dStr), { ...dayData, assignments: newAssigns }, { merge: true }); }
+            if (changed) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, assignments }, { merge: true });
         }
-        alert("✅ 自動排班完成！未排班人員已全數補上預設班別。");
+        alert('✅ 自動填補完成。');
     };
-  
+
+    const handleCopyPreviousMonth = async () => {
+        if (!isSuperAdmin) return;
+        const previousDate = new Date(year, month - 1, 1);
+        const previousYear = previousDate.getFullYear();
+        const previousMonth = previousDate.getMonth();
+        if (!window.confirm(`📋 確定複製 ${previousYear}年${previousMonth + 1}月的班表到本月嗎？\n\n只會複製目前尚未有排班的日期，既有資料不會被覆蓋。`)) return;
+        const sourceDays = new Date(previousYear, previousMonth + 1, 0).getDate();
+        let copiedCount = 0;
+        for (let day = 1; day <= Math.min(days, sourceDays); day += 1) {
+            const sourceDate = `${previousYear}-${String(previousMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const targetDate = getDateString(day);
+            const sourceData = shifts[sourceDate];
+            const targetData = shifts[targetDate];
+            if (!sourceData || targetData?.isClosed || (targetData?.assignments || []).length > 0) continue;
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', targetDate), {
+                ...sourceData,
+                copiedFrom: sourceDate,
+                copiedAt: Date.now()
+            }, { merge: true });
+            copiedCount += 1;
+        }
+        alert(copiedCount > 0 ? `✅ 已複製 ${copiedCount} 天班表。` : '⚠️ 沒有可複製的空白日期。');
+    };
+
+    const handleBatchSchedule = async () => {
+        if (!isSuperAdmin) return;
+        if (selectedUserIds.length === 0) return alert('請先勾選要批次排班的員工。');
+        if (!batchShiftCode || !batchStartDate || !batchEndDate) return alert('請完整選擇班別與日期區間。');
+        if (batchEndDate < batchStartDate) return alert('結束日期不可早於開始日期。');
+        if (!window.confirm(`確定將 ${selectedUserIds.length} 位員工於 ${batchStartDate} 至 ${batchEndDate} 排為 ${batchShiftCode}？\n\n請假、店休日不會覆蓋。`)) return;
+        const cursor = new Date(`${batchStartDate}T00:00:00`);
+        const end = new Date(`${batchEndDate}T00:00:00`);
+        let updated = 0;
+        while (cursor <= end) {
+            const dateStr = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+            const dayData = shifts[dateStr] || { assignments: [] };
+            if (!dayData.isClosed) {
+                const assignments = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+                selectedUserIds.forEach(uid => {
+                    const existing = assignments.find(item => item.uid === uid);
+                    if (existing?.type === 'LEAVE') return;
+                    if (existing) {
+                        existing.type = 'WORK';
+                        existing.shiftCode = batchShiftCode;
+                    } else {
+                        assignments.push({ uid, type: 'WORK', shiftCode: batchShiftCode });
+                    }
+                    updated += 1;
+                });
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, assignments }, { merge: true });
+            }
+            cursor.setDate(cursor.getDate() + 1);
+        }
+        alert(`✅ 已完成 ${updated} 筆批次排班。`);
+    };
+
     return (
-      <>
-      <div className="space-y-4">
-         <div className="bg-white p-4 rounded-xl border shadow-sm grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-3">
-              <div className="hidden sm:block"></div>
-              <div className="flex items-center justify-center gap-3 sm:justify-self-center">
-                  <button onClick={()=>setCurrentDate(new Date(year, month-1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft/></button>
-                  <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month+1}月</div>
-                  <button onClick={()=>setCurrentDate(new Date(year, month+1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronRight/></button>
-              </div>
-              <div className="flex justify-center sm:justify-end">
-              {!isReadOnly && isSuperAdmin && (
-                  <button onClick={handleAutoSchedule} className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded items-center gap-1 font-bold shadow-sm hover:bg-indigo-100 transition-colors flex">
-                      🤖 自動填補當月空班
-                  </button>
-              )}
-              </div>
-         </div>
-         <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
-          {['日','一','二','三','四','五','六'].map(d=><div key={d} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{d}</div>)}
-          {Array.from({length:firstDay}).map((_,i)=><div key={'e'+i} className="min-h-[150px] border-b border-r bg-gray-50/30"/>)}
-          {Array.from({length:days}).map((_,i)=>{
-            const d=i+1, dateStr=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-            const data = shifts[dateStr] || {};
-            const todaysEvents = events.filter(e => checkEventOnDate(e, dateStr));
-  
-            return (
-              <div key={d} onClick={()=>setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
-                <div className="flex justify-between mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{d}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent"></div>}</div>
-                
-                {todaysEvents.map(e => (
-                    <div key={e.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate flex items-center gap-1 shadow-sm"><Megaphone size={10} className="shrink-0"/> {e.time && `${e.time} `}{e.title}</div>
-                ))}
-                
-                {data.isClosed ? (
-                    <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded flex items-center gap-1 font-bold shadow"><Store size={14} /> 店休</div></div>
-                ) : (
-                  <div className="space-y-1 overflow-y-auto flex-1">
-                    {Array.isArray(data.assignments) && data.assignments.map((a,ix)=>{ 
-                        if (a.type === 'LEAVE') {
-                            const pColor = getUserColor(a.uid); 
-                            const shortName = users[a.uid]?.name ? (users[a.uid].name.length > 2 ? users[a.uid].name.slice(-2) : users[a.uid].name) : '未知';
-                            const subNameFull = a.subUid ? users[a.subUid]?.name : null;
-                            const subName = subNameFull ? (subNameFull.length > 2 ? subNameFull.slice(-2) : subNameFull) : null;
-  
-                            return (
-                                <div key={ix} className={`p-1 rounded border-2 ${pColor} bg-opacity-30 mb-1 shadow-sm`}>
-                                    <div className="flex justify-between items-center"><span className="font-bold text-[11px] tracking-widest">{shortName}</span><span className="bg-white/90 px-1 rounded text-[10px] border shadow-sm flex items-center gap-0.5 shrink-0 font-bold truncate max-w-[40px]">{leaves.find(t=>t.id===a.leaveType)?.label || '假'}</span></div>
-                                    {subName && <div className="text-[10px] text-gray-700 mt-0.5 flex items-center gap-1 bg-white/70 px-1 rounded w-max"><ArrowRightLeft size={9}/> {subName}代</div>}
-                                </div>
-                            )
-                        } 
-                        return null;
+        <>
+            <div className="space-y-4">
+                <div className="bg-white p-4 rounded-xl border shadow-sm grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] items-center gap-3">
+                    <div className="flex flex-wrap gap-2 justify-center lg:justify-start">
+                        {!isReadOnly && isSuperAdmin && <button onClick={handleCopyPreviousMonth} className="text-xs bg-white text-indigo-600 border border-indigo-200 px-3 py-2 rounded-lg font-bold hover:bg-indigo-50">📋 複製上月空白班表</button>}
+                        {!isReadOnly && isSuperAdmin && <button onClick={handleAutoSchedule} className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-3 py-2 rounded-lg font-bold hover:bg-indigo-100">🤖 自動填補空班</button>}
+                    </div>
+                    <div className="flex items-center justify-center gap-3">
+                        <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
+                        <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month + 1}月</div>
+                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
+                    </div>
+                    <div className="text-center lg:text-right text-xs font-bold text-gray-500">顯示 {visibleUserIds.length} / {activeUsers.length} 位員工</div>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
+                    <div className="flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
+                        <div>
+                            <div className="font-bold text-gray-800 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> 排班顯示人員與批次工具</div>
+                            <div className="text-xs text-gray-500 mt-1">未勾選時預設顯示全部；勾選後月曆僅顯示選定員工。</div>
+                        </div>
+                        <input value={employeeKeyword} onChange={event => setEmployeeKeyword(event.target.value)} placeholder="搜尋員工姓名" className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <label className="text-xs font-bold border rounded-lg px-3 py-2 bg-gray-50 cursor-pointer"><input type="checkbox" checked={filteredUsers.length > 0 && filteredUsers.every(user => selectedUserIds.includes(user.uid))} onChange={event => setSelectedUserIds(event.target.checked ? [...new Set([...selectedUserIds, ...filteredUsers.map(user => user.uid)])] : selectedUserIds.filter(uid => !filteredUsers.some(user => user.uid === uid)))} className="mr-1 accent-indigo-600" />全選目前搜尋結果</label>
+                        {filteredUsers.map(user => <label key={user.uid} className={`text-xs font-bold border rounded-lg px-3 py-2 cursor-pointer ${selectedUserIds.includes(user.uid) ? 'bg-indigo-50 text-indigo-700 border-indigo-300' : 'bg-white text-gray-600'}`}><input type="checkbox" checked={selectedUserIds.includes(user.uid)} onChange={event => setSelectedUserIds(event.target.checked ? [...selectedUserIds, user.uid] : selectedUserIds.filter(uid => uid !== user.uid))} className="mr-1 accent-indigo-600" />{user.name}</label>)}
+                    </div>
+                    {!isReadOnly && isSuperAdmin && <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 pt-3 border-t">
+                        <select value={batchShiftCode} onChange={event => setBatchShiftCode(event.target.value)} className="border rounded-lg px-3 py-2 text-sm"><option value="">批次班別</option>{(shiftsDef || []).map(shift => <option key={shift.id} value={shift.id}>{shift.label}</option>)}</select>
+                        <input type="date" value={batchStartDate} onChange={event => setBatchStartDate(event.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
+                        <input type="date" value={batchEndDate} onChange={event => setBatchEndDate(event.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
+                        <button onClick={handleBatchSchedule} className="bg-indigo-600 text-white rounded-lg font-bold text-sm px-3 py-2 hover:bg-indigo-700">批次套用班別</button>
+                    </div>}
+                </div>
+
+                {getMonthWarnings.length > 0 && <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl shadow-sm"><div className="font-bold text-amber-800 flex items-center gap-2"><AlertTriangle size={18} /> 排班提醒</div><div className="mt-2 flex flex-wrap gap-2">{getMonthWarnings.map((warning, index) => <span key={`${warning.uid}-${warning.type}-${index}`} className="text-xs font-bold bg-white border border-amber-200 text-amber-800 px-2 py-1 rounded">⚠️ {warning.message}</span>)}</div></div>}
+
+                <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
+                    {['日', '一', '二', '三', '四', '五', '六'].map(day => <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>)}
+                    {Array.from({ length: firstDay }).map((_, index) => <div key={`empty-${index}`} className="min-h-[150px] border-b border-r bg-gray-50/30" />)}
+                    {Array.from({ length: days }).map((_, index) => {
+                        const day = index + 1;
+                        const dateStr = getDateString(day);
+                        const data = shifts[dateStr] || {};
+                        const todaysEvents = (events || []).filter(event => checkEventOnDate(event, dateStr));
+                        const assignments = (data.assignments || []).filter(assignment => visibleUserSet.has(assignment.uid));
+                        return <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[150px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : 'hover:bg-indigo-50'}`}>
+                            <div className="flex justify-between mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{day}</span>{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}</div>
+                            {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
+                            {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div> : <div className="space-y-1 overflow-y-auto flex-1">{assignments.map((assignment, assignmentIndex) => {
+                                const user = users[assignment.uid];
+                                if (!user) return null;
+                                const shortName = user.name?.length > 2 ? user.name.slice(-2) : user.name;
+                                const color = getUserColor(assignment.uid);
+                                if (assignment.type === 'LEAVE') return <div key={assignmentIndex} className={`p-1 rounded border ${color} bg-opacity-30 text-[11px] font-bold`}><span>{shortName}</span><span className="float-right">{leaves.find(item => item.id === assignment.leaveType)?.label || '假'}</span></div>;
+                                return <div key={assignmentIndex} className={`p-1 rounded border ${color} bg-opacity-30 text-[11px] font-bold flex justify-between`}><span>{shortName}</span><span>{assignment.shiftCode || '未排'}</span></div>;
+                            })}</div>}
+                        </div>;
                     })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-         </div>
-         {selectedDate && <ShiftModal dateStr={selectedDate} onClose={()=>setSelectedDate(null)} dbData={dbData} currentUserInfo={currentUserInfo} setEditingEvent={setEditingEvent} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} getUserColor={getUserColor} db={db} appId={appId} isReadOnly={isReadOnly} />}
-      </div>
-      <CompanyEventModal isOpen={!!editingEvent} onClose={()=>setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
-      </>
+                </div>
+                {selectedDate && <ShiftModal dateStr={selectedDate} onClose={() => setSelectedDate(null)} dbData={dbData} currentUserInfo={currentUserInfo} setEditingEvent={setEditingEvent} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} getUserColor={getUserColor} db={db} appId={appId} isReadOnly={isReadOnly} />}
+            </div>
+            <CompanyEventModal isOpen={!!editingEvent} onClose={() => setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
+        </>
     );
 };
 // --- 排班細節 Modal ---
