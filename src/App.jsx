@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11";
+const CURRENT_VERSION = "V14.0.0-alpha11.2";
 const CURRENT_RELEASE_NOTES = [
     '班表頁改為月曆優先：開啟後直接看到月份切換與月曆，不需要先滑過多個資訊區塊。',
     '門市名稱、月份切換與自動填補班別整合成精簡工具列，保留必要操作但降低手機版高度。',
@@ -1187,8 +1187,8 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
                     <div className="mt-2 text-3xl font-black text-gray-800">{pendingLeaveRequests.length}<span className="text-base ml-1">筆</span></div>
                     <div className="mt-2 text-xs text-gray-500">{pendingLeaveRequests.length > 0 ? '點此進入通知中心處理' : '目前沒有待審請假'}</div>
                 </button>
-                <button onClick={() => setView('salary')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-purple-200 transition-all">
-                    <div className="text-xs font-black text-purple-600">{currentMonthStr} 薪資</div>
+                <button onClick={() => setView('payroll')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-purple-200 transition-all">
+                    <div className="text-xs font-black text-purple-600">{payrollMonthStr} 薪資</div>
                     <div className="mt-2 text-xl font-black text-gray-800">{hasPayrollRecords ? '已建立資料' : '尚未結算'}</div>
                     <div className="mt-2 text-xs text-gray-500">{isSuperAdmin ? '點此進入薪資結算中心' : '可查看個人時數與薪資資料'}</div>
                 </button>
@@ -1208,7 +1208,7 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
                         <button onClick={() => setView('calendar')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">查看／調整班表</div><div className="text-xs text-gray-500 mt-1">點日期可查看班別、休假與調班。</div></button>
                         <button onClick={() => setView('clock')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">前往打卡</div><div className="text-xs text-gray-500 mt-1">查看今日出勤與打卡狀況。</div></button>
                         <button onClick={() => setView('inbox')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">處理通知</div><div className="text-xs text-gray-500 mt-1">請假、換班與系統通知集中查看。</div></button>
-                        <button onClick={() => setView('salary')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">薪資結算</div><div className="text-xs text-gray-500 mt-1">查看病假、事假與本月結算。</div></button>
+                        <button onClick={() => setView('payroll')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">薪資結算</div><div className="text-xs text-gray-500 mt-1">查看病假、事假與本月結算。</div></button>
                     </div>
                 </div>
             </div>
@@ -3488,7 +3488,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                             </button>
                             {menuOpen && (
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
-                                    <DropdownItem onClick={() => {setView('salary'); setMenuOpen(false)}} icon={Wallet} label={isSuperAdmin ? "薪資結算" : "時數結算"} />
+                                    <DropdownItem onClick={() => {setView('payroll'); setMenuOpen(false)}} icon={Wallet} label={isSuperAdmin ? "薪資結算" : "時數結算"} />
                                     {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
                                     <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
                                     <div className="border-t my-2 border-gray-50"></div>
