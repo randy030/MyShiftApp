@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.3";
+const CURRENT_VERSION = "V14.0.0-alpha11.5";
 const CURRENT_RELEASE_NOTES = [
     '班表頁改為月曆優先：開啟後直接看到月份切換與月曆，不需要先滑過多個資訊區塊。',
     '門市名稱、月份切換與自動填補班別整合成精簡工具列，保留必要操作但降低手機版高度。',
@@ -1079,6 +1079,7 @@ const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => 
 const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin, setView }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [attendanceList, setAttendanceList] = useState([]);
+    const [payrollLockInfo, setPayrollLockInfo] = useState({ status: 'draft', lockedAt: null, lockedByName: '' });
     const [loading, setLoading] = useState(false);
     const activeUsers = useMemo(() => (users || []).filter(user => !user?.isResigned && !user?.isViewer), [users]);
     const [selectedUid, setSelectedUid] = useState(currentUserInfo?.uid || '');
@@ -1088,6 +1089,18 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
     }, [isSuperAdmin, currentUserInfo?.uid]);
 
     const selectedUser = useMemo(() => activeUsers.find(user => user.uid === selectedUid) || currentUserInfo || activeUsers[0] || null, [activeUsers, selectedUid, currentUserInfo]);
+
+    useEffect(() => {
+        const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (snap) => {
+            const data = snap.exists() ? snap.data() : {};
+            setPayrollLockInfo({
+                status: data.status || 'draft',
+                lockedAt: data.lockedAt || null,
+                lockedByName: data.lockedByName || ''
+            });
+        });
+        return () => unsub();
+    }, [targetMonth, db, appId]);
 
     useEffect(() => {
         setLoading(true);
@@ -1126,15 +1139,35 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
     }), [shifts, targetMonth, selectedUser?.uid]);
 
     const leaveRows = useMemo(() => monthAssignments.filter(assign => assign.type === 'LEAVE').map(assign => {
-        const leaveMap = { rostered: '自畫假', official: '排休', annual: '特休', annualLeave: '特休', annual_leave: '特休', 'annual-leave': '特休', sick: '病假', personal: '事假', menstrual: '生理假' };
+        const leaveMap = {
+            rostered: '自畫假',
+            official: '排休',
+            annual: '特休',
+            annualLeave: '特休',
+            annual_leave: '特休',
+            'annual-leave': '特休',
+            sick: '病假',
+            personal: '事假',
+            menstrual: '生理假'
+        };
         const leaveType = String(assign.leaveType || '').trim();
         const leaveLabel = leaveMap[leaveType] || leaveMap[String(assign.type || '').toLowerCase()] || leaveType || '請假';
         const hours = resolveLeaveHours(assign, shiftTypes);
         const base = Number(selectedUser?.salarySettlementBase || selectedUser?.salaryAmount || selectedUser?.salary || 0);
         const hourly = base > 0 ? base / 30 / 8 : 0;
         const deduction = leaveLabel === '病假' ? hourly * hours * 0.5 : leaveLabel === '事假' ? hourly * hours : 0;
-        return { ...assign, leaveLabel, hours, deduction };
+        return { ...assign, leaveLabel, hours, deduction, reason: assign.note || assign.reason || '未填寫理由' };
     }).sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, selectedUser, shiftTypes]);
+
+    const overtimeRows = useMemo(() => monthAssignments
+        .filter(assign => assign.type !== 'LEAVE' && Number(assign.otHours) !== 0 && assign.otConfirmed)
+        .map(assign => ({
+            ...assign,
+            hours: Number(assign.otHours),
+            reason: assign.otReason || assign.note || '未填寫加班／補休理由',
+            shiftLabel: (shiftTypes || []).find(shift => shift.id === assign.shiftCode)?.label || assign.shiftCode || '-'
+        }))
+        .sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, shiftTypes]);
 
     const summary = useMemo(() => {
         const scheduledHours = monthAssignments.filter(assign => assign.type !== 'LEAVE').reduce((sum, assign) => sum + calculateShiftHours(assign.shiftCode, shiftTypes), 0);
@@ -1144,23 +1177,22 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         const annualHours = leaveRows.filter(row => row.leaveLabel === '特休').reduce((sum, row) => sum + row.hours, 0);
         const sickHours = leaveRows.filter(row => row.leaveLabel === '病假').reduce((sum, row) => sum + row.hours, 0);
         const personalHours = leaveRows.filter(row => row.leaveLabel === '事假').reduce((sum, row) => sum + row.hours, 0);
-        return { scheduledHours, lateCount, missingCount, annualHours, sickHours, personalHours, userRecords };
-    }, [monthAssignments, attendanceList, selectedUser?.uid, leaveRows, shiftTypes]);
+        const overtimeHours = overtimeRows.filter(row => row.hours > 0).reduce((sum, row) => sum + row.hours, 0);
+        const compHours = overtimeRows.filter(row => row.hours < 0).reduce((sum, row) => sum + Math.abs(row.hours), 0);
+        return { scheduledHours, lateCount, missingCount, annualHours, sickHours, personalHours, overtimeHours, compHours, userRecords };
+    }, [monthAssignments, attendanceList, selectedUser?.uid, leaveRows, overtimeRows, shiftTypes]);
+
+    const getPayrollStatusLabel = () => {
+        if (payrollLockInfo.status === 'locked') return '已鎖定';
+        if (payrollLockInfo.status === 'confirmed') return '已結算待鎖定';
+        return '未結算';
+    };
 
     const handleExportCSV = () => {
-        const rows = [['日期','員工','類型','班別／假別','上班打卡','下班打卡','狀態','時數','扣薪']];
-        const dailyMap = new Map();
-        attendanceList.filter(record => record.uid === selectedUser?.uid).forEach(record => dailyMap.set(record.date, record));
-        monthAssignments.forEach(assign => {
-            const record = dailyMap.get(assign.date);
-            if (assign.type === 'LEAVE') {
-                const row = leaveRows.find(item => item.date === assign.date);
-                rows.push([assign.date, selectedUser?.name || '', '請假', row?.leaveLabel || '請假', '', '', '請假', row?.hours || 0, row?.deduction || 0]);
-            } else {
-                const shift = (shiftTypes || []).find(item => item.id === assign.shiftCode);
-                rows.push([assign.date, selectedUser?.name || '', '出勤', shift?.label || assign.shiftCode || '-', record?.in || '', record?.out || '', record?.status?.join(', ') || '未打卡', calculateShiftHours(assign.shiftCode, shiftTypes), '']);
-            }
-        });
+        const rows = [['日期','員工','類型','班別／假別','時數','理由／備註','扣薪／補休影響']];
+        leaveRows.forEach(row => rows.push([row.date, selectedUser?.name || '', '請假', row.leaveLabel, row.hours, row.reason, row.deduction > 0 ? `扣薪 ${Math.round(row.deduction)}` : '扣薪 0']));
+        overtimeRows.forEach(row => rows.push([row.date, selectedUser?.name || '', row.hours > 0 ? '加班' : '補休扣抵', row.shiftLabel, row.hours, row.reason, row.hours > 0 ? `加班 +${row.hours}hr` : `補休 ${Math.abs(row.hours)}hr`]));
+        attendanceList.filter(record => record.uid === selectedUser?.uid).forEach(record => rows.push([record.date, selectedUser?.name || '', '打卡', record.shiftInfo?.label || '-', '', record.status.join(', '), `${record.in || '-'} ~ ${record.out || '-'}`]));
         exportToCSV(`出勤統計_${selectedUser?.name || '員工'}_${targetMonth}`, rows);
     };
 
@@ -1168,21 +1200,31 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         <div className="space-y-4 pb-20">
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div><h2 className="font-bold flex items-center gap-2 text-indigo-700"><FileCheck/> 出勤統計</h2><p className="text-xs text-gray-400 mt-1">整合排班、打卡、請假與特休明細；員工可查看自己的資料。</p></div>
+                    <div><h2 className="font-bold flex items-center gap-2 text-indigo-700"><FileCheck/> 出勤統計</h2><p className="text-xs text-gray-400 mt-1">整合請假、特休、加班、補休與打卡；本月結算鎖定後，明細保留為唯讀紀錄。</p></div>
                     <div className="flex gap-2 flex-wrap"><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none" />{isSuperAdmin && <select value={selectedUid} onChange={e=>setSelectedUid(e.target.value)} className="border rounded px-2 py-1.5 min-w-[130px]">{activeUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}</select>}<button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出明細</span></button></div>
                 </div>
+            </div>
+
+            <div className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${payrollLockInfo.status === 'locked' ? 'bg-red-50 border-red-200' : payrollLockInfo.status === 'confirmed' ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                <div><div className="font-black text-gray-800">{targetMonth} 月結狀態：{getPayrollStatusLabel()}</div><div className="text-xs text-gray-500 mt-1">此頁明細會依薪資結算月份保存；薪資鎖定後，請假、特休、加班與補休明細維持唯讀供月底核對。</div></div>
+                <div className="text-xs font-bold text-gray-600">{payrollLockInfo.lockedAt ? `鎖定時間：${formatDateTime(payrollLockInfo.lockedAt)}${payrollLockInfo.lockedByName ? `｜${payrollLockInfo.lockedByName}` : ''}` : '尚未鎖定'}</div>
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">已排班時數</div><div className="text-2xl font-black text-indigo-600 mt-1">{summary.scheduledHours} hr</div></div>
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">特休使用</div><div className="text-2xl font-black text-purple-600 mt-1">{summary.annualHours} hr</div></div>
-                <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">遲到／缺卡</div><div className="text-2xl font-black text-orange-500 mt-1">{summary.lateCount} / {summary.missingCount}</div></div>
+                <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">加班／補休</div><div className="text-2xl font-black text-teal-600 mt-1">{summary.overtimeHours} / {summary.compHours} hr</div></div>
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">病假／事假</div><div className="text-2xl font-black text-red-500 mt-1">{summary.sickHours} / {summary.personalHours} hr</div></div>
             </div>
 
             <div className="bg-white border rounded-xl overflow-hidden">
-                <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假與特休明細</h3><p className="text-xs text-gray-400 mt-1">病假、事假會顯示預估扣薪；特休扣薪為 $0。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
-                {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}</div><div className="text-xs text-gray-400 mt-1">{row.hours} 小時{row.note ? `｜${row.note}` : ''}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
+                <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假、特休明細</h3><p className="text-xs text-gray-400 mt-1">完整保留假別、時數、申請理由與病假／事假扣薪影響。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
+                {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}　{row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">理由／備註：{row.reason}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
+            </div>
+
+            <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="p-4 border-b bg-gray-50"><h3 className="font-bold text-gray-700">加班／補休明細</h3><p className="text-xs text-gray-400 mt-1">只列出已確認的加班或補休扣抵，並保留原因供薪資結算核對。</p></div>
+                {overtimeRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有已確認的加班或補休紀錄</div> : <div className="divide-y">{overtimeRows.map((row, index) => <div key={`${row.date}-ot-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.hours > 0 ? '加班' : '補休扣抵'}　{row.hours > 0 ? `+${row.hours}` : row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">班別：{row.shiftLabel}｜理由／備註：{row.reason}</div></div><div className={row.hours > 0 ? 'font-black text-orange-600' : 'font-black text-green-600'}>{row.hours > 0 ? `加班 +${row.hours} hr` : `補休 ${Math.abs(row.hours)} hr`}</div></div>)}</div>}
             </div>
 
             <div className="bg-white rounded-xl border overflow-hidden">
@@ -1202,6 +1244,9 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const currentMonthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+    // 薪資通常在次月初結算前一個月，因此總覽固定顯示上一個結算月份。
+    const payrollBaseDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+    const payrollMonthStr = `${payrollBaseDate.getFullYear()}-${String(payrollBaseDate.getMonth() + 1).padStart(2, '0')}`;
     const activeUsers = Object.values(dbData.users || {}).filter(user => !user.isResigned && !user.isViewer);
     const todayShiftData = dbData.shifts?.[todayStr] || { assignments: [] };
     const todayAssignments = Array.isArray(todayShiftData.assignments) ? todayShiftData.assignments : [];
