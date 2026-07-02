@@ -10,14 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha9";
+const CURRENT_VERSION = "V14.0.0-alpha11";
 const CURRENT_RELEASE_NOTES = [
-    '薪資結算頁新增可見的「確認結算 / 鎖定薪資 / 解除鎖定」按鍵與鎖定資訊。',
-    '薪資鎖定後，所有薪資輸入欄位會直接停用並以灰色顯示，避免誤改。',
-    '新增特休明細：逐筆日期、時數、備註與扣薪 $0；同時顯示本月及年度已用 / 剩餘特休時數。',
-    '近 10 個月薪資明細新增特休時數欄位，月底核對更完整。',
-    '薪資單列印內容加入特休使用時數與特休不扣薪說明。'
-]; 
+    '班表頁改為月曆優先：開啟後直接看到月份切換與月曆，不需要先滑過多個資訊區塊。',
+    '門市名稱、月份切換與自動填補班別整合成精簡工具列，保留必要操作但降低手機版高度。',
+    '人員顏色、休假總覽與自動填補規則移至月曆最下方的可展開「班表說明」，需要時再查看。',
+    '保留人員固定跳色、休假優先顯示、已排班與休假不覆蓋的既有邏輯。'
+] 
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1372,51 +1371,25 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     return (
         <>
             <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-col gap-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                        <div className="text-center sm:text-left">
-                            <div className="font-bold text-lg text-gray-800 flex items-center justify-center sm:justify-start gap-2"><Calendar size={20} className="text-indigo-600" /> TEATOP 台中東山店</div>
-                            <div className="text-xs text-gray-500 mt-1">門市排班與休假總覽｜休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
-                        </div>
-                        <div className="flex items-center justify-center gap-3">
-                            <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
-                            <div className="font-bold text-xl text-center min-w-[140px]">{year}年 {month + 1}月</div>
-                            <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
-                        </div>
+                {/* 月曆優先工具列：開啟班表時直接進入月份與月曆，不先佔用手機版高度。 */}
+                <div className="bg-white rounded-xl border shadow-sm px-2.5 py-2 flex items-center justify-between gap-2 sticky top-20 z-20">
+                    <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="上個月"><ChevronLeft size={20} /></button>
+                    <div className="text-center min-w-0">
+                        <div className="font-black text-sm text-gray-800 truncate">TEATOP 台中東山店</div>
+                        <div className="font-bold text-lg text-indigo-700 leading-tight">{year}年 {month + 1}月</div>
                     </div>
-
-                    {!isReadOnly && isSuperAdmin && (
-                        <div className="flex justify-center sm:justify-end border-t pt-3">
+                    <div className="flex items-center gap-1">
+                        {!isReadOnly && isSuperAdmin && (
                             <button
                                 onClick={handleAutoFillMonthlyShifts}
                                 disabled={isAutoFilling}
-                                className={`text-sm border px-4 py-2 rounded-lg items-center gap-2 font-bold shadow-sm transition-colors flex ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+                                title="自動填補當月空班"
+                                className={`p-2 rounded-lg border transition-colors ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
                             >
-                                <Clock size={16} />
-                                {isAutoFilling ? '正在填補班別...' : '自動填補當月空班'}
+                                <Clock size={18} />
                             </button>
-                        </div>
-                    )}
-                </div>
-
-                <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 text-xs text-indigo-900">
-                    <span className="font-bold">自動填補規則：</span> 六、日填入 <span className="font-bold">09O</span>；週一至週五一般員工填入 <span className="font-bold">09A</span>；主管、店長不分平假日填入 <span className="font-bold">09O</span>。只填補空白班別，休假與已排班別不會變動。
-                </div>
-
-                <div className="bg-white p-4 rounded-xl border shadow-sm">
-                    <div className="font-bold text-gray-800 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> 人員顏色與本月休假總覽</div>
-                    <div className="text-xs text-gray-500 mt-1">每位員工固定使用一個高對比顏色，無論休哪一種假都不會變色。</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                        {monthLeaveSummary.map(user => {
-                            const personColor = getPersonColor(user.uid);
-                            return (
-                                <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${personColor.badgeClassName}`}>
-                                    <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1.5 ${personColor.dotClassName}`} />
-                                    <span>{user.name}</span><span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
-                                </div>
-                            );
-                        })}
-                        {activeUsers.length === 0 && <div className="text-sm text-gray-400">尚無在職員工資料</div>}
+                        )}
+                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="下個月"><ChevronRight size={20} /></button>
                     </div>
                 </div>
 
@@ -1444,13 +1417,43 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                                             if (!user) return null;
                                             return <div key={assignmentIndex} className={`border rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1 ${personColor.cardClassName}`}><span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />{user.name}</span><span className="shrink-0">{getLeaveLabel(assignment.leaveType || 'unknown')}</span></div>;
                                         })}
-                                        <div className={`text-[11px] font-bold px-2 py-1 rounded ${isStaffShortage ? 'bg-amber-100 text-amber-800' : 'bg-gray-50 text-gray-600'}`}>{isStaffShortage ? `⚠️ 僅剩 ${workingUsers.length} 人上班` : `其餘 ${workingUsers.length} 人上班`}</div>
                                     </div>
                                 )}
                             </div>
                         );
                     })}
                 </div>
+
+                {/* 詳細資訊移至月曆下方，手機開啟時不影響月曆第一眼瀏覽。 */}
+                <details className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                    <summary className="cursor-pointer px-4 py-3 font-bold text-sm text-gray-700 flex items-center gap-2 hover:bg-gray-50">
+                        <Users size={17} className="text-indigo-600" /> 班表說明與人員顏色
+                    </summary>
+                    <div className="border-t p-4 space-y-4">
+                        <div className="text-xs text-gray-500">休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
+                        {!isReadOnly && isSuperAdmin && (
+                            <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 text-xs text-indigo-900">
+                                <span className="font-bold">自動填補規則：</span> 六、日填入 <span className="font-bold">09O</span>；週一至週五一般員工填入 <span className="font-bold">09A</span>；主管、店長不分平假日填入 <span className="font-bold">09O</span>。只填補空白班別，休假與已排班別不會變動。
+                            </div>
+                        )}
+                        <div>
+                            <div className="font-bold text-gray-800 text-sm">人員顏色與本月休假總覽</div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                {monthLeaveSummary.map(user => {
+                                    const personColor = getPersonColor(user.uid);
+                                    return (
+                                        <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${personColor.badgeClassName}`}>
+                                            <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1.5 ${personColor.dotClassName}`} />
+                                            <span>{user.name}</span><span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
+                                        </div>
+                                    );
+                                })}
+                                {activeUsers.length === 0 && <div className="text-sm text-gray-400">尚無在職員工資料</div>}
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
                 {selectedDate && <ShiftModal dateStr={selectedDate} onClose={() => setSelectedDate(null)} dbData={dbData} currentUserInfo={currentUserInfo} setEditingEvent={setEditingEvent} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} getUserColor={getUserColor} db={db} appId={appId} isReadOnly={isReadOnly} />}
             </div>
             <CompanyEventModal isOpen={!!editingEvent} onClose={() => setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
@@ -1950,7 +1953,7 @@ const calc = (uid) => {
 // ==========================================
 // 💰 薪資管理 (PayrollView)
 // ==========================================
-const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES }) => {
+const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [payrollData, setPayrollData] = useState({});
     const [payrollHistory, setPayrollHistory] = useState({});
@@ -2038,6 +2041,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
     };
 
     const changePayrollStatus = async (nextStatus) => {
+        if (!isSuperAdmin) return alert('只有管理員可以確認、鎖定或解除本月薪資。');
         const isLocking = nextStatus === 'locked';
         const confirmed = nextStatus === 'confirmed';
         if (isLocking && !window.confirm(`確定鎖定 ${targetMonth} 薪資？鎖定後將無法修改薪資欄位。`)) return;
@@ -2047,11 +2051,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             status: nextStatus,
             updatedAt: Date.now(),
             lockedAt: isLocking ? Date.now() : null,
-            lockedByName: isLocking ? '管理員' : '',
+            lockedByName: isLocking ? (currentUserInfo?.name || '管理員') : '',
             confirmedAt: confirmed ? Date.now() : null
         };
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), payload, { merge: true });
-        await writeAuditLog({ db, appId, actor: { name: '管理員' }, action: isLocking ? 'lock_payroll' : (confirmed ? 'confirm_payroll' : 'unlock_payroll'), targetType: 'payroll', targetId: targetMonth, detail: { status: nextStatus } });
+        await writeAuditLog({ db, appId, actor: { name: currentUserInfo?.name || '管理員' }, action: isLocking ? 'lock_payroll' : (confirmed ? 'confirm_payroll' : 'unlock_payroll'), targetType: 'payroll', targetId: targetMonth, detail: { status: nextStatus } });
     };
 
     const printPayrollSlip = (user, summary) => {
@@ -2071,6 +2075,21 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         return `$${roundedValue.toLocaleString('zh-TW')}`;
     };
 
+    const normalizePayrollLeaveType = (assignment = {}) => {
+        const rawLeaveType = String(assignment.leaveType || assignment.type || '').trim().toLowerCase();
+        const aliases = {
+            sick: 'sick',
+            medical: 'sick',
+            personal: 'personal',
+            annual: 'annual',
+            annualleave: 'annual',
+            annual_leave: 'annual',
+            annual-leave: 'annual'
+        };
+
+        return aliases[rawLeaveType] || '';
+    };
+
     const getLeaveSummary = (uid, monthStr) => {
         const summary = {
             sickHours: 0,
@@ -2088,30 +2107,35 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             if (dayData?.isClosed) return;
 
             const assignment = Array.isArray(dayData?.assignments)
-                ? dayData.assignments.find(item => item.uid === uid && item.type === 'LEAVE')
+                ? dayData.assignments.find(item => {
+                    if (item.uid !== uid) return false;
+                    return Boolean(normalizePayrollLeaveType(item));
+                })
                 : null;
 
             if (!assignment) return;
 
+            const normalizedLeaveType = normalizePayrollLeaveType(assignment);
             const leaveHours = resolveLeaveHours(assignment, shiftTypes);
             const detail = {
                 date: dateStr,
                 hours: leaveHours,
-                note: assignment.note || '',
-                useComp: assignment.useComp === true
+                note: assignment.note || assignment.reason || '',
+                useComp: assignment.useComp === true,
+                sourceType: assignment.type || 'LEAVE'
             };
 
-            if (assignment.leaveType === 'sick') {
+            if (normalizedLeaveType === 'sick') {
                 summary.sickHours += leaveHours;
                 summary.sickDetails.push(detail);
             }
 
-            if (assignment.leaveType === 'personal') {
+            if (normalizedLeaveType === 'personal') {
                 summary.personalHours += leaveHours;
                 summary.personalDetails.push(detail);
             }
 
-            if (assignment.leaveType === 'annual') {
+            if (normalizedLeaveType === 'annual') {
                 summary.annualHours += leaveHours;
                 summary.annualDetails.push(detail);
             }
@@ -2131,7 +2155,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             const dayData = shifts[dateStr];
             if (dayData?.isClosed) return;
             const assignment = Array.isArray(dayData?.assignments)
-                ? dayData.assignments.find(item => item.uid === uid && item.type === 'LEAVE' && item.leaveType === 'annual')
+                ? dayData.assignments.find(item => item.uid === uid && normalizePayrollLeaveType(item) === 'annual')
                 : null;
             if (assignment) usedHours += resolveLeaveHours(assignment, shiftTypes);
         });
@@ -2240,6 +2264,24 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
     return (
         <div className="space-y-4 pb-20">
+            <div className="sticky top-2 z-30 bg-slate-900 text-white rounded-2xl shadow-lg border border-slate-700 p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                        <div className="text-[11px] font-black tracking-widest text-slate-300">薪資操作台</div>
+                        <div className="font-black text-lg">{targetMonth} 薪資結算流程</div>
+                        <div className="text-xs text-slate-300 mt-1">先確認，再鎖定；鎖定後欄位不可修改。</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 items-center">
+                        <span className={`text-xs font-black px-3 py-2 rounded-lg border ${payrollStatus === 'locked' ? 'bg-red-500/20 text-red-100 border-red-300/50' : payrollStatus === 'confirmed' ? 'bg-amber-400/20 text-amber-100 border-amber-300/50' : 'bg-white/10 text-white border-white/20'}`}>目前：{getPayrollStatusLabel()}</span>
+                        {payrollStatus === 'draft' && <button onClick={() => changePayrollStatus('confirmed')} disabled={!isSuperAdmin} className={`text-xs font-black px-3 py-2 rounded-lg ${isSuperAdmin ? 'bg-amber-400 text-amber-950 hover:bg-amber-300' : 'bg-slate-600 text-slate-300 cursor-not-allowed'}`}>① 確認結算</button>}
+                        {payrollStatus === 'confirmed' && <button onClick={() => changePayrollStatus('locked')} disabled={!isSuperAdmin} className={`text-xs font-black px-3 py-2 rounded-lg ${isSuperAdmin ? 'bg-red-500 text-white hover:bg-red-400' : 'bg-slate-600 text-slate-300 cursor-not-allowed'}`}>② 鎖定薪資</button>}
+                        {payrollStatus === 'locked' && <button onClick={() => changePayrollStatus('draft')} disabled={!isSuperAdmin} className={`text-xs font-black px-3 py-2 rounded-lg ${isSuperAdmin ? 'bg-white text-red-700 hover:bg-red-50' : 'bg-slate-600 text-slate-300 cursor-not-allowed'}`}>解除鎖定</button>}
+                    </div>
+                </div>
+                {!isSuperAdmin && <div className="text-[11px] font-bold text-amber-200">目前登入帳號非管理員，可查看薪資資料，但不可確認、鎖定或解除鎖定。</div>}
+                {payrollStatus === 'locked' && <div className="text-[11px] font-bold bg-red-500/15 border border-red-300/30 text-red-100 px-3 py-2 rounded-lg">🔒 已鎖定{payrollLockedAt ? `｜${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜${payrollLockedBy}` : ''}</div>}
+            </div>
+
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
                 <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3">
                     <div>
@@ -2253,9 +2295,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                         </label>
                         <input type="month" value={targetMonth} onChange={event => setTargetMonth(event.target.value)} className="border rounded px-2 py-1.5 focus:outline-none focus:border-indigo-500" />
                         <span className={`text-xs font-black px-3 py-1.5 rounded-full border ${payrollStatus === 'locked' ? 'bg-red-50 text-red-700 border-red-200' : payrollStatus === 'confirmed' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>薪資狀態：{getPayrollStatusLabel()}</span>
-                        {payrollStatus === 'draft' && <button onClick={() => changePayrollStatus('confirmed')} className="text-xs font-black bg-amber-500 text-white px-3 py-1.5 rounded-lg hover:bg-amber-600">確認結算</button>}
-                        {payrollStatus === 'confirmed' && <button onClick={() => changePayrollStatus('locked')} className="text-xs font-black bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700">鎖定薪資</button>}
-                        {payrollStatus === 'locked' && <button onClick={() => changePayrollStatus('draft')} className="text-xs font-black bg-white text-red-600 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50">解除鎖定</button>}
+                        <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1.5 rounded">操作按鍵在上方「薪資操作台」</span>
                     </div>
                 </div>
                 {payrollStatus === 'locked' && <div className="bg-red-50 border border-red-100 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">本月薪資已鎖定{payrollLockedAt ? `｜鎖定時間：${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜操作人：${payrollLockedBy}` : ''}</div>}
@@ -2306,6 +2346,13 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                         </div>
 
                         {payrollStatus === 'locked' && <div className="mx-4 mt-4 bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-xs font-black text-gray-600">🔒 已鎖定：本月薪資欄位已停止編輯。管理員可在頁面上方按「解除鎖定」後再調整。</div>}
+                        <div className="p-4 bg-slate-50 border-b grid grid-cols-2 lg:grid-cols-4 gap-2">
+                            <div className="bg-white border rounded-xl p-3"><div className="text-[11px] font-bold text-gray-500">薪資結算基數</div><div className="mt-1 font-black text-gray-900">{formatMoney(summary.settlementBase)}</div></div>
+                            <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3"><div className="text-[11px] font-bold text-emerald-700">本月加項</div><div className="mt-1 font-black text-emerald-700">+{formatMoney(summary.totalAdditions)}</div></div>
+                            <div className="bg-red-50 border border-red-100 rounded-xl p-3"><div className="text-[11px] font-bold text-red-700">病假 / 事假扣薪</div><div className="mt-1 font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.personalDeduction)}</div></div>
+                            <div className="bg-violet-50 border border-violet-100 rounded-xl p-3"><div className="text-[11px] font-bold text-violet-700">特休</div><div className="mt-1 font-black text-violet-700">{summary.leaveSummary.annualHours} hr <span className="text-[10px] font-bold">扣薪 $0</span></div></div>
+                        </div>
+                        <div className="px-4 pt-4"><div className="text-xs font-black text-gray-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">建議核對順序：① 薪資結算基數　② 加項　③ 病假 / 事假扣薪　④ 特休時數（不扣薪）　⑤ 最後確認實領。</div></div>
                         <div className="p-4 grid xl:grid-cols-3 gap-4">
                             <div className="space-y-3">
                                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
@@ -3316,7 +3363,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={safeInventoryItems} currentUserInfo={currentUserInfo} />;
             case 'forms': return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
             case 'salary': return <SalaryView users={safeUsers} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
-            case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} />;
+            case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} />;
             case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} />;
             
             // 🟢 修正：只保留一個 settings，並加上空值保護
