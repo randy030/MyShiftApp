@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.2";
+const CURRENT_VERSION = "V14.0.0-alpha11.3";
 const CURRENT_RELEASE_NOTES = [
     '班表頁改為月曆優先：開啟後直接看到月份切換與月曆，不需要先滑過多個資訊區塊。',
     '門市名稱、月份切換與自動填補班別整合成精簡工具列，保留必要操作但降低手機版高度。',
@@ -1381,7 +1381,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                     <div className="flex items-center gap-1">
                         {!isReadOnly && isSuperAdmin && (
                             <button
-                                onClick={handleAutoFillMonthlyShifts}
+                                onClick={async (event) => { event.stopPropagation(); try { await handleAutoFillMonthlyShifts(); } catch (error) { console.error('自動填補按鍵執行失敗', error); setIsAutoFilling(false); alert('❌ 自動填補班別時發生錯誤，請重新整理後再試一次。'); } }}
                                 disabled={isAutoFilling}
                                 title="自動填補當月空班"
                                 className={`p-2 rounded-lg border transition-colors ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
@@ -3488,7 +3488,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                             </button>
                             {menuOpen && (
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
-                                    <DropdownItem onClick={() => {setView('payroll'); setMenuOpen(false)}} icon={Wallet} label={isSuperAdmin ? "薪資結算" : "時數結算"} />
+                                    <DropdownItem onClick={() => { setView(isSuperAdmin ? 'payroll' : 'salary'); setMenuOpen(false); }} icon={Wallet} label={isSuperAdmin ? '薪資結算' : '請假／時數明細'} />
                                     {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
                                     <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
                                     <div className="border-t my-2 border-gray-50"></div>
