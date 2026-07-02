@@ -2084,7 +2084,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             annual: 'annual',
             annualleave: 'annual',
             annual_leave: 'annual',
-            annual-leave: 'annual'
+            'annual-leave': 'annual'
         };
 
         return aliases[rawLeaveType] || '';
