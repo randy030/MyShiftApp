@@ -1076,60 +1076,118 @@ const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => 
 // ==========================================
 // 📋 出勤明細頁面 (AttendanceView)
 // ==========================================
-const AttendanceView = ({ users, currentDate, db, appId, shifts, shiftTypes = DEFAULT_SHIFT_TYPES }) => {
+const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin, setView }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [attendanceList, setAttendanceList] = useState([]);
     const [loading, setLoading] = useState(false);
+    const activeUsers = useMemo(() => (users || []).filter(user => !user?.isResigned && !user?.isViewer), [users]);
+    const [selectedUid, setSelectedUid] = useState(currentUserInfo?.uid || '');
+
+    useEffect(() => {
+        if (!isSuperAdmin && currentUserInfo?.uid) setSelectedUid(currentUserInfo.uid);
+    }, [isSuperAdmin, currentUserInfo?.uid]);
+
+    const selectedUser = useMemo(() => activeUsers.find(user => user.uid === selectedUid) || currentUserInfo || activeUsers[0] || null, [activeUsers, selectedUid, currentUserInfo]);
+
     useEffect(() => {
         setLoading(true);
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'clockRecords', targetMonth), (snap) => {
-            if (snap.exists()) {
-                const records = snap.data().records || [];
-                const grouped = {};
-                records.forEach(r => {
-                    const key = `${r.date}_${r.uid}`;
-                    if (!grouped[key]) grouped[key] = { date: r.date, uid: r.uid, name: r.name, in: null, out: null };
-                    if (r.type === 'IN') { if (!grouped[key].in || r.time < grouped[key].in) grouped[key].in = r.time; }
-                    if (r.type === 'OUT') { if (!grouped[key].out || r.time > grouped[key].out) grouped[key].out = r.time; }
-                });
-                const processedList = Object.values(grouped).map(g => {
-                    const dayShift = shifts[g.date]?.assignments?.find(a => a.uid === g.uid);
-                    const shiftInfo = shiftTypes.find(st => st.id === dayShift?.shiftCode);
-                    let status = [];
-                    if (shiftInfo) {
-                        if (g.in && g.in > shiftInfo.start) status.push('遲到');
-                        if (g.out && g.out < shiftInfo.end) status.push('早退');
-                        if (!g.in) status.push('缺卡(上)');
-                        if (!g.out) status.push('缺卡(下)');
-                        if (status.length === 0) status.push('正常');
-                    } else if (dayShift?.type === 'LEAVE') { status.push('請假'); } else { status.push('未排班'); }
-                    return { ...g, shiftInfo, status };
-                });
-                processedList.sort((a, b) => b.date.localeCompare(a.date));
-                setAttendanceList(processedList);
-            } else { setAttendanceList([]); }
+            const records = snap.exists() ? (snap.data().records || []) : [];
+            const grouped = {};
+            records.forEach(record => {
+                const key = `${record.date}_${record.uid}`;
+                if (!grouped[key]) grouped[key] = { date: record.date, uid: record.uid, name: record.name, in: null, out: null };
+                if (record.type === 'IN' && (!grouped[key].in || record.time < grouped[key].in)) grouped[key].in = record.time;
+                if (record.type === 'OUT' && (!grouped[key].out || record.time > grouped[key].out)) grouped[key].out = record.time;
+            });
+            const processed = Object.values(grouped).map(item => {
+                const assignment = shifts?.[item.date]?.assignments?.find(assign => assign.uid === item.uid);
+                const shiftInfo = (shiftTypes || []).find(shift => shift.id === assignment?.shiftCode);
+                const status = [];
+                if (assignment?.type === 'LEAVE') status.push('請假');
+                else if (shiftInfo) {
+                    if (!item.in) status.push('缺卡(上)');
+                    if (!item.out) status.push('缺卡(下)');
+                    if (item.in && item.in > shiftInfo.start) status.push('遲到');
+                    if (item.out && item.out < shiftInfo.end) status.push('早退');
+                    if (status.length === 0) status.push('正常');
+                } else status.push('未排班');
+                return { ...item, assignment, shiftInfo, status };
+            }).sort((a,b) => b.date.localeCompare(a.date));
+            setAttendanceList(processed);
             setLoading(false);
         });
         return () => unsub();
     }, [targetMonth, db, appId, shifts, shiftTypes]);
+
+    const monthAssignments = useMemo(() => Object.entries(shifts || {}).flatMap(([date, day]) => {
+        if (!date.startsWith(targetMonth) || day?.isClosed) return [];
+        return (Array.isArray(day?.assignments) ? day.assignments : []).filter(assign => assign.uid === selectedUser?.uid).map(assign => ({ date, ...assign }));
+    }), [shifts, targetMonth, selectedUser?.uid]);
+
+    const leaveRows = useMemo(() => monthAssignments.filter(assign => assign.type === 'LEAVE').map(assign => {
+        const leaveMap = { rostered: '自畫假', official: '排休', annual: '特休', annualLeave: '特休', annual_leave: '特休', 'annual-leave': '特休', sick: '病假', personal: '事假', menstrual: '生理假' };
+        const leaveType = String(assign.leaveType || '').trim();
+        const leaveLabel = leaveMap[leaveType] || leaveMap[String(assign.type || '').toLowerCase()] || leaveType || '請假';
+        const hours = resolveLeaveHours(assign, shiftTypes);
+        const base = Number(selectedUser?.salarySettlementBase || selectedUser?.salaryAmount || selectedUser?.salary || 0);
+        const hourly = base > 0 ? base / 30 / 8 : 0;
+        const deduction = leaveLabel === '病假' ? hourly * hours * 0.5 : leaveLabel === '事假' ? hourly * hours : 0;
+        return { ...assign, leaveLabel, hours, deduction };
+    }).sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, selectedUser, shiftTypes]);
+
+    const summary = useMemo(() => {
+        const scheduledHours = monthAssignments.filter(assign => assign.type !== 'LEAVE').reduce((sum, assign) => sum + calculateShiftHours(assign.shiftCode, shiftTypes), 0);
+        const userRecords = attendanceList.filter(record => record.uid === selectedUser?.uid);
+        const lateCount = userRecords.filter(record => record.status.includes('遲到')).length;
+        const missingCount = userRecords.filter(record => record.status.some(status => status.includes('缺卡'))).length;
+        const annualHours = leaveRows.filter(row => row.leaveLabel === '特休').reduce((sum, row) => sum + row.hours, 0);
+        const sickHours = leaveRows.filter(row => row.leaveLabel === '病假').reduce((sum, row) => sum + row.hours, 0);
+        const personalHours = leaveRows.filter(row => row.leaveLabel === '事假').reduce((sum, row) => sum + row.hours, 0);
+        return { scheduledHours, lateCount, missingCount, annualHours, sickHours, personalHours, userRecords };
+    }, [monthAssignments, attendanceList, selectedUser?.uid, leaveRows, shiftTypes]);
+
     const handleExportCSV = () => {
-        const rows = [['日期', '員工', '班別', '上班打卡', '下班打卡', '狀態']];
-        attendanceList.forEach(r => { const shiftStr = r.shiftInfo ? (r.shiftInfo.display || `${r.shiftInfo.start}~${r.shiftInfo.end}`) : '-'; rows.push([r.date, r.name, shiftStr, r.in || '', r.out || '', r.status.join(', ')]); });
-        exportToCSV(`出勤紀錄_${targetMonth}`, rows);
+        const rows = [['日期','員工','類型','班別／假別','上班打卡','下班打卡','狀態','時數','扣薪']];
+        const dailyMap = new Map();
+        attendanceList.filter(record => record.uid === selectedUser?.uid).forEach(record => dailyMap.set(record.date, record));
+        monthAssignments.forEach(assign => {
+            const record = dailyMap.get(assign.date);
+            if (assign.type === 'LEAVE') {
+                const row = leaveRows.find(item => item.date === assign.date);
+                rows.push([assign.date, selectedUser?.name || '', '請假', row?.leaveLabel || '請假', '', '', '請假', row?.hours || 0, row?.deduction || 0]);
+            } else {
+                const shift = (shiftTypes || []).find(item => item.id === assign.shiftCode);
+                rows.push([assign.date, selectedUser?.name || '', '出勤', shift?.label || assign.shiftCode || '-', record?.in || '', record?.out || '', record?.status?.join(', ') || '未打卡', calculateShiftHours(assign.shiftCode, shiftTypes), '']);
+            }
+        });
+        exportToCSV(`出勤統計_${selectedUser?.name || '員工'}_${targetMonth}`, rows);
     };
+
     return (
         <div className="space-y-4 pb-20">
-            <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm"><h2 className="font-bold flex gap-2 text-indigo-700"><History/> 出勤結算</h2><div className="flex gap-2"><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 focus:outline-none"/><button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button></div></div>
+            <div className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div><h2 className="font-bold flex items-center gap-2 text-indigo-700"><FileCheck/> 出勤統計</h2><p className="text-xs text-gray-400 mt-1">整合排班、打卡、請假與特休明細；員工可查看自己的資料。</p></div>
+                    <div className="flex gap-2 flex-wrap"><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none" />{isSuperAdmin && <select value={selectedUid} onChange={e=>setSelectedUid(e.target.value)} className="border rounded px-2 py-1.5 min-w-[130px]">{activeUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}</select>}<button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出明細</span></button></div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">已排班時數</div><div className="text-2xl font-black text-indigo-600 mt-1">{summary.scheduledHours} hr</div></div>
+                <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">特休使用</div><div className="text-2xl font-black text-purple-600 mt-1">{summary.annualHours} hr</div></div>
+                <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">遲到／缺卡</div><div className="text-2xl font-black text-orange-500 mt-1">{summary.lateCount} / {summary.missingCount}</div></div>
+                <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">病假／事假</div><div className="text-2xl font-black text-red-500 mt-1">{summary.sickHours} / {summary.personalHours} hr</div></div>
+            </div>
+
+            <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假與特休明細</h3><p className="text-xs text-gray-400 mt-1">病假、事假會顯示預估扣薪；特休扣薪為 $0。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
+                {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}</div><div className="text-xs text-gray-400 mt-1">{row.hours} 小時{row.note ? `｜${row.note}` : ''}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
+            </div>
+
             <div className="bg-white rounded-xl border overflow-hidden">
-                {loading ? <div className="p-8 text-center text-gray-400">載入中...</div> : attendanceList.length === 0 ? <div className="p-8 text-center text-gray-400">本月尚無打卡紀錄</div> : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">日期</th><th className="p-3">員工</th><th className="p-3 text-center">班別 (應到~應退)</th><th className="p-3 text-center">上班打卡</th><th className="p-3 text-center">下班打卡</th><th className="p-3">狀態</th></tr></thead><tbody>
-                                {attendanceList.map((r, i) => {
-                                    const isAbnormal = r.status.includes('遲到') || r.status.includes('早退') || r.status.includes('缺卡');
-                                    return (
-                                    <tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{r.date.substring(5)}</td><td className="p-3 font-bold">{r.name}</td><td className="p-3 text-center text-gray-500 text-xs">{r.shiftInfo ? <span className="bg-gray-100 px-2 py-0.5 rounded">{r.shiftInfo.label} ({r.shiftInfo.display || `${r.shiftInfo.start}~${r.shiftInfo.end}`})</span> : <span className="text-gray-300">-</span>}</td><td className={`p-3 text-center font-bold ${r.in && r.shiftInfo && r.in > r.shiftInfo.start ? 'text-red-500' : 'text-gray-800'}`}>{r.in || '-'}</td><td className={`p-3 text-center font-bold ${r.out && r.shiftInfo && r.out < r.shiftInfo.end ? 'text-red-500' : 'text-gray-800'}`}>{r.out || '-'}</td><td className="p-3 font-bold">{isAbnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs">{r.status.join(', ')}</span>}</td></tr>
-                                )})}
-                    </tbody></table></div>
-                )}
+                <div className="p-4 bg-gray-50 border-b"><h3 className="font-bold text-gray-700">每日出勤與打卡明細</h3></div>
+                {loading ? <div className="p-8 text-center text-gray-400">載入中...</div> : summary.userRecords.length === 0 ? <div className="p-8 text-center text-gray-400">本月尚無打卡紀錄</div> : <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">日期</th><th className="p-3">班別</th><th className="p-3 text-center">上班打卡</th><th className="p-3 text-center">下班打卡</th><th className="p-3">狀態</th></tr></thead><tbody>{summary.userRecords.map((record,index) => { const abnormal = record.status.some(status => status !== '正常'); return <tr key={`${record.date}-${index}`} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{record.date.substring(5)}</td><td className="p-3 text-xs text-gray-600">{record.shiftInfo?.label || '-'}</td><td className="p-3 text-center font-bold">{record.in || '-'}</td><td className="p-3 text-center font-bold">{record.out || '-'}</td><td className="p-3">{abnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs font-bold">{record.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs font-bold">正常</span>}</td></tr> })}</tbody></table></div>}
             </div>
         </div>
     );
@@ -3364,7 +3422,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             case 'forms': return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
             case 'salary': return <SalaryView users={safeUsers} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
             case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} />;
-            case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} />;
+            case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} setView={setView} />;
             
             // 🟢 修正：只保留一個 settings，並加上空值保護
             case 'settings': return <SettingsView users={safeUsers} currentUserInfo={currentUserInfo} inventoryItems={safeInventoryItems} shiftTypes={safeShiftTypes} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
@@ -3488,8 +3546,8 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                             </button>
                             {menuOpen && (
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
-                                    <DropdownItem onClick={() => { setView(isSuperAdmin ? 'payroll' : 'salary'); setMenuOpen(false); }} icon={Wallet} label={isSuperAdmin ? '薪資結算' : '請假／時數明細'} />
-                                    {isSuperAdmin && <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />}
+                                    {isSuperAdmin ? <DropdownItem onClick={() => { setView('payroll'); setMenuOpen(false); }} icon={Wallet} label="薪資結算" /> : null}
+                                    <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />
                                     <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
                                     <div className="border-t my-2 border-gray-50"></div>
                                     <DropdownItem onClick={() => {setView('settings'); setMenuOpen(false)}} icon={Settings} label="系統設定" />
