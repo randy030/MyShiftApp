@@ -10,13 +10,13 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.5";
+const CURRENT_VERSION = "V14.0.0-alpha11.6";
 const CURRENT_RELEASE_NOTES = [
-    '班表頁改為月曆優先：開啟後直接看到月份切換與月曆，不需要先滑過多個資訊區塊。',
-    '門市名稱、月份切換與自動填補班別整合成精簡工具列，保留必要操作但降低手機版高度。',
-    '人員顏色、休假總覽與自動填補規則移至月曆最下方的可展開「班表說明」，需要時再查看。',
-    '保留人員固定跳色、休假優先顯示、已排班與休假不覆蓋的既有邏輯。'
-] 
+    '手機月曆改為姓名優先：休假卡片會顯示「正儒自畫」、「秉錚休」等短格式，保留人員固定跳色。',
+    '桌機版仍保留完整姓名與完整假別；手機版優先保留人名與假別縮寫，避免只看到排休或自畫假。',
+    '修正首次開啟已排好班的月份時，Firebase 班表資料尚未到齊而先顯示全員上班的問題。',
+    '班表資料載入期間會顯示「班表載入中」，資料完成後自動刷新，不需要切換月份。'
+];
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
 const firebaseConfig = {
@@ -1328,6 +1328,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
     const { firstDay, days } = getMonthData(year, month);
     const { shifts, events, users } = dbData;
+    const isCalendarLoading = dbData.usersLoaded === false || dbData.shiftsLoaded === false;
 
     const activeUsers = useMemo(() => {
         return Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer);
@@ -1363,6 +1364,29 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         const fallbackLabels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
         return dbData.leaves.find(item => item.id === leaveType)?.label || fallbackLabels[leaveType] || '休假';
     };
+
+    // 手機月曆的格子寬度有限，因此姓名優先。
+    // 中文姓名取最後兩字：例如「梁正儒」顯示為「正儒」；英文姓名仍保留第一個單字。
+    const getMobileName = (name) => {
+        const compactName = String(name || '').replace(/\s+/g, '');
+        if (!compactName) return '員工';
+        if (/^[A-Za-z]/.test(compactName)) return compactName.split(/[-_]/)[0].slice(0, 6);
+        return compactName.length > 2 ? compactName.slice(-2) : compactName;
+    };
+
+    const getMobileLeaveSuffix = (leaveType) => {
+        const suffixMap = {
+            rostered: '自畫',
+            official: '休',
+            annual: '特休',
+            menstrual: '生理',
+            sick: '病',
+            personal: '事'
+        };
+        return suffixMap[leaveType] || '休';
+    };
+
+    const getMobileLeaveText = (name, leaveType) => `${getMobileName(name)}${getMobileLeaveSuffix(leaveType)}`;
 
     const monthLeaveSummary = useMemo(() => {
         return activeUsers.map(user => {
@@ -1514,11 +1538,22 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                                 {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
                                 {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div> : (
                                     <div className="space-y-1 flex-1">
-                                        {leaveAssignments.length === 0 ? <div className="text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1.5 font-bold">✓ 全員上班</div> : leaveAssignments.map((assignment, assignmentIndex) => {
+                                        {isCalendarLoading ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded px-2 py-1.5 font-bold animate-pulse">班表載入中…</div> : leaveAssignments.length === 0 ? <div className="text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1.5 font-bold">✓ 全員上班</div> : leaveAssignments.map((assignment, assignmentIndex) => {
                                             const user = users[assignment.uid];
                                             const personColor = getPersonColor(assignment.uid);
                                             if (!user) return null;
-                                            return <div key={assignmentIndex} className={`border rounded px-2 py-1.5 text-[11px] font-bold flex justify-between gap-1 ${personColor.cardClassName}`}><span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />{user.name}</span><span className="shrink-0">{getLeaveLabel(assignment.leaveType || 'unknown')}</span></div>;
+                                            return (
+                                                <div key={assignmentIndex} className={`border rounded px-1.5 py-1 text-[11px] font-bold ${personColor.cardClassName}`}>
+                                                    <div className="sm:hidden flex items-center gap-1 min-w-0">
+                                                        <span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />
+                                                        <span className="truncate">{getMobileLeaveText(user.name, assignment.leaveType || 'unknown')}</span>
+                                                    </div>
+                                                    <div className="hidden sm:flex justify-between gap-1 min-w-0">
+                                                        <span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />{user.name}</span>
+                                                        <span className="shrink-0">{getLeaveLabel(assignment.leaveType || 'unknown')}</span>
+                                                    </div>
+                                                </div>
+                                            );
                                         })}
                                     </div>
                                 )}
@@ -1533,7 +1568,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                         <Users size={17} className="text-indigo-600" /> 班表說明與人員顏色
                     </summary>
                     <div className="border-t p-4 space-y-4">
-                        <div className="text-xs text-gray-500">休假卡片以人員固定跳色顯示；未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
+                        <div className="text-xs text-gray-500">休假卡片以人員固定跳色顯示；手機優先顯示「姓名＋假別縮寫」，例如「正儒自畫」、「秉錚休」。未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
                         {!isReadOnly && isSuperAdmin && (
                             <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 text-xs text-indigo-900">
                                 <span className="font-bold">自動填補規則：</span> 六、日填入 <span className="font-bold">09O</span>；週一至週五一般員工填入 <span className="font-bold">09A</span>；主管、店長不分平假日填入 <span className="font-bold">09O</span>。只填補空白班別，休假與已排班別不會變動。
@@ -3157,7 +3192,8 @@ function App() {
     const [currentUserInfo, setCurrentUserInfo] = useState(null);
     const [dbData, setDbData] = useState({ 
         users: {}, shifts: {}, events: [], requests: [], signatures: [], 
-        gasReceipts: {}, payrollRecords: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES 
+        gasReceipts: {}, payrollRecords: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES,
+        usersLoaded: false, shiftsLoaded: false
     });
     const [view, setView] = useState('calendar');
     const [loading, setLoading] = useState(true);
@@ -3193,8 +3229,11 @@ function App() {
     }, []);
     useEffect(() => {
         if (!user) return;
-        const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, users: map })); });
-        const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, shifts: map })); });
+        // 登入、重新連線或切換帳號時，先將月曆資料標記為未完成。
+        // 避免班表資料尚未從 Firebase 回傳時，錯把空資料當成全員上班。
+        setDbData(prev => ({ ...prev, usersLoaded: false, shiftsLoaded: false }));
+        const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, users: map, usersLoaded: true })); });
+        const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, shifts: map, shiftsLoaded: true })); });
         const unsubSigs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, signatures: list })); });
         const unsubReqs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, requests: list })); });
         const unsubEvents = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, events: list })); });
