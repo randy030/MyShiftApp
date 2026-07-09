@@ -10,12 +10,12 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.6";
+const CURRENT_VERSION = "V14.0.0-alpha11.7";
 const CURRENT_RELEASE_NOTES = [
-    '手機月曆改為姓名優先：休假卡片會顯示短格式，保留人員固定跳色。',
-    '桌機版仍保留完整姓名與完整假別；手機版優先保留人名與假別縮寫，避免只看到排休或自畫假。',
-    '修正首次開啟已排好班的月份時，Firebase 班表資料尚未到齊而先顯示全員上班的問題。',
-    '班表資料載入期間會顯示「班表載入中」，資料完成後自動刷新，不需要切換月份。'
+    '特休改為以小時計算：員工與管理員申請特休時可自行輸入使用時數，不再固定用整天或 12 小時計算。',
+    '特休送審、核准、班表、出勤統計與薪資明細會同步保留實際特休時數，月底核對更精準。',
+    '特休時數輸入會自動防呆，不能小於 0.5 小時，也不能超過當日班別工時或 12 小時。',
+    '病假、事假、自畫假、排休維持原本邏輯；本次僅強化特休的小時制處理。'
 ];
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -87,7 +87,7 @@ const formatDateTime = (value) => {
     const mi = String(dateObj.getMinutes()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 };
-
+ 
 const writeAuditLog = async ({ db, appId, actor, action, targetType, targetId = '', detail = {}, createdAt = Date.now() }) => {
     try {
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'auditLogs'), {
@@ -153,7 +153,7 @@ const getAnnualLeaveDays = (startDateStr) => {
     if (diffYears >= 10) return Math.min(15 + Math.floor(diffYears - 9), 30);
     return 0;
 };
-
+ 
 const getAnnualLeaveHours = (startDateStr) => getAnnualLeaveDays(startDateStr) * 8;
 const calculateShiftHours = (shiftCode, shiftTypes = DEFAULT_SHIFT_TYPES) => {
     const shift = (shiftTypes || []).find(st => st.id === shiftCode);
@@ -175,19 +175,32 @@ const resolveLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
     if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
     return 8;
 };
+ 
+const resolveDefaultLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
+    if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
+    return 8;
+};
+ 
+const normalizeCustomLeaveHours = (value, fallbackHours = 8) => {
+    const fallback = Number(fallbackHours) > 0 ? Number(fallbackHours) : 8;
+    const raw = Number(value);
+    if (!Number.isFinite(raw) || raw <= 0) return fallback;
+    const rounded = Math.round(raw * 2) / 2;
+    return Math.max(0.5, Math.min(rounded, Math.max(fallback, 12)));
+};
 const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = '', leaveTypes = [], shiftTypes = DEFAULT_SHIFT_TYPES }) => {
     let monthStats = { ot: 0, leaves: {} };
     let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnualHours: 0 };
     let otHistory = [];
     let monthOtHistory = [];
-
+ 
     Object.keys(shifts || {}).forEach(date => {
         if (!String(date).startsWith(targetYear || '')) return;
         const data = shifts?.[date];
         if (data?.isClosed) return;
         const assign = Array.isArray(data?.assignments) ? data.assignments.find(a => a.uid === uid) : null;
         if (!assign) return;
-
+ 
         if (assign.type === 'LEAVE') {
             const lType = assign.leaveType || 'unknown';
             const typeInfo = (leaveTypes || []).find(t => t.id === lType);
@@ -214,7 +227,7 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
                 else if (lType !== 'annual' && lType !== 'menstrual') monthStats.leaves[lType].deductHours += hrs;
             }
         }
-
+ 
         if (assign.otHours && assign.otConfirmed) {
             const hrs = parseFloat(assign.otHours);
             if (hrs > 0) yearStats.otEarned += hrs;
@@ -226,10 +239,10 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
             }
         }
     });
-
+ 
     otHistory.sort((a, b) => b.date.localeCompare(a.date));
     monthOtHistory.sort((a, b) => b.date.localeCompare(a.date));
-
+ 
     return {
         monthStats,
         yearStats,
@@ -238,7 +251,7 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
         balance: yearStats.otEarned - yearStats.compHoursUsed
     };
 };
-
+ 
 const DEFAULT_LEAVE_TYPES = [
     { id: 'rostered', label: '自畫假', deduct: false },
     { id: 'official', label: '排休', deduct: false }, 
@@ -556,7 +569,7 @@ const StartupGuardFallback = ({ title = 'LOADING MODULE...', detail = '資料初
         </div>
     </div>
 );
-
+ 
 const ViewSignatureModal = ({ sigData, onClose }) => {
     if (!sigData) return null;
     const handlePrint = () => { window.print(); };
@@ -700,12 +713,12 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 // ==========================================
 // 📦 庫存盤點頁面 (InventoryView) - 🔴 V8.6 歷史紀錄查詢功能
 // ==========================================
-
+ 
 const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
     const items = useMemo(() => prepareInventoryItems(inventoryItems), [inventoryItems]);
     const categories = useMemo(() => [...new Set(items.map(i => i.category).filter(Boolean))], [items]);
     const draftKey = `inventoryDraft_${appId}_${currentUserInfo?.uid || 'guest'}`;
-
+ 
     const [mode, setMode] = useState('count');
     const [activeTab, setActiveTab] = useState(categories[0] || '');
     const [records, setRecords] = useState({});
@@ -713,11 +726,11 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
     const [selectedHistory, setSelectedHistory] = useState(null);
     const [editingRecordDate, setEditingRecordDate] = useState(null);
     const [editingRecordId, setEditingRecordId] = useState(null);
-
+ 
     useEffect(() => {
         if (categories.length > 0 && !categories.includes(activeTab)) setActiveTab(categories[0] || '');
     }, [categories, activeTab]);
-
+ 
     useEffect(() => {
         try {
             const savedDraft = localStorage.getItem(draftKey);
@@ -734,7 +747,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             console.error('讀取盤點暫存失敗', e);
         }
     }, [draftKey]);
-
+ 
     useEffect(() => {
         try {
             if (Object.keys(records).length === 0 && !editingRecordDate && !editingRecordId) {
@@ -752,7 +765,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             console.error('儲存盤點暫存失敗', e);
         }
     }, [records, activeTab, editingRecordDate, editingRecordId, draftKey]);
-
+ 
     useEffect(() => {
         if (mode === 'history') {
             const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords'), (snap) => {
@@ -764,11 +777,11 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             return () => unsub();
         }
     }, [mode, db, appId]);
-
+ 
     const filteredItems = items.filter(i => i.category === activeTab);
     const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * Number(item.price || 0)), 0), [items, records]);
     const roundedTotalValue = useMemo(() => Math.ceil(totalValue), [totalValue]);
-
+ 
     const resetDraft = () => {
         setRecords({});
         setEditingRecordDate(null);
@@ -779,7 +792,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             console.error('清除盤點暫存失敗', e);
         }
     };
-
+ 
     const loadHistoryForEdit = (hist) => {
         const nextRecords = hist?.data && typeof hist.data === 'object' ? hist.data : {};
         setRecords(nextRecords);
@@ -791,14 +804,14 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         if (firstCategory) setActiveTab(firstCategory);
         alert(`已載入 ${hist?.date || ''} 的盤點資料，請直接修改後按「更新檔案」儲存。`);
     };
-
+ 
     const handleCountChange = (id, delta) => {
         setRecords(prev => {
             const current = prev[id] || 0;
             return { ...prev, [id]: Math.max(0, current + delta) };
         });
     };
-
+ 
     const handleInputChange = (id, val) => {
         const num = parseFloat(val);
         if (!Number.isNaN(num) && num >= 0) setRecords(prev => ({ ...prev, [id]: num }));
@@ -808,7 +821,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             return nextRecords;
         });
     };
-
+ 
     const handleSave = async () => {
         if (Object.keys(records).length === 0) return alert('尚未填寫任何盤點數量！');
         const now = Date.now();
@@ -819,9 +832,9 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         const nextEditCount = editingRecordId ? Number(existingHistory?.editCount || 0) + 1 : 0;
         const actionLabel = editingRecordId ? `更新 ${targetDate} 的盤點紀錄` : '送出今日盤點結果';
         if (!window.confirm(`確定要${actionLabel}嗎？
-
+ 
 儲存後會保留在歷史紀錄中，並清空目前暫存。`)) return;
-
+ 
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', targetRecordId), {
             id: targetRecordId,
             date: targetDate,
@@ -834,18 +847,18 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             editCount: nextEditCount,
             lastEditedAt: editingRecordId ? now : null
         }, { merge: true });
-
+ 
         alert(`✅ 盤點資料已成功${editingRecordId ? '更新' : '儲存'}至雲端！`);
         resetDraft();
         setSelectedHistory(null);
         setMode('history');
     };
-
+ 
     const handleClearDraft = () => {
         if (!window.confirm('確定要清空目前盤點暫存嗎？')) return;
         resetDraft();
     };
-
+ 
     const handleExportCSV = () => {
         const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
@@ -859,7 +872,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
         exportToCSV(`當前盤點表_${targetDate}`, rows);
     };
-
+ 
     const handleExportHistoryCSV = (hist) => {
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
         let exportTotal = 0;
@@ -872,7 +885,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
         exportToCSV(`歷史盤點紀錄_${hist?.date || '未命名'}`, rows);
     };
-
+ 
     if (items.length === 0) {
         return (
             <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
@@ -882,7 +895,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
             </div>
         );
     }
-
+ 
     return (
         <div className="max-w-2xl mx-auto pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row justify-between items-center mb-4 shadow-sm gap-3">
@@ -1002,7 +1015,7 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         </div>
     );
 };
-
+ 
 // ==========================================
 // 📍 GPS 打卡頁面 (ClockView)// ==========================================
 // 📍 GPS 打卡頁面 (ClockView)
@@ -1083,13 +1096,13 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
     const [loading, setLoading] = useState(false);
     const activeUsers = useMemo(() => (users || []).filter(user => !user?.isResigned && !user?.isViewer), [users]);
     const [selectedUid, setSelectedUid] = useState(currentUserInfo?.uid || '');
-
+ 
     useEffect(() => {
         if (!isSuperAdmin && currentUserInfo?.uid) setSelectedUid(currentUserInfo.uid);
     }, [isSuperAdmin, currentUserInfo?.uid]);
-
+ 
     const selectedUser = useMemo(() => activeUsers.find(user => user.uid === selectedUid) || currentUserInfo || activeUsers[0] || null, [activeUsers, selectedUid, currentUserInfo]);
-
+ 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (snap) => {
             const data = snap.exists() ? snap.data() : {};
@@ -1101,7 +1114,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         });
         return () => unsub();
     }, [targetMonth, db, appId]);
-
+ 
     useEffect(() => {
         setLoading(true);
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'clockRecords', targetMonth), (snap) => {
@@ -1132,12 +1145,12 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         });
         return () => unsub();
     }, [targetMonth, db, appId, shifts, shiftTypes]);
-
+ 
     const monthAssignments = useMemo(() => Object.entries(shifts || {}).flatMap(([date, day]) => {
         if (!date.startsWith(targetMonth) || day?.isClosed) return [];
         return (Array.isArray(day?.assignments) ? day.assignments : []).filter(assign => assign.uid === selectedUser?.uid).map(assign => ({ date, ...assign }));
     }), [shifts, targetMonth, selectedUser?.uid]);
-
+ 
     const leaveRows = useMemo(() => monthAssignments.filter(assign => assign.type === 'LEAVE').map(assign => {
         const leaveMap = {
             rostered: '自畫假',
@@ -1158,7 +1171,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         const deduction = leaveLabel === '病假' ? hourly * hours * 0.5 : leaveLabel === '事假' ? hourly * hours : 0;
         return { ...assign, leaveLabel, hours, deduction, reason: assign.note || assign.reason || '未填寫理由' };
     }).sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, selectedUser, shiftTypes]);
-
+ 
     const overtimeRows = useMemo(() => monthAssignments
         .filter(assign => assign.type !== 'LEAVE' && Number(assign.otHours) !== 0 && assign.otConfirmed)
         .map(assign => ({
@@ -1168,7 +1181,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
             shiftLabel: (shiftTypes || []).find(shift => shift.id === assign.shiftCode)?.label || assign.shiftCode || '-'
         }))
         .sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, shiftTypes]);
-
+ 
     const summary = useMemo(() => {
         const scheduledHours = monthAssignments.filter(assign => assign.type !== 'LEAVE').reduce((sum, assign) => sum + calculateShiftHours(assign.shiftCode, shiftTypes), 0);
         const userRecords = attendanceList.filter(record => record.uid === selectedUser?.uid);
@@ -1181,13 +1194,13 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         const compHours = overtimeRows.filter(row => row.hours < 0).reduce((sum, row) => sum + Math.abs(row.hours), 0);
         return { scheduledHours, lateCount, missingCount, annualHours, sickHours, personalHours, overtimeHours, compHours, userRecords };
     }, [monthAssignments, attendanceList, selectedUser?.uid, leaveRows, overtimeRows, shiftTypes]);
-
+ 
     const getPayrollStatusLabel = () => {
         if (payrollLockInfo.status === 'locked') return '已鎖定';
         if (payrollLockInfo.status === 'confirmed') return '已結算待鎖定';
         return '未結算';
     };
-
+ 
     const handleExportCSV = () => {
         const rows = [['日期','員工','類型','班別／假別','時數','理由／備註','扣薪／補休影響']];
         leaveRows.forEach(row => rows.push([row.date, selectedUser?.name || '', '請假', row.leaveLabel, row.hours, row.reason, row.deduction > 0 ? `扣薪 ${Math.round(row.deduction)}` : '扣薪 0']));
@@ -1195,7 +1208,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         attendanceList.filter(record => record.uid === selectedUser?.uid).forEach(record => rows.push([record.date, selectedUser?.name || '', '打卡', record.shiftInfo?.label || '-', '', record.status.join(', '), `${record.in || '-'} ~ ${record.out || '-'}`]));
         exportToCSV(`出勤統計_${selectedUser?.name || '員工'}_${targetMonth}`, rows);
     };
-
+ 
     return (
         <div className="space-y-4 pb-20">
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
@@ -1204,29 +1217,29 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
                     <div className="flex gap-2 flex-wrap"><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none" />{isSuperAdmin && <select value={selectedUid} onChange={e=>setSelectedUid(e.target.value)} className="border rounded px-2 py-1.5 min-w-[130px]">{activeUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}</select>}<button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出明細</span></button></div>
                 </div>
             </div>
-
+ 
             <div className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${payrollLockInfo.status === 'locked' ? 'bg-red-50 border-red-200' : payrollLockInfo.status === 'confirmed' ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
                 <div><div className="font-black text-gray-800">{targetMonth} 月結狀態：{getPayrollStatusLabel()}</div><div className="text-xs text-gray-500 mt-1">此頁明細會依薪資結算月份保存；薪資鎖定後，請假、特休、加班與補休明細維持唯讀供月底核對。</div></div>
                 <div className="text-xs font-bold text-gray-600">{payrollLockInfo.lockedAt ? `鎖定時間：${formatDateTime(payrollLockInfo.lockedAt)}${payrollLockInfo.lockedByName ? `｜${payrollLockInfo.lockedByName}` : ''}` : '尚未鎖定'}</div>
             </div>
-
+ 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">已排班時數</div><div className="text-2xl font-black text-indigo-600 mt-1">{summary.scheduledHours} hr</div></div>
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">特休使用</div><div className="text-2xl font-black text-purple-600 mt-1">{summary.annualHours} hr</div></div>
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">加班／補休</div><div className="text-2xl font-black text-teal-600 mt-1">{summary.overtimeHours} / {summary.compHours} hr</div></div>
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">病假／事假</div><div className="text-2xl font-black text-red-500 mt-1">{summary.sickHours} / {summary.personalHours} hr</div></div>
             </div>
-
+ 
             <div className="bg-white border rounded-xl overflow-hidden">
                 <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假、特休明細</h3><p className="text-xs text-gray-400 mt-1">完整保留假別、時數、申請理由與病假／事假扣薪影響。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
                 {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}　{row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">理由／備註：{row.reason}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
             </div>
-
+ 
             <div className="bg-white border rounded-xl overflow-hidden">
                 <div className="p-4 border-b bg-gray-50"><h3 className="font-bold text-gray-700">加班／補休明細</h3><p className="text-xs text-gray-400 mt-1">只列出已確認的加班或補休扣抵，並保留原因供薪資結算核對。</p></div>
                 {overtimeRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有已確認的加班或補休紀錄</div> : <div className="divide-y">{overtimeRows.map((row, index) => <div key={`${row.date}-ot-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.hours > 0 ? '加班' : '補休扣抵'}　{row.hours > 0 ? `+${row.hours}` : row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">班別：{row.shiftLabel}｜理由／備註：{row.reason}</div></div><div className={row.hours > 0 ? 'font-black text-orange-600' : 'font-black text-green-600'}>{row.hours > 0 ? `加班 +${row.hours} hr` : `補休 ${Math.abs(row.hours)} hr`}</div></div>)}</div>}
             </div>
-
+ 
             <div className="bg-white rounded-xl border overflow-hidden">
                 <div className="p-4 bg-gray-50 border-b"><h3 className="font-bold text-gray-700">每日出勤與打卡明細</h3></div>
                 {loading ? <div className="p-8 text-center text-gray-400">載入中...</div> : summary.userRecords.length === 0 ? <div className="p-8 text-center text-gray-400">本月尚無打卡紀錄</div> : <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">日期</th><th className="p-3">班別</th><th className="p-3 text-center">上班打卡</th><th className="p-3 text-center">下班打卡</th><th className="p-3">狀態</th></tr></thead><tbody>{summary.userRecords.map((record,index) => { const abnormal = record.status.some(status => status !== '正常'); return <tr key={`${record.date}-${index}`} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{record.date.substring(5)}</td><td className="p-3 text-xs text-gray-600">{record.shiftInfo?.label || '-'}</td><td className="p-3 text-center font-bold">{record.in || '-'}</td><td className="p-3 text-center font-bold">{record.out || '-'}</td><td className="p-3">{abnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs font-bold">{record.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs font-bold">正常</span>}</td></tr> })}</tbody></table></div>}
@@ -1258,12 +1271,12 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
     const pendingLeaveRequests = (dbData.requests || []).filter(request => request.type === 'leave_request' && request.status === 'pending');
     const monthPayrollRecords = dbData.payrollRecords || {};
     const hasPayrollRecords = Object.keys(monthPayrollRecords).length > 0;
-
+ 
     const getLeaveLabel = (leaveType) => {
         const labels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
         return labels[leaveType] || '休假';
     };
-
+ 
     return (
         <div className="max-w-6xl mx-auto space-y-5 pb-20">
             <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -1273,7 +1286,7 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
                 </div>
                 <button onClick={() => setView('calendar')} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-indigo-700 shadow-sm">查看本月排班</button>
             </div>
-
+ 
             <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <button onClick={() => setView('calendar')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
                     <div className="text-xs font-black text-indigo-600">今日休假</div>
@@ -1296,7 +1309,7 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
                     <div className="mt-2 text-xs text-gray-500">{isSuperAdmin ? '點此進入薪資結算中心' : '可查看個人時數與薪資資料'}</div>
                 </button>
             </div>
-
+ 
             <div className="grid lg:grid-cols-2 gap-4">
                 <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
                     <div className="p-4 border-b bg-gray-50 font-black text-gray-800 flex items-center gap-2"><Calendar size={17} className="text-indigo-600" /> 今日休假與人力</div>
@@ -1318,7 +1331,7 @@ const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
         </div>
     );
 };
-
+ 
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
     const [selectedDate, setSelectedDate] = useState(null);
     const [editingEvent, setEditingEvent] = useState(null);
@@ -1329,17 +1342,17 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
     const { firstDay, days } = getMonthData(year, month);
     const { shifts, events, users } = dbData;
     const isCalendarLoading = dbData.usersLoaded === false || dbData.shiftsLoaded === false;
-
+ 
     const activeUsers = useMemo(() => {
         return Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer);
     }, [users]);
-
+ 
     const sortedUserIds = useMemo(() => {
         return activeUsers
             .map(user => user.uid)
             .sort((a, b) => String(users[a]?.name || '').localeCompare(String(users[b]?.name || ''), 'zh-Hant'));
     }, [activeUsers, users]);
-
+ 
     // 以「人員」為固定跳色，而不是以假別著色。
     // 顏色刻意選藍、黃、綠、紫、橘、紅，避免相近色造成誤判。
     const PERSON_COLOR_STYLES = [
@@ -1350,21 +1363,21 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         { cardClassName: 'bg-orange-50 border-orange-400 text-orange-900', badgeClassName: 'bg-orange-100 border-orange-300 text-orange-800', dotClassName: 'bg-orange-500' },
         { cardClassName: 'bg-rose-50 border-rose-400 text-rose-900', badgeClassName: 'bg-rose-100 border-rose-300 text-rose-800', dotClassName: 'bg-rose-600' }
     ];
-
+ 
     const getPersonColor = (uid) => {
         const idx = sortedUserIds.indexOf(uid);
         if (idx < 0) return { cardClassName: 'bg-gray-50 border-gray-300 text-gray-700', badgeClassName: 'bg-gray-100 border-gray-300 text-gray-700', dotClassName: 'bg-gray-500' };
         return PERSON_COLOR_STYLES[idx % PERSON_COLOR_STYLES.length];
     };
-
+ 
     const getUserColor = (uid) => getPersonColor(uid).cardClassName;
     const getDateString = (day) => `${monthStr}-${String(day).padStart(2, '0')}`;
-
+ 
     const getLeaveLabel = (leaveType) => {
         const fallbackLabels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
         return dbData.leaves.find(item => item.id === leaveType)?.label || fallbackLabels[leaveType] || '休假';
     };
-
+ 
     // 手機月曆的格子寬度有限，因此姓名優先。
     // 中文姓名取最後兩字：例如「梁正儒」顯示為「正儒」；英文姓名仍保留第一個單字。
     const getMobileName = (name) => {
@@ -1373,7 +1386,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         if (/^[A-Za-z]/.test(compactName)) return compactName.split(/[-_]/)[0].slice(0, 6);
         return compactName.length > 2 ? compactName.slice(-2) : compactName;
     };
-
+ 
     const getMobileLeaveSuffix = (leaveType) => {
         const suffixMap = {
             rostered: '自畫',
@@ -1385,9 +1398,9 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         };
         return suffixMap[leaveType] || '休';
     };
-
+ 
     const getMobileLeaveText = (name, leaveType) => `${getMobileName(name)}${getMobileLeaveSuffix(leaveType)}`;
-
+ 
     const monthLeaveSummary = useMemo(() => {
         return activeUsers.map(user => {
             let leaveDays = 0;
@@ -1399,22 +1412,22 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             return { ...user, leaveDays };
         });
     }, [activeUsers, days, monthStr, shifts]);
-
+ 
     const getDefaultShiftCode = (user, dateObj) => {
         const dayOfWeek = dateObj.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         const isManagement = user?.role === 'boss' || user?.role === 'supervisor' || user?.isAdmin === true || user?.isManager === true;
-
+ 
         // 六、日：所有在職人員補 09O。
         // 週一至週五：主管、店長補 09O；其餘員工補 09A。
         if (isWeekend || isManagement) return '09O';
         return '09A';
     };
-
+ 
     const handleAutoFillMonthlyShifts = async () => {
         if (isReadOnly || !isSuperAdmin) return;
         if (activeUsers.length === 0) return alert('目前沒有可填補班別的在職員工。');
-
+ 
         const confirmed = window.confirm(
             `確定要自動填補 ${year} 年 ${month + 1} 月所有「空白班別」嗎？\n\n` +
             '• 六、日：自動填入 09O\n' +
@@ -1423,41 +1436,41 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             '系統只會補空白班別，不會覆蓋既有班別、休假或店休。'
         );
         if (!confirmed) return;
-
+ 
         setIsAutoFilling(true);
         let filledCount = 0;
         let affectedDateCount = 0;
-
+ 
         try {
             for (let day = 1; day <= days; day += 1) {
                 const dateStr = getDateString(day);
                 const dayData = shifts[dateStr] || { assignments: [] };
                 if (dayData.isClosed) continue;
-
+ 
                 const nextAssignments = Array.isArray(dayData.assignments) ? dayData.assignments.map(item => ({ ...item })) : [];
                 const dateObj = new Date(year, month, day);
                 let changed = false;
-
+ 
                 activeUsers.forEach(user => {
                     const existingAssignment = nextAssignments.find(item => item.uid === user.uid);
-
+ 
                     // 休假資料完全保留；有班別者亦不修改。
                     if (existingAssignment?.type === 'LEAVE') return;
                     if (existingAssignment?.shiftCode) return;
-
+ 
                     const shiftCode = getDefaultShiftCode(user, dateObj);
-
+ 
                     if (existingAssignment) {
                         existingAssignment.type = 'WORK';
                         existingAssignment.shiftCode = shiftCode;
                     } else {
                         nextAssignments.push({ uid: user.uid, type: 'WORK', shiftCode });
                     }
-
+ 
                     filledCount += 1;
                     changed = true;
                 });
-
+ 
                 if (changed) {
                     affectedDateCount += 1;
                     await setDoc(
@@ -1467,7 +1480,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                     );
                 }
             }
-
+ 
             alert(filledCount > 0
                 ? `✅ 自動填補完成！已補上 ${filledCount} 筆空白班別，共影響 ${affectedDateCount} 天。`
                 : '✅ 本月沒有需要填補的空白班別。'
@@ -1479,7 +1492,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
             setIsAutoFilling(false);
         }
     };
-
+ 
     const handleSaveEvent = async (eventData) => {
         const isEditing = !!eventData.id;
         const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
@@ -1488,13 +1501,13 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
         setEditingEvent(null);
         alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。`);
     };
-
+ 
     const handleDeleteEvent = async (eventId) => {
         if (!window.confirm('確定要刪除這個行程嗎？')) return;
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId));
         setEditingEvent(null);
     };
-
+ 
     return (
         <>
             <div className="space-y-4">
@@ -1519,7 +1532,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                         <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="下個月"><ChevronRight size={20} /></button>
                     </div>
                 </div>
-
+ 
                 <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
                     {['日', '一', '二', '三', '四', '五', '六'].map(day => <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>)}
                     {Array.from({ length: firstDay }).map((_, index) => <div key={`empty-${index}`} className="min-h-[148px] border-b border-r bg-gray-50/30" />)}
@@ -1561,7 +1574,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                         );
                     })}
                 </div>
-
+ 
                 {/* 詳細資訊移至月曆下方，手機開啟時不影響月曆第一眼瀏覽。 */}
                 <details className="bg-white rounded-xl border shadow-sm overflow-hidden">
                     <summary className="cursor-pointer px-4 py-3 font-bold text-sm text-gray-700 flex items-center gap-2 hover:bg-gray-50">
@@ -1591,7 +1604,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                         </div>
                     </div>
                 </details>
-
+ 
                 {selectedDate && <ShiftModal dateStr={selectedDate} onClose={() => setSelectedDate(null)} dbData={dbData} currentUserInfo={currentUserInfo} setEditingEvent={setEditingEvent} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} getUserColor={getUserColor} db={db} appId={appId} isReadOnly={isReadOnly} />}
             </div>
             <CompanyEventModal isOpen={!!editingEvent} onClose={() => setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
@@ -1613,12 +1626,12 @@ const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent
     const yearStr = dateStr.substring(0, 4);
     const monthStr = dateStr.substring(0, 7);
   
-
+ 
 const getYearlyBalance = (uid, yearToFind) => {
     const stats = getUserYearlyTimeStats({ shifts, uid, targetYear: yearToFind, leaveTypes: leaves, shiftTypes: shiftsDef || DEFAULT_SHIFT_TYPES });
     return stats.balance;
 };
-
+ 
     const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); setExpanded(null); };
     
     const toggleClosed = async () => { 
@@ -1646,7 +1659,7 @@ const getYearlyBalance = (uid, yearToFind) => {
     };
   
     // 🟢 手術一：修改請假邏輯，不論有無代班，員工申請皆須簽核
-    const toggle = async (uid, type, lType = null, subUid = null, useComp = false) => {
+    const toggle = async (uid, type, lType = null, subUid = null, useComp = false, customLeaveHours = null) => {
         const isMe = uid === currentUserInfo.uid;
         if (!isSuperAdmin && !isMe) return alert("無權限");
         if (isClosed) return alert("本日店休");
@@ -1657,7 +1670,8 @@ const getYearlyBalance = (uid, yearToFind) => {
                 let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
                 const idx = next.findIndex(a => a.uid === uid);
                 const baseAssign = idx >= 0 ? next[idx] : null;
-                const leaveHours = resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+                const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+                const leaveHours = lType === 'annual' ? normalizeCustomLeaveHours(customLeaveHours, defaultLeaveHours) : resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
                 const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, useComp: ['sick', 'personal'].includes(lType) ? useComp : false, timestamp: Date.now() };
                 if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
                 await update({ assignments: next });
@@ -1681,7 +1695,7 @@ const getYearlyBalance = (uid, yearToFind) => {
                         alert("✅ 自畫假已直接寫入班表，無需主管審核。");
                         return;
                     }
-
+ 
                     const duplicatedReqs = (requests || []).filter(r => r.type === 'leave_request' && (r.uid === currentUserInfo.uid) && r.date === dateStr);
                     await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
@@ -1691,6 +1705,7 @@ const getYearlyBalance = (uid, yearToFind) => {
                         date: dateStr,
                         leaveType: lType,
                         leaveLabel: leaveLabel,
+                        hours: lType === 'annual' ? normalizeCustomLeaveHours(customLeaveHours, resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES)) : resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES),
                         subUid: subUid || null,
                         subName: subUid ? (users[subUid]?.name || '') : '',
                         useComp: ['sick', 'personal'].includes(lType) ? useComp : false,
@@ -1896,6 +1911,11 @@ const getYearlyBalance = (uid, yearToFind) => {
                               <input id={`use-comp-${u.uid}`} type="checkbox" className="accent-indigo-600" />
                               病假 / 事假申請時，使用補休時數扣抵
                           </label>
+                          <div className="grid grid-cols-1 gap-1 mb-3 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2">
+                              <label className="text-xs text-violet-700 font-black">特休使用時數（小時）</label>
+                              <input id={`annual-hours-${u.uid}`} type="number" min="0.5" step="0.5" defaultValue={resolveDefaultLeaveHours(assign, shiftsDef || DEFAULT_SHIFT_TYPES)} className="w-full border border-violet-200 rounded px-2 py-1.5 text-sm font-bold text-violet-800 focus:outline-none focus:border-violet-500" />
+                              <div className="text-[10px] text-violet-600 font-bold">只在點選「特休」時套用；可輸入 0.5、1、2、4、8 小時等，不再固定整天。</div>
+                          </div>
                           <div className="grid grid-cols-3 gap-2">
                               {leaves.map(lt => {
                                   if (lt.id === 'official') return null;
@@ -1931,7 +1951,7 @@ const getYearlyBalance = (uid, yearToFind) => {
   
                                   const btnClass = limitReached ? (isSuperAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed') : (lt.id === 'rostered' || lt.id === 'official' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-sm' : 'bg-white hover:bg-gray-100 shadow-sm');
                                   return (
-                                      <button key={lt.id} onClick={() => { if (limitReached) { if (isSuperAdmin) { if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return; } else { alert(`🚫 拒絕：${limitMsg}`); return; } } const subVal = document.getElementById(`sub-select-${u.uid}`).value; const useCompChecked = ['sick', 'personal'].includes(lt.id) ? !!document.getElementById(`use-comp-${u.uid}`)?.checked : false; toggle(u.uid,'LEAVE',lt.id, subVal || null, useCompChecked); }} className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}>
+                                      <button key={lt.id} onClick={() => { if (limitReached) { if (isSuperAdmin) { if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return; } else { alert(`🚫 拒絕：${limitMsg}`); return; } } const subVal = document.getElementById(`sub-select-${u.uid}`).value; const useCompChecked = ['sick', 'personal'].includes(lt.id) ? !!document.getElementById(`use-comp-${u.uid}`)?.checked : false; const annualHoursInput = document.getElementById(`annual-hours-${u.uid}`)?.value; const customHours = lt.id === 'annual' ? annualHoursInput : null; toggle(u.uid,'LEAVE',lt.id, subVal || null, useCompChecked, customHours); }} className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}>
                                           {limitReached && isSuperAdmin && <span className="mr-1">⚠️</span>}{lt.label}
                                       </button>
                                   )
@@ -1971,7 +1991,7 @@ const SalaryView = ({ users, shifts, shiftTypes = DEFAULT_SHIFT_TYPES, currentDa
         return list;
     }, [users, currentUserInfo, isPrivileged, showResigned]);
   
-
+ 
 const calc = (uid) => {
     const targetYear = targetMonth.substring(0, 4);
     const uObj = users[uid];
@@ -1997,7 +2017,7 @@ const calc = (uid) => {
     const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
     return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimitHours, gasTotal, tenureText };
 };
-
+ 
     return (
         <div className="space-y-4 pb-20">
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
@@ -2103,24 +2123,24 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
     const [payrollStatus, setPayrollStatus] = useState('draft');
     const [payrollLockedAt, setPayrollLockedAt] = useState(null);
     const [payrollLockedBy, setPayrollLockedBy] = useState('');
-
+ 
     const getRecentMonthOptions = () => {
         const options = [];
         const baseDate = new Date(`${targetMonth}-01T00:00:00`);
         if (Number.isNaN(baseDate.getTime())) return [targetMonth];
-
+ 
         for (let index = 0; index < 10; index += 1) {
             const date = new Date(baseDate.getFullYear(), baseDate.getMonth() - index, 1);
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
             options.push(`${year}-${month}`);
         }
-
+ 
         return options;
     };
-
+ 
     const recentMonthOptions = useMemo(() => getRecentMonthOptions(), [targetMonth]);
-
+ 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => {
             if (docSnap.exists()) {
@@ -2136,10 +2156,10 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                 setPayrollLockedBy('');
             }
         });
-
+ 
         return () => unsub();
     }, [targetMonth, db, appId]);
-
+ 
     useEffect(() => {
         const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'payrolls'), (snap) => {
             const nextHistory = {};
@@ -2150,10 +2170,10 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             });
             setPayrollHistory(nextHistory);
         });
-
+ 
         return () => unsub();
     }, [db, appId, recentMonthOptions.join('|')]);
-
+ 
     const updatePayroll = async (uid, field, value) => {
         if (payrollStatus === 'locked') return alert('本月薪資已鎖定。如需調整，請先由管理員解除鎖定。');
         const newData = {
@@ -2163,7 +2183,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                 [field]: value
             }
         };
-
+ 
         setPayrollData(newData);
         await setDoc(
             doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth),
@@ -2171,13 +2191,13 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             { merge: true }
         );
     };
-
+ 
     const getPayrollStatusLabel = () => {
         if (payrollStatus === 'locked') return '已鎖定';
         if (payrollStatus === 'confirmed') return '已結算待鎖定';
         return '未結算';
     };
-
+ 
     const changePayrollStatus = async (nextStatus) => {
         if (!isSuperAdmin) return alert('只有管理員可以確認、鎖定或解除本月薪資。');
         const isLocking = nextStatus === 'locked';
@@ -2195,24 +2215,24 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), payload, { merge: true });
         await writeAuditLog({ db, appId, actor: { name: currentUserInfo?.name || '管理員' }, action: isLocking ? 'lock_payroll' : (confirmed ? 'confirm_payroll' : 'unlock_payroll'), targetType: 'payroll', targetId: targetMonth, detail: { status: nextStatus } });
     };
-
+ 
     const printPayrollSlip = (user, summary) => {
         const printWindow = window.open('', '_blank', 'width=800,height=900');
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
         printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>薪資結算基數</td><td>${formatMoney(summary.settlementBase)}</td></tr><tr><td>油資 / 津貼 / 獎金</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>預估實領</td><td>${formatMoney(summary.netPay)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
         printWindow.document.close();
     };
-
+ 
     const getNumber = (value) => {
         const numberValue = Number(value);
         return Number.isFinite(numberValue) ? numberValue : 0;
     };
-
+ 
     const formatMoney = (value) => {
         const roundedValue = Math.round(getNumber(value));
         return `$${roundedValue.toLocaleString('zh-TW')}`;
     };
-
+ 
     const normalizePayrollLeaveType = (assignment = {}) => {
         const rawLeaveType = String(assignment.leaveType || assignment.type || '').trim().toLowerCase();
         const aliases = {
@@ -2224,10 +2244,10 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             annual_leave: 'annual',
             'annual-leave': 'annual'
         };
-
+ 
         return aliases[rawLeaveType] || '';
     };
-
+ 
     const getLeaveSummary = (uid, monthStr) => {
         const summary = {
             sickHours: 0,
@@ -2237,22 +2257,22 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             personalDetails: [],
             annualDetails: []
         };
-
+ 
         Object.keys(shifts || {}).forEach(dateStr => {
             if (!dateStr.startsWith(monthStr)) return;
-
+ 
             const dayData = shifts[dateStr];
             if (dayData?.isClosed) return;
-
+ 
             const assignment = Array.isArray(dayData?.assignments)
                 ? dayData.assignments.find(item => {
                     if (item.uid !== uid) return false;
                     return Boolean(normalizePayrollLeaveType(item));
                 })
                 : null;
-
+ 
             if (!assignment) return;
-
+ 
             const normalizedLeaveType = normalizePayrollLeaveType(assignment);
             const leaveHours = resolveLeaveHours(assignment, shiftTypes);
             const detail = {
@@ -2262,30 +2282,30 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                 useComp: assignment.useComp === true,
                 sourceType: assignment.type || 'LEAVE'
             };
-
+ 
             if (normalizedLeaveType === 'sick') {
                 summary.sickHours += leaveHours;
                 summary.sickDetails.push(detail);
             }
-
+ 
             if (normalizedLeaveType === 'personal') {
                 summary.personalHours += leaveHours;
                 summary.personalDetails.push(detail);
             }
-
+ 
             if (normalizedLeaveType === 'annual') {
                 summary.annualHours += leaveHours;
                 summary.annualDetails.push(detail);
             }
         });
-
+ 
         summary.sickDetails.sort((a, b) => a.date.localeCompare(b.date));
         summary.personalDetails.sort((a, b) => a.date.localeCompare(b.date));
         summary.annualDetails.sort((a, b) => a.date.localeCompare(b.date));
-
+ 
         return summary;
     };
-
+ 
     const getAnnualLeaveYearStats = (uid, yearStr) => {
         let usedHours = 0;
         Object.keys(shifts || {}).forEach(dateStr => {
@@ -2299,11 +2319,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         });
         return usedHours;
     };
-
+ 
     const getSettlementBase = (user, record = {}) => {
         return getNumber(record.settlementBase || user?.salaryAmount || record.base);
     };
-
+ 
     const getPayrollSummary = (user, record = {}, monthStr = targetMonth) => {
         const settlementBase = getSettlementBase(user, record);
         const hourlyRate = settlementBase > 0 ? settlementBase / 30 / 8 : 0;
@@ -2325,7 +2345,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         const totalAdditions = gasCapped + subsidy + birthdayBonus + festivalBonus + yearBonus + manualAdjustment;
         const totalDeductions = sickDeduction + personalDeduction + manualDeduction;
         const netPay = settlementBase + totalAdditions - totalDeductions;
-
+ 
         return {
             settlementBase,
             hourlyRate,
@@ -2348,58 +2368,58 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             netPay
         };
     };
-
+ 
     const availableUsers = useMemo(() => {
         return users.filter(user => showResigned ? true : !user.isResigned);
     }, [users, showResigned]);
-
+ 
     const filteredUsers = useMemo(() => {
         const normalizedKeyword = employeeKeyword.trim().toLowerCase();
-
+ 
         return availableUsers.filter(user => {
             if (!normalizedKeyword) return true;
             return String(user.name || '').toLowerCase().includes(normalizedKeyword);
         });
     }, [availableUsers, employeeKeyword]);
-
+ 
     useEffect(() => {
         const activeUserIds = availableUsers.map(user => user.uid);
-
+ 
         setSelectedUserIds(previousIds => {
             if (previousIds.length === 0) return activeUserIds;
             return previousIds.filter(uid => activeUserIds.includes(uid));
         });
     }, [availableUsers.map(user => user.uid).join('|')]);
-
+ 
     const displayedUsers = filteredUsers.filter(user => selectedUserIds.includes(user.uid));
     const isAllFilteredSelected = filteredUsers.length > 0 && filteredUsers.every(user => selectedUserIds.includes(user.uid));
-
+ 
     const toggleUserSelection = (uid) => {
         setSelectedUserIds(previousIds => {
             if (previousIds.includes(uid)) return previousIds.filter(id => id !== uid);
             return [...previousIds, uid];
         });
     };
-
+ 
     const toggleAllFilteredUsers = () => {
         const filteredIds = filteredUsers.map(user => user.uid);
-
+ 
         setSelectedUserIds(previousIds => {
             if (isAllFilteredSelected) {
                 return previousIds.filter(uid => !filteredIds.includes(uid));
             }
-
+ 
             return [...new Set([...previousIds, ...filteredIds])];
         });
     };
-
+ 
     const toggleHistory = (uid) => {
         setExpandedHistoryIds(previousIds => {
             if (previousIds.includes(uid)) return previousIds.filter(id => id !== uid);
             return [...previousIds, uid];
         });
     };
-
+ 
     return (
         <div className="space-y-4 pb-20">
             <div className="sticky top-2 z-30 bg-slate-900 text-white rounded-2xl shadow-lg border border-slate-700 p-4 space-y-3">
@@ -2419,7 +2439,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                 {!isSuperAdmin && <div className="text-[11px] font-bold text-amber-200">目前登入帳號非管理員，可查看薪資資料，但不可確認、鎖定或解除鎖定。</div>}
                 {payrollStatus === 'locked' && <div className="text-[11px] font-bold bg-red-500/15 border border-red-300/30 text-red-100 px-3 py-2 rounded-lg">🔒 已鎖定{payrollLockedAt ? `｜${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜${payrollLockedBy}` : ''}</div>}
             </div>
-
+ 
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
                 <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3">
                     <div>
@@ -2437,7 +2457,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                     </div>
                 </div>
                 {payrollStatus === 'locked' && <div className="bg-red-50 border border-red-100 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">本月薪資已鎖定{payrollLockedAt ? `｜鎖定時間：${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜操作人：${payrollLockedBy}` : ''}</div>}
-
+ 
                 <div className="border-t pt-3 space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                         <div className="font-bold text-sm text-gray-700 flex items-center gap-2"><Users size={16}/> 顯示員工 ({displayedUsers.length} / {availableUsers.length})</div>
@@ -2458,14 +2478,14 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                     </div>
                 </div>
             </div>
-
+ 
             {displayedUsers.length === 0 ? (
                 <div className="bg-white border rounded-xl p-10 text-center text-gray-400 font-bold">請在上方勾選至少一位員工後查看薪資結算。</div>
             ) : displayedUsers.map(user => {
                 const record = payrollData[user.uid] || {};
                 const summary = getPayrollSummary(user, record, targetMonth);
                 const isHistoryExpanded = expandedHistoryIds.includes(user.uid);
-
+ 
                 return (
                     <div key={user.uid} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${user.isResigned ? 'opacity-70' : ''}`}>
                         <div className="p-4 bg-gray-50 border-b flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
@@ -2482,7 +2502,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                 <button onClick={() => printPayrollSlip(user, summary)} className="mt-2 text-[11px] font-black text-indigo-700 bg-white border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-50">列印 / 另存 PDF</button>
                             </div>
                         </div>
-
+ 
                         {payrollStatus === 'locked' && <div className="mx-4 mt-4 bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-xs font-black text-gray-600">🔒 已鎖定：本月薪資欄位已停止編輯。管理員可在頁面上方按「解除鎖定」後再調整。</div>}
                         <div className="p-4 bg-slate-50 border-b grid grid-cols-2 lg:grid-cols-4 gap-2">
                             <div className="bg-white border rounded-xl p-3"><div className="text-[11px] font-bold text-gray-500">薪資結算基數</div><div className="mt-1 font-black text-gray-900">{formatMoney(summary.settlementBase)}</div></div>
@@ -2498,7 +2518,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                     <input type="number" min="0" placeholder="例如：37500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.settlementBase ?? user.salaryAmount ?? record.base ?? ''} onChange={event => updatePayroll(user.uid, 'settlementBase', event.target.value)} disabled={payrollStatus === 'locked'} />
                                     <div className="text-[11px] text-indigo-600 mt-2">每小時薪資：{formatMoney(summary.hourlyRate)} / hr</div>
                                 </div>
-
+ 
                                 <div className="grid grid-cols-2 gap-2">
                                     <div className="bg-teal-50 border border-teal-100 rounded-xl p-3">
                                         <div className="text-xs font-black text-teal-800">油資核銷</div>
@@ -2513,7 +2533,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                     </div>
                                 </div>
                             </div>
-
+ 
                             <div className="space-y-3">
                                 <div className="bg-red-50 border border-red-100 rounded-xl p-3">
                                     <div className="flex justify-between items-start gap-2">
@@ -2523,7 +2543,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                         </div>
                                         <div className="text-right font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.personalDeduction)}</div>
                                     </div>
-
+ 
                                     <div className="mt-3 space-y-2">
                                         <div className="bg-white/80 rounded-lg p-2 border border-red-100">
                                             <div className="flex justify-between text-xs font-bold text-gray-700"><span>病假：{summary.leaveSummary.sickHours} hr</span><span className="text-red-700">-{formatMoney(summary.sickDeduction)}</span></div>
@@ -2542,7 +2562,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                         </div>
                                     </div>
                                 </div>
-
+ 
                                 <div className="grid grid-cols-2 gap-2">
                                     <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
                                         <label className="block text-xs font-black text-amber-800 mb-1">其他加項</label>
@@ -2554,7 +2574,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                     </div>
                                 </div>
                             </div>
-
+ 
                             <div className="space-y-3">
                                 <div className="bg-white border rounded-xl overflow-hidden">
                                     <div className="p-3 font-black text-sm text-gray-700 border-b">獎金與結算摘要</div>
@@ -2572,11 +2592,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                         </div>
                                     </div>
                                 </div>
-
+ 
                                 <label className="block text-xs font-bold text-gray-600">結算備註<textarea rows="3" placeholder="例如：本月獎勵、扣款原因、匯款備註..." className="mt-1 w-full border rounded-lg px-2 py-2 text-sm font-normal focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={event => updatePayroll(user.uid, 'note', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
                             </div>
                         </div>
-
+ 
                         <div className="border-t bg-gray-50 px-4 py-3">
                             <button onClick={() => toggleHistory(user.uid)} className="text-xs font-black text-indigo-600 hover:text-indigo-800 flex items-center gap-1"><History size={14}/>{isHistoryExpanded ? '收合近 10 個月薪資明細' : '查看近 10 個月薪資明細'}</button>
                             {isHistoryExpanded && (
@@ -2596,7 +2616,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                     </div>
                 );
             })}
-
+ 
             <GasReceiptModal
                 isOpen={!!gasModalUser}
                 onClose={() => setGasModalUser(null)}
@@ -2612,8 +2632,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 // ==========================================
 // ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
 // ==========================================
-
-
+ 
+ 
 const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftTypes = DEFAULT_SHIFT_TYPES, appId, storeConfig, db, isSuperAdmin }) => {
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
@@ -2627,15 +2647,15 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
   const [editingShiftId, setEditingShiftId] = useState(null);
   const [shiftForm, setShiftForm] = useState({ id: '', label: '', display: '', start: '', end: '', hours: '' });
   const canManageInventory = isSuperAdmin || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor';
-
+ 
   useEffect(() => {
       setInventoryList(prepareInventoryItems(inventoryItems));
   }, [inventoryItems]);
-
+ 
   useEffect(() => {
       setCustomShiftList((Array.isArray(shiftTypes) ? shiftTypes : []).filter(item => !defaultShiftTypeIds.includes(item.id)));
   }, [shiftTypes, defaultShiftTypeIds]);
-
+ 
   const buildInventoryGroups = (sourceItems = []) => {
       const groups = [];
       (Array.isArray(sourceItems) ? sourceItems : []).forEach(item => {
@@ -2649,7 +2669,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       });
       return groups;
   };
-
+ 
   const flattenInventoryGroups = (groups = []) => normalizeInventoryItems(
       (Array.isArray(groups) ? groups : []).flatMap(group =>
           (group?.items || []).map(item => ({
@@ -2658,10 +2678,10 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
           }))
       )
   );
-
+ 
   const inventoryGroups = useMemo(() => buildInventoryGroups(inventoryList), [inventoryList]);
   const inventoryCategories = useMemo(() => inventoryGroups.map(group => group.category), [inventoryGroups]);
-
+ 
   useEffect(() => {
       const nextInputs = {};
       inventoryGroups.forEach(group => {
@@ -2671,10 +2691,10 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       });
       setSequenceInputs(nextInputs);
   }, [inventoryGroups]);
-
+ 
   const userList = Object.values(users || {});
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
-
+ 
   const saveUser = async () => {
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
           return alert('🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！');
@@ -2688,32 +2708,32 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       setEditingId(null);
       alert('✅ 員工權限與合約資料已更新！');
   };
-
+ 
   const roles = [
       { id: 'employee', label: '員工', color: 'bg-gray-100 text-gray-600', desc: '僅能查看個人班表、打卡' },
       { id: 'supervisor', label: '主管', color: 'bg-blue-100 text-blue-600', desc: '可審核假單、查看團隊出勤' },
       { id: 'boss', label: '老闆', color: 'bg-indigo-600 text-white', desc: '全系統最高權限（含薪資、設定）' },
       { id: 'observer', label: '觀察者', color: 'bg-amber-100 text-amber-600', desc: '僅可查看所有資料，不可修改' }
   ];
-
+ 
   const persistInventoryList = async (nextItems) => {
       const normalizedItems = normalizeInventoryItems(nextItems);
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: normalizedItems }, { merge: true });
       setInventoryList(normalizedItems);
       return normalizedItems;
   };
-
+ 
   const resetInventoryForm = () => {
       setEditingItemId(null);
       setInventoryForm({ category: '', name: '', spec: '', price: '' });
   };
-
+ 
   const startAddInventoryItem = () => {
       if (!canManageInventory) return alert('只有管理權限帳號可新增庫存品項');
       setEditingItemId('new');
       setInventoryForm({ category: '', name: '', spec: '', price: '' });
   };
-
+ 
   const startEditInventoryItem = (item) => {
       if (!canManageInventory) return alert('只有管理權限帳號可編輯庫存品項');
       setEditingItemId(item.id);
@@ -2724,7 +2744,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
           price: item.price ?? ''
       });
   };
-
+ 
   const saveInventoryItem = async () => {
       if (!canManageInventory) return alert('只有管理權限帳號可儲存庫存品項');
       const category = String(inventoryForm.category || '').trim();
@@ -2733,7 +2753,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       const priceNum = Number(inventoryForm.price);
       if (!category || !name || !spec) return alert('請完整填寫分類、品名與單位');
       if (Number.isNaN(priceNum) || priceNum < 0) return alert('單價請輸入 0 以上的數字');
-
+ 
       const itemId = editingItemId && editingItemId !== 'new' ? editingItemId : `i_${Date.now()}`;
       let nextItems = Array.isArray(inventoryList) ? [...inventoryList] : [];
       const idx = nextItems.findIndex(i => i.id === itemId);
@@ -2748,12 +2768,12 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       };
       if (idx >= 0) nextItems[idx] = nextItem;
       else nextItems.push(nextItem);
-
+ 
       await persistInventoryList(nextItems);
       resetInventoryForm();
       alert(`✅ 庫存品項已${idx >= 0 ? '更新' : '新增'}！`);
   };
-
+ 
   const deleteInventoryItem = async (itemId) => {
       if (!canManageInventory) return alert('只有管理權限帳號可刪除庫存品項');
       const target = inventoryList.find(i => i.id === itemId);
@@ -2763,7 +2783,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       if (editingItemId === itemId) resetInventoryForm();
       alert('✅ 庫存品項已刪除！');
   };
-
+ 
   const moveInventoryItemByStep = async (itemId, step) => {
       if (!canManageInventory) return alert('只有管理權限帳號可調整排序');
       const groups = buildInventoryGroups(inventoryList);
@@ -2777,7 +2797,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       groups[groupIndex].items[targetIndex] = temp;
       await persistInventoryList(flattenInventoryGroups(groups));
   };
-
+ 
   const applyInventorySequence = async (itemId) => {
       if (!canManageInventory) return alert('只有管理權限帳號可調整排序');
       const groups = buildInventoryGroups(inventoryList);
@@ -2792,7 +2812,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       groups[groupIndex].items.splice(clampedIndex, 0, movingItem);
       await persistInventoryList(flattenInventoryGroups(groups));
   };
-
+ 
   const updateInventoryCategory = async (itemId, targetCategory) => {
       if (!canManageInventory) return alert('只有管理權限帳號可變更分類');
       const category = String(targetCategory || '').trim();
@@ -2811,7 +2831,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       targetGroup.items.push({ ...movingItem, category });
       await persistInventoryList(flattenInventoryGroups(groups));
   };
-
+ 
   const persistCustomShiftList = async (nextList) => {
       const normalized = (Array.isArray(nextList) ? nextList : []).map(item => ({
           id: String(item?.id || '').trim(),
@@ -2825,12 +2845,12 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       setCustomShiftList(normalized);
       return normalized;
   };
-
+ 
   const resetShiftForm = () => {
       setEditingShiftId(null);
       setShiftForm({ id: '', label: '', display: '', start: '', end: '', hours: '' });
   };
-
+ 
   const startEditShift = (item) => {
       if (!isSuperAdmin) return alert('只有最高管理員可以設定特殊班別');
       setEditingShiftId(item.id);
@@ -2843,7 +2863,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
           hours: item.hours ?? ''
       });
   };
-
+ 
   const saveCustomShift = async () => {
       if (!isSuperAdmin) return alert('只有最高管理員可以設定特殊班別');
       const id = String(shiftForm.id || '').trim().toUpperCase();
@@ -2866,7 +2886,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       resetShiftForm();
       alert(`✅ 特殊班別已${idx >= 0 ? '更新' : '新增'}！`);
   };
-
+ 
   const deleteCustomShift = async (shiftId) => {
       if (!isSuperAdmin) return alert('只有最高管理員可以刪除特殊班別');
       if (!window.confirm(`確定要刪除特殊班別「${shiftId}」嗎？`)) return;
@@ -2875,7 +2895,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       if (editingShiftId === shiftId) resetShiftForm();
       alert('✅ 特殊班別已刪除！');
   };
-
+ 
   return (
     <div className="space-y-8 pb-20 max-w-5xl mx-auto animate-fade-in">
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
@@ -2883,7 +2903,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
         <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '管理員'}</h2>
         <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">Permission Controller</p>
       </div>
-
+ 
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
           <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-8">
               <div>
@@ -2899,7 +2919,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
                 {showResigned ? '顯示離職' : '隱藏離職'}
               </button>
           </div>
-
+ 
           <div className="grid gap-4">
             {userList
               .filter(u => showResigned ? true : !u?.isResigned)
@@ -2968,8 +2988,8 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
             })}
           </div>
       </div>
-
-
+ 
+ 
 <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
         <div>
@@ -3030,7 +3050,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
         </div>
     </div>
 </div>
-
+ 
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
               <div>
@@ -3055,7 +3075,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
                   </div>
               </div>
           </div>
-
+ 
           <div className="grid grid-cols-1 xl:grid-cols-[360px,1fr] gap-6">
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5 space-y-4">
                   <div className="flex justify-between items-center">
@@ -3066,13 +3086,13 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
                           </button>
                       )}
                   </div>
-
+ 
                   {!canManageInventory && (
                       <div className="bg-amber-50 text-amber-700 border border-amber-100 rounded-2xl p-4 text-sm font-bold">
                           目前帳號僅可查看庫存品項，新增、編輯、刪除需使用管理員權限。
                       </div>
                   )}
-
+ 
                   <div className="space-y-3">
                       <div>
                           <label className="block text-[11px] font-black text-gray-500 mb-1">分類</label>
@@ -3093,7 +3113,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
                           </div>
                       </div>
                   </div>
-
+ 
                   <div className="bg-white border border-gray-100 rounded-2xl p-4 text-xs text-gray-500 leading-6">
                       <div className="font-black text-gray-700 mb-2">欄位說明</div>
                       <div>• 分類：決定盤點頁上方的分類頁籤</div>
@@ -3102,7 +3122,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
                       <div>• 單價：用於估算庫存總值，可填 0</div>
                       <div>• 排序：可用上移 / 下移，或直接輸入序號後按套用</div>
                   </div>
-
+ 
                   {canManageInventory && (
                       <div className="flex gap-3 pt-2">
                           <button onClick={resetInventoryForm} className="flex-1 bg-gray-100 text-gray-600 py-3 rounded-2xl font-black text-sm hover:bg-gray-200">清空 / 取消</button>
@@ -3110,13 +3130,13 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
                       </div>
                   )}
               </div>
-
+ 
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
                       <h4 className="font-black text-gray-800">現有品項清單</h4>
                       <div className="text-xs text-gray-500 font-bold">操作流程：上下移動 / 修改序號 / 切換分類 → 自動儲存 → 盤點頁立即同步</div>
                   </div>
-
+ 
                   {inventoryList.length === 0 ? (
                       <div className="bg-white rounded-2xl border border-dashed border-gray-200 p-10 text-center text-gray-400 font-bold">
                           目前尚無庫存品項，請先新增第一個品項。
@@ -3183,7 +3203,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
     </div>
   );
 };
-
+ 
 // ==========================================
 // 🌟 系統主程式 (Main App) - V10.0 完整核心
 // ==========================================
@@ -3248,7 +3268,7 @@ function App() {
         });
         return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); unsubShiftCfg(); };
     }, [user]);
-
+ 
     useEffect(() => {
         if (!user) return;
         const unsubPayroll = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', currentPayrollMonth), (snap) => {
@@ -3256,8 +3276,8 @@ function App() {
         });
         return () => unsubPayroll();
     }, [user, currentPayrollMonth]);
-
-
+ 
+ 
 useEffect(() => {
     if (loading) return;
     if (!user?.uid || !currentUserInfo?.uid) {
@@ -3274,7 +3294,7 @@ useEffect(() => {
         setShowVersionNotice(false);
     }
 }, [loading, user?.uid, currentUserInfo?.uid]);
-
+ 
     useEffect(() => {
         if (!user) return;
         const memberLineIds = [...new Set(Object.values(dbData.users || {})
@@ -3282,32 +3302,32 @@ useEffect(() => {
             .map(u => u.lineUserId)
             .filter(Boolean))];
         if (memberLineIds.length === 0 || !Array.isArray(dbData.events) || dbData.events.length === 0) return;
-
+ 
         let timer = null;
         let cancelled = false;
-
+ 
         const sendTodayEventNotifications = async () => {
             if (cancelled) return;
             const now = new Date();
             const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
             const todaysEvents = dbData.events.filter(e => e?.title && checkEventOnDate(e, todayStr));
             if (todaysEvents.length === 0) return;
-
+ 
             for (const evt of todaysEvents) {
                 const logId = `${evt.id || evt.startDate || 'event'}_${todayStr}`;
                 const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'eventNotificationLogs', logId);
                 const sentSnap = await getDoc(logRef);
                 if (sentSnap.exists()) continue;
-
+ 
                 const timeText = evt.time ? `\n時間：${evt.time}` : '';
                 const repeatText = evt.repeatType && evt.repeatType !== 'none' ? `\n重複：${REPEAT_LABELS[evt.repeatType] || evt.repeatType}` : '';
                 const noteText = evt.note ? `\n內容：${evt.note}` : '';
-
+ 
                 await sendLineNotification(memberLineIds, `📢 【今日公司備忘錄 / 行程提醒】\n日期：${todayStr}${timeText}\n標題：${evt.title}${repeatText}${noteText}\n請留意今日安排。`);
                 await setDoc(logRef, { eventId: evt.id || null, date: todayStr, sentAt: Date.now(), title: evt.title, repeatType: evt.repeatType || 'none' }, { merge: true });
             }
         };
-
+ 
         const now = new Date();
         const nineAM = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0);
         if (now >= nineAM) {
@@ -3315,13 +3335,13 @@ useEffect(() => {
         } else {
             timer = setTimeout(sendTodayEventNotifications, nineAM.getTime() - now.getTime());
         }
-
+ 
         return () => {
             cancelled = true;
             if (timer) clearTimeout(timer);
         };
     }, [user, dbData.events, dbData.users]);
-
+ 
     const safeUsers = dbData?.users || {};
     const safeRequests = Array.isArray(dbData?.requests) ? dbData.requests : [];
     const safeSignatures = Array.isArray(dbData?.signatures) ? dbData.signatures : [];
@@ -3390,7 +3410,8 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
                 const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
                 const idx = assigns.findIndex(a => a.uid === req.uid);
                 const baseAssign = idx >= 0 ? assigns[idx] : null;
-                const leaveHours = resolveLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES);
+                const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES);
+                const leaveHours = req.leaveType === 'annual' ? normalizeCustomLeaveHours(req.hours, defaultLeaveHours) : (Number(req.hours) > 0 ? Number(req.hours) : resolveLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES));
                 const requestedUseComp = req.useComp === true;
                 const finalUseComp = ['sick', 'personal'].includes(req.leaveType)
                     ? window.confirm(`是否在核准 ${requesterName} 的${req.leaveLabel || '假單'}時，使用補休時數扣抵？\n\n員工申請偏好：${requestedUseComp ? '使用補休扣抵' : '不使用補休扣抵'}\n按「確定」= 使用補休扣抵；按「取消」= 不使用補休扣抵`)
@@ -3443,7 +3464,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
     ) || [];
     const notificationCount = Array.isArray(myNotifications) ? myNotifications.length : 0;
     const coreDataReady = !!user && !!currentUserInfo && Array.isArray(safeSignatures) && Array.isArray(safeRequests) && !!safeUsers;
-
+ 
     useEffect(() => {
         const pendingRequests = safeRequests.filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt && !r.lineNotifyProcessingAt);
         if (pendingRequests.length === 0) return;
@@ -3491,7 +3512,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
         backfillPendingNotifications();
         return () => { cancelled = true; };
     }, [safeRequests, safeUsers]);
-
+ 
     const renderView = () => {
         // 如果還沒簽約，強制跳轉到表單頁
         if (!currentUserInfo) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">LOADING PROFILE...</div>;
@@ -3654,7 +3675,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">
                 {coreDataReady ? safeRenderView() : <StartupGuardFallback title="WAITING FOR CORE DATA..." detail="登入資料或使用者權限尚未完成同步，系統暫不載入主畫面。" />}
             </main>
-
+ 
 {showVersionNotice && user?.uid && !loading && currentUserInfo?.uid && coreDataReady && (
     <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
         <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
@@ -3678,7 +3699,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
         </div>
     </div>
 )}
-
+ 
             {isLocked && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
                     <Lock size={16}/> 
