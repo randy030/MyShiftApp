@@ -10,12 +10,16 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.7";
+const CURRENT_VERSION = "V14.0.0-alpha11.8";
 const CURRENT_RELEASE_NOTES = [
     '特休改為以小時計算：員工與管理員申請特休時可自行輸入使用時數，不再固定用整天或 12 小時計算。',
     '特休送審、核准、班表、出勤統計與薪資明細會同步保留實際特休時數，月底核對更精準。',
     '特休時數輸入會自動防呆，不能小於 0.5 小時，也不能超過當日班別工時或 12 小時。',
     '病假、事假、自畫假、排休維持原本邏輯；本次僅強化特休的小時制處理。'
+    '版本更新通知改為每位使用者每個版本只顯示一次，按下「我知道了」後不會再重複跳出。',
+    '已讀版本會同時儲存在瀏覽器 localStorage 與 Firebase 使用者資料，換頁、重新整理或重新登入都不會重複提醒。',
+    '下一次只有在 CURRENT_VERSION 更新為新版本時，才會重新顯示版本更新通知。',
+    '保留特休小時制、手機月曆姓名優先、首次載入修正與出勤統計整合功能。'
 ];
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -3222,13 +3226,29 @@ function App() {
     const currentPayrollMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
     const [showVersionNotice, setShowVersionNotice] = useState(false);
     const versionNoticeKey = user?.uid ? `version_notice_last_seen_${user.uid}` : '';
-    const dismissVersionNotice = () => {
+    const currentUserStoredInfo = user?.uid ? dbData.users?.[user.uid] : null;
+    const dismissVersionNotice = async () => {
         try {
             if (versionNoticeKey && typeof window !== 'undefined' && window.localStorage) {
                 window.localStorage.setItem(versionNoticeKey, CURRENT_VERSION);
             }
         } catch (err) {
-            console.warn('version notice storage unavailable', err);
+            console.warn('version notice local storage unavailable', err);
+        }
+        try {
+            if (user?.uid) {
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), {
+                    lastSeenVersionNotice: CURRENT_VERSION,
+                    lastSeenVersionNoticeAt: Date.now()
+                }, { merge: true });
+                setCurrentUserInfo(prev => prev ? {
+                    ...prev,
+                    lastSeenVersionNotice: CURRENT_VERSION,
+                    lastSeenVersionNoticeAt: Date.now()
+                } : prev);
+            }
+        } catch (err) {
+            console.warn('version notice Firebase sync failed', err);
         }
         setShowVersionNotice(false);
     };
@@ -3285,15 +3305,20 @@ useEffect(() => {
         return;
     }
     try {
-        const lastSeenVersion = (typeof window !== 'undefined' && window.localStorage)
+        const localSeenVersion = (typeof window !== 'undefined' && window.localStorage)
             ? window.localStorage.getItem(`version_notice_last_seen_${user.uid}`)
             : CURRENT_VERSION;
-        setShowVersionNotice(lastSeenVersion !== CURRENT_VERSION);
+        const firebaseSeenVersion = currentUserInfo?.lastSeenVersionNotice || currentUserStoredInfo?.lastSeenVersionNotice || '';
+        const hasSeenCurrentVersion = localSeenVersion === CURRENT_VERSION || firebaseSeenVersion === CURRENT_VERSION;
+        if (hasSeenCurrentVersion && localSeenVersion !== CURRENT_VERSION && typeof window !== 'undefined' && window.localStorage) {
+            window.localStorage.setItem(`version_notice_last_seen_${user.uid}`, CURRENT_VERSION);
+        }
+        setShowVersionNotice(!hasSeenCurrentVersion);
     } catch (err) {
         console.warn('version notice read failed', err);
         setShowVersionNotice(false);
     }
-}, [loading, user?.uid, currentUserInfo?.uid]);
+}, [loading, user?.uid, currentUserInfo?.uid, currentUserInfo?.lastSeenVersionNotice, currentUserStoredInfo?.lastSeenVersionNotice]);
  
     useEffect(() => {
         if (!user) return;
@@ -3688,7 +3713,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             </div>
             <div className="p-6 space-y-3 text-sm text-gray-700">
                 <div className="font-black text-gray-800">已更新至：{CURRENT_VERSION}</div>
-                <div className="text-xs text-gray-500">本視窗只會在本版本第一次開啟時顯示。</div>
+                <div className="text-xs text-gray-500">按下「我知道了」後，本版本不會再重複顯示；下一次版本更新才會再提醒。</div>
                 <ul className="list-disc pl-5 space-y-2">
                     {CURRENT_RELEASE_NOTES.map(note => <li key={note}>{note}</li>)}
                 </ul>
