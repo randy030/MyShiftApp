@@ -10,7 +10,7 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.8";
+const CURRENT_VERSION = "V14.0.0-alpha11.9";
 const CURRENT_RELEASE_NOTES = [
     '特休改為以小時計算：員工與管理員申請特休時可自行輸入使用時數，不再固定用整天或 12 小時計算。',
     '特休送審、核准、班表、出勤統計與薪資明細會同步保留實際特休時數，月底核對更精準。',
@@ -37,6 +37,39 @@ const auth = getAuth(app);
 const provider = new GoogleAuthProvider(); // 補上 Google 登入 Provider
 const db = getFirestore(app);
 const appId = 'team-shift-pc-v1'; 
+
+const APP_MANIFEST = {
+    name: 'TEATOP 台中東山店班表系統',
+    short_name: 'TEATOP班表',
+    start_url: '/',
+    scope: '/',
+    display: 'standalone',
+    background_color: '#ffffff',
+    theme_color: '#4f46e5',
+    icons: []
+};
+
+const ensureRuntimeManifest = () => {
+    if (typeof document === 'undefined') return;
+    try {
+        const existingLinks = Array.from(document.querySelectorAll('link[rel="manifest"]'));
+        existingLinks.forEach(link => {
+            const href = String(link.getAttribute('href') || '');
+            if (!href || href.includes('manifest.json')) link.parentNode?.removeChild(link);
+        });
+        if (document.querySelector('link[data-teatop-runtime-manifest="true"]')) return;
+        const blob = new Blob([JSON.stringify(APP_MANIFEST, null, 2)], { type: 'application/manifest+json' });
+        const manifestUrl = URL.createObjectURL(blob);
+        const link = document.createElement('link');
+        link.rel = 'manifest';
+        link.href = manifestUrl;
+        link.setAttribute('data-teatop-runtime-manifest', 'true');
+        document.head.appendChild(link);
+    } catch (err) {
+        console.warn('runtime manifest setup failed', err);
+    }
+};
+
 const exportToCSV = (filename, rows) => {
     const csvContent = "\uFEFF" + rows.map(row => 
         row.map(item => `"${String(item || '').replace(/"/g, '""')}"`).join(",")
@@ -3227,6 +3260,10 @@ function App() {
     const [showVersionNotice, setShowVersionNotice] = useState(false);
     const versionNoticeKey = user?.uid ? `version_notice_last_seen_${user.uid}` : '';
     const currentUserStoredInfo = user?.uid ? dbData.users?.[user.uid] : null;
+    useEffect(() => {
+        ensureRuntimeManifest();
+    }, []);
+
     const dismissVersionNotice = async () => {
         try {
             if (versionNoticeKey && typeof window !== 'undefined' && window.localStorage) {
@@ -3702,18 +3739,18 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             </main>
  
 {showVersionNotice && user?.uid && !loading && currentUserInfo?.uid && coreDataReady && (
-    <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="version-notice-title" aria-describedby="version-notice-description">
         <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
                 <div>
                     <div className="text-xs font-black tracking-widest opacity-80">VERSION UPDATE</div>
-                    <div className="text-lg font-black">系統版本更新提醒</div>
+                    <div id="version-notice-title" className="text-lg font-black">系統版本更新提醒</div>
                 </div>
                 <button onClick={dismissVersionNotice} className="text-white/80 hover:text-white font-black">✕</button>
             </div>
             <div className="p-6 space-y-3 text-sm text-gray-700">
                 <div className="font-black text-gray-800">已更新至：{CURRENT_VERSION}</div>
-                <div className="text-xs text-gray-500">按下「我知道了」後，本版本不會再重複顯示；下一次版本更新才會再提醒。</div>
+                <div id="version-notice-description" className="text-xs text-gray-500">按下「我知道了」後，本版本不會再重複顯示；下一次版本更新才會再提醒。</div>
                 <ul className="list-disc pl-5 space-y-2">
                     {CURRENT_RELEASE_NOTES.map(note => <li key={note}>{note}</li>)}
                 </ul>

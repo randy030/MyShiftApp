@@ -1,0 +1,10 @@
+{
+  "name": "TEATOP 台中東山店班表系統",
+  "short_name": "TEATOP班表",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": []
+}
