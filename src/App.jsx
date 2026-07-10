@@ -10,15 +10,12 @@ import {
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.9";
+const CURRENT_VERSION = "V14.0.0-alpha11.10";
 const CURRENT_RELEASE_NOTES = [
-    '特休改為以小時計算：員工與管理員申請特休時可自行輸入使用時數，不再固定用整天或 12 小時計算。',
-    '特休送審、核准、班表、出勤統計與薪資明細會同步保留實際特休時數，月底核對更精準。',
-    '特休時數輸入會自動防呆，不能小於 0.5 小時，也不能超過當日班別工時或 12 小時。',
-    '病假、事假、自畫假、排休維持原本邏輯；本次僅強化特休的小時制處理。',
-    '已讀版本會同時儲存在瀏覽器 localStorage 與 Firebase 使用者資料，換頁、重新整理或重新登入都不會重複提醒。',
-    '下一次只有在 CURRENT_VERSION 更新為新版本時，才會重新顯示版本更新通知。',
-    '保留特休小時制、手機月曆姓名優先、首次載入修正與出勤統計整合功能。'
+    '修正員工送出特休申請時，因原班別資料未正確宣告而誤顯示網路異常。',
+    '員工可在出勤統計自行登錄油資發票，登錄筆數與總額不設上限。',
+    '油資補貼仍以每人每月最高 500 元計算，超額發票會保留在明細中。',
+    '出勤統計置頂顯示特休剩餘、補休可用、本月加班與本月請假時數。'
 ];
 const LINE_API_URL = "/api/webhook"; 
 const ADMIN_EMAIL = "randy22444289@gmail.com";
@@ -410,44 +407,90 @@ const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => 
         </div>
     );
 };
-const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRecords }) => {
+const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRecords, currentUserInfo }) => {
     const [amount, setAmount] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     if (!isOpen || !user) return null;
-    const userRecords = currentRecords[user.uid] || [];
-    const totalAmount = userRecords.reduce((sum, r) => sum + r.amount, 0);
+    const userRecords = Array.isArray(currentRecords?.[user.uid]) ? currentRecords[user.uid] : [];
+    const totalAmount = userRecords.reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const reimbursableAmount = Math.min(totalAmount, 500);
+    const remainingAllowance = Math.max(0, 500 - reimbursableAmount);
+    const excessAmount = Math.max(0, totalAmount - 500);
+
     const handleSave = async () => {
         const num = parseFloat(amount);
-        if (isNaN(num) || num <= 0) return alert("請輸入正確金額");
-        const newRecord = { id: Date.now().toString(), date, amount: num, timestamp: Date.now() };
-        const updatedRecords = [...userRecords, newRecord];
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', monthStr), { [user.uid]: updatedRecords }, { merge: true });
-        setAmount(''); alert("✅ 發票登錄成功！");
+        if (Number.isNaN(num) || num <= 0) return alert('請輸入正確金額');
+        if (!date) return alert('請選擇發票日期');
+        try {
+            const newRecord = {
+                id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                date,
+                amount: num,
+                timestamp: Date.now(),
+                enteredByUid: currentUserInfo?.uid || user.uid,
+                enteredByName: currentUserInfo?.name || user.name || '員工'
+            };
+            const updatedRecords = [...userRecords, newRecord];
+            await setDoc(
+                doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', monthStr),
+                { [user.uid]: updatedRecords },
+                { merge: true }
+            );
+            setAmount('');
+            alert(`✅ 發票登錄成功！\n已登錄總額：$${totalAmount + num}\n本月可補貼：$${Math.min(totalAmount + num, 500)}`);
+        } catch (error) {
+            console.error('油資發票登錄失敗', error);
+            alert(`發票登錄失敗：${error?.message || '請確認網路或資料庫權限'}`);
+        }
     };
-    const handleDelete = async (recId) => {
-        if(!window.confirm("確定刪除此發票紀錄？")) return;
-        const updatedRecords = userRecords.filter(r => r.id !== recId);
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', monthStr), { [user.uid]: updatedRecords }, { merge: true });
+
+    const handleDelete = async (recordId) => {
+        if (!window.confirm('確定刪除此發票紀錄？')) return;
+        try {
+            const updatedRecords = userRecords.filter(record => record.id !== recordId);
+            await setDoc(
+                doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', monthStr),
+                { [user.uid]: updatedRecords },
+                { merge: true }
+            );
+        } catch (error) {
+            console.error('油資發票刪除失敗', error);
+            alert(`刪除失敗：${error?.message || '請確認網路或資料庫權限'}`);
+        }
     };
+
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
-                <div className="bg-teal-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Fuel className="w-5 h-5"/> 油資發票登錄</h3><button onClick={onClose} className="hover:bg-teal-700 p-1 rounded"><X size={20}/></button></div>
+                <div className="bg-teal-600 p-4 text-white flex justify-between items-center">
+                    <h3 className="font-bold flex items-center gap-2"><Fuel className="w-5 h-5"/> 油資發票登錄</h3>
+                    <button onClick={onClose} className="hover:bg-teal-700 p-1 rounded"><X size={20}/></button>
+                </div>
                 <div className="p-6 space-y-4">
                     <div className="flex justify-between items-end border-b pb-3">
                         <div><div className="text-sm text-gray-500">員工姓名</div><div className="font-bold text-lg">{user.name}</div></div>
-                        <div className="text-right"><div className="text-xs text-gray-500">{monthStr} 累計</div><div className="font-bold text-teal-600 text-xl">${totalAmount} <span className="text-xs text-gray-400">/ 上限 $500</span></div></div>
+                        <div className="text-right">
+                            <div className="text-xs text-gray-500">{monthStr} 已登錄總額</div>
+                            <div className="font-bold text-teal-600 text-xl">${totalAmount}</div>
+                            <div className="text-[10px] text-gray-400">可補貼 ${reimbursableAmount}／上限 $500</div>
+                        </div>
+                    </div>
+                    <div className="rounded-lg border border-teal-100 bg-teal-50 px-3 py-2 text-[11px] font-bold text-teal-800">
+                        可不限筆數，也可登錄超過 $500 的發票總額；薪資補貼仍以每月 $500 為上限。
+                        {remainingAllowance > 0 ? ` 尚可補貼 $${remainingAllowance}` : excessAmount > 0 ? ` 已超出補貼上限 $${excessAmount}` : ' 已達補貼上限'}
                     </div>
                     <div className="bg-gray-50 p-3 rounded-lg border flex gap-2 items-end">
-                        <div className="w-1/3"><label className="block text-[10px] font-bold text-gray-600 mb-1">發票日期</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border rounded px-2 py-1.5 text-xs focus:outline-none"/></div>
-                        <div className="flex-1"><label className="block text-[10px] font-bold text-gray-600 mb-1">金額 (需有統編)</label><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="$" className="w-full border rounded px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-teal-500"/></div>
+                        <div className="w-1/3"><label className="block text-[10px] font-bold text-gray-600 mb-1">發票日期</label><input type="date" value={date} onChange={event => setDate(event.target.value)} className="w-full border rounded px-2 py-1.5 text-xs focus:outline-none"/></div>
+                        <div className="flex-1"><label className="block text-[10px] font-bold text-gray-600 mb-1">金額（需有統編）</label><input type="number" min="0" step="1" value={amount} onChange={event => setAmount(event.target.value)} placeholder="$" className="w-full border rounded px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-teal-500"/></div>
                         <button onClick={handleSave} className="bg-teal-600 text-white px-3 py-1.5 rounded font-bold hover:bg-teal-700 h-[34px]">新增</button>
                     </div>
-                    <div className="max-h-40 overflow-y-auto space-y-1">
-                        {userRecords.length === 0 ? <div className="text-center text-xs text-gray-400 py-4">本月尚無發票紀錄</div> : 
-                            userRecords.sort((a,b)=>b.timestamp-a.timestamp).map(r => (
-                                <div key={r.id} className="flex justify-between items-center bg-white border p-2 rounded hover:bg-gray-50">
-                                    <div className="text-xs text-gray-500 font-mono">{r.date}</div><div className="font-bold text-teal-700">${r.amount}</div><button onClick={()=>handleDelete(r.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
+                    <div className="max-h-52 overflow-y-auto space-y-1">
+                        {userRecords.length === 0 ? <div className="text-center text-xs text-gray-400 py-4">本月尚無發票紀錄</div> :
+                            [...userRecords].sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0)).map(record => (
+                                <div key={record.id} className="flex justify-between items-center bg-white border p-2 rounded hover:bg-gray-50">
+                                    <div><div className="text-xs text-gray-500 font-mono">{record.date}</div><div className="text-[9px] text-gray-400">{record.enteredByName ? `登錄：${record.enteredByName}` : ''}</div></div>
+                                    <div className="font-bold text-teal-700">${record.amount}</div>
+                                    <button onClick={() => handleDelete(record.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
                                 </div>
                             ))
                         }
@@ -1125,13 +1168,14 @@ const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => 
 // ==========================================
 // 📋 出勤明細頁面 (AttendanceView)
 // ==========================================
-const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin, setView }) => {
+const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin, setView, gasReceipts = {} }) => {
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
     const [attendanceList, setAttendanceList] = useState([]);
     const [payrollLockInfo, setPayrollLockInfo] = useState({ status: 'draft', lockedAt: null, lockedByName: '' });
     const [loading, setLoading] = useState(false);
     const activeUsers = useMemo(() => (users || []).filter(user => !user?.isResigned && !user?.isViewer), [users]);
     const [selectedUid, setSelectedUid] = useState(currentUserInfo?.uid || '');
+    const [gasModalUser, setGasModalUser] = useState(null);
  
     useEffect(() => {
         if (!isSuperAdmin && currentUserInfo?.uid) setSelectedUid(currentUserInfo.uid);
@@ -1236,6 +1280,24 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
         if (payrollLockInfo.status === 'confirmed') return '已結算待鎖定';
         return '未結算';
     };
+
+    const targetYear = targetMonth.substring(0, 4);
+    const yearlyTimeStats = useMemo(() => getUserYearlyTimeStats({
+        shifts,
+        uid: selectedUser?.uid,
+        targetYear,
+        targetMonth,
+        leaveTypes: DEFAULT_LEAVE_TYPES,
+        shiftTypes
+    }), [shifts, selectedUser?.uid, targetYear, targetMonth, shiftTypes]);
+    const annualLimitHours = getAnnualLeaveHours(selectedUser?.startDate || selectedUser?.hireDate || selectedUser?.contractStart);
+    const annualUsedHours = Number(yearlyTimeStats?.yearStats?.usedAnnualHours || 0);
+    const annualRemainingHours = Math.max(0, annualLimitHours - annualUsedHours);
+    const compRemainingHours = Math.max(0, Number(yearlyTimeStats?.balance || 0));
+    const monthLeaveHours = leaveRows.reduce((sum, row) => sum + Number(row.hours || 0), 0);
+    const selectedGasRecords = useMemo(() => Array.isArray(gasReceipts?.[targetMonth]?.[selectedUser?.uid]) ? gasReceipts[targetMonth][selectedUser.uid] : [], [gasReceipts, targetMonth, selectedUser?.uid]);
+    const selectedGasTotal = useMemo(() => selectedGasRecords.reduce((sum, record) => sum + Number(record.amount || 0), 0), [selectedGasRecords]);
+    const selectedGasReimbursement = Math.min(selectedGasTotal, 500);
  
     const handleExportCSV = () => {
         const rows = [['日期','員工','類型','班別／假別','時數','理由／備註','扣薪／補休影響']];
@@ -1259,6 +1321,19 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
                 <div className="text-xs font-bold text-gray-600">{payrollLockInfo.lockedAt ? `鎖定時間：${formatDateTime(payrollLockInfo.lockedAt)}${payrollLockInfo.lockedByName ? `｜${payrollLockInfo.lockedByName}` : ''}` : '尚未鎖定'}</div>
             </div>
  
+            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl p-4 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                    <div><div className="font-black text-lg">{selectedUser?.name || '員工'}的剩餘時數</div><div className="text-xs text-white/75">以 {targetYear} 年度與 {targetMonth} 當月資料即時計算</div></div>
+                    <div className="text-xs bg-white/15 px-3 py-1.5 rounded-full font-bold">月結：{getPayrollStatusLabel()}</div>
+                </div>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    <div className="bg-white/15 rounded-xl p-3"><div className="text-xs text-white/75">特休剩餘</div><div className="text-2xl font-black mt-1">{annualRemainingHours}<span className="text-sm ml-1">hr</span></div><div className="text-[10px] text-white/70 mt-1">年度額度 {annualLimitHours}｜已用 {annualUsedHours}</div></div>
+                    <div className="bg-white/15 rounded-xl p-3"><div className="text-xs text-white/75">補休可用</div><div className="text-2xl font-black mt-1">{compRemainingHours}<span className="text-sm ml-1">hr</span></div><div className="text-[10px] text-white/70 mt-1">加班累積扣除已用補休</div></div>
+                    <div className="bg-white/15 rounded-xl p-3"><div className="text-xs text-white/75">本月加班</div><div className="text-2xl font-black mt-1">{summary.overtimeHours}<span className="text-sm ml-1">hr</span></div><div className="text-[10px] text-white/70 mt-1">已確認的正數加班時數</div></div>
+                    <div className="bg-white/15 rounded-xl p-3"><div className="text-xs text-white/75">本月請假</div><div className="text-2xl font-black mt-1">{monthLeaveHours}<span className="text-sm ml-1">hr</span></div><div className="text-[10px] text-white/70 mt-1">含特休、病假、事假等</div></div>
+                </div>
+            </div>
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">已排班時數</div><div className="text-2xl font-black text-indigo-600 mt-1">{summary.scheduledHours} hr</div></div>
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">特休使用</div><div className="text-2xl font-black text-purple-600 mt-1">{summary.annualHours} hr</div></div>
@@ -1266,6 +1341,15 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">病假／事假</div><div className="text-2xl font-black text-red-500 mt-1">{summary.sickHours} / {summary.personalHours} hr</div></div>
             </div>
  
+            <div className="bg-white border border-teal-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                    <div className="font-black text-teal-800 flex items-center gap-2"><Fuel size={18}/> 油資發票自行登錄</div>
+                    <div className="text-xs text-gray-500 mt-1">已登錄 {selectedGasRecords.length} 張｜總額 ${selectedGasTotal}｜本月可補貼 ${selectedGasReimbursement}（上限 $500）</div>
+                    <div className="text-[10px] text-teal-700 mt-1 font-bold">筆數與登錄總額不限；超過 $500 的部分仍保留明細，但不列入補貼。</div>
+                </div>
+                <button onClick={() => setGasModalUser(selectedUser)} disabled={!selectedUser} className="bg-teal-600 text-white px-4 py-2.5 rounded-lg font-black hover:bg-teal-700 disabled:bg-gray-300">登錄／查看發票</button>
+            </div>
+
             <div className="bg-white border rounded-xl overflow-hidden">
                 <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假、特休明細</h3><p className="text-xs text-gray-400 mt-1">完整保留假別、時數、申請理由與病假／事假扣薪影響。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
                 {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}　{row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">理由／備註：{row.reason}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
@@ -1280,6 +1364,16 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
                 <div className="p-4 bg-gray-50 border-b"><h3 className="font-bold text-gray-700">每日出勤與打卡明細</h3></div>
                 {loading ? <div className="p-8 text-center text-gray-400">載入中...</div> : summary.userRecords.length === 0 ? <div className="p-8 text-center text-gray-400">本月尚無打卡紀錄</div> : <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">日期</th><th className="p-3">班別</th><th className="p-3 text-center">上班打卡</th><th className="p-3 text-center">下班打卡</th><th className="p-3">狀態</th></tr></thead><tbody>{summary.userRecords.map((record,index) => { const abnormal = record.status.some(status => status !== '正常'); return <tr key={`${record.date}-${index}`} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{record.date.substring(5)}</td><td className="p-3 text-xs text-gray-600">{record.shiftInfo?.label || '-'}</td><td className="p-3 text-center font-bold">{record.in || '-'}</td><td className="p-3 text-center font-bold">{record.out || '-'}</td><td className="p-3">{abnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs font-bold">{record.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs font-bold">正常</span>}</td></tr> })}</tbody></table></div>}
             </div>
+            <GasReceiptModal
+                isOpen={!!gasModalUser}
+                onClose={() => setGasModalUser(null)}
+                user={gasModalUser}
+                monthStr={targetMonth}
+                db={db}
+                appId={appId}
+                currentRecords={gasReceipts?.[targetMonth] || {}}
+                currentUserInfo={currentUserInfo}
+            />
         </div>
     );
 };
@@ -1732,6 +1826,15 @@ const getYearlyBalance = (uid, yearToFind) => {
                         return;
                     }
  
+                    // 員工送審時先取得當日原班別，避免特休小時制引用未宣告的 baseAssign。
+                    const employeeAssignments = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+                    const employeeAssignIndex = employeeAssignments.findIndex(assignment => assignment.uid === uid);
+                    const baseAssign = employeeAssignIndex >= 0 ? employeeAssignments[employeeAssignIndex] : null;
+                    const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+                    const requestLeaveHours = lType === 'annual'
+                        ? normalizeCustomLeaveHours(customLeaveHours, defaultLeaveHours)
+                        : (Number(baseAssign?.leaveHours) > 0 ? Number(baseAssign.leaveHours) : defaultLeaveHours);
+
                     const duplicatedReqs = (requests || []).filter(r => r.type === 'leave_request' && (r.uid === currentUserInfo.uid) && r.date === dateStr);
                     await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
@@ -1741,7 +1844,7 @@ const getYearlyBalance = (uid, yearToFind) => {
                         date: dateStr,
                         leaveType: lType,
                         leaveLabel: leaveLabel,
-                        hours: lType === 'annual' ? normalizeCustomLeaveHours(customLeaveHours, resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES)) : resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES),
+                        hours: requestLeaveHours,
                         subUid: subUid || null,
                         subName: subUid ? (users[subUid]?.name || '') : '',
                         useComp: ['sick', 'personal'].includes(lType) ? useComp : false,
@@ -1753,7 +1856,8 @@ const getYearlyBalance = (uid, yearToFind) => {
                     setExpanded(null);
                     onClose(); // 申請完自動關閉彈窗
                 } catch (e) {
-                    alert("申請送出失敗，請檢查網路連線");
+                    console.error('請假申請送出失敗', e);
+                    alert(`申請送出失敗：${e?.message || '請確認網路連線或資料庫權限'}`);
                 }
             }
             return; // 結束函數，不執行下方的普通排班邏輯
@@ -2140,6 +2244,7 @@ const calc = (uid) => {
                 db={db}
                 appId={appId}
                 currentRecords={gasReceipts?.[targetMonth] || {}}
+                currentUserInfo={currentUserInfo}
             />
         </div>
     );
@@ -2661,6 +2766,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                 db={db}
                 appId={appId}
                 currentRecords={gasReceipts?.[targetMonth] || {}}
+                currentUserInfo={currentUserInfo}
             />
         </div>
     );
@@ -3588,7 +3694,7 @@ const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!
             case 'forms': return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
             case 'salary': return <SalaryView users={safeUsers} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
             case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} />;
-            case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} setView={setView} />;
+            case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} setView={setView} gasReceipts={dbData.gasReceipts} />;
             
             // 🟢 修正：只保留一個 settings，並加上空值保護
             case 'settings': return <SettingsView users={safeUsers} currentUserInfo={currentUserInfo} inventoryItems={safeInventoryItems} shiftTypes={safeShiftTypes} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
