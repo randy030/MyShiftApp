@@ -1,4030 +1,8401 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+
 import { initializeApp } from 'firebase/app';
+
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, getDoc, addDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
+
 import { 
+
     Calendar, Users, ChevronLeft, ChevronRight, Save, ShieldAlert, Plus, Trash2, 
+
     BookOpen, LogOut, CheckCircle2, Lock, Eye, Clock, Store, Bell, ArrowRightLeft, 
+
     FileBarChart, UserX, Upload, ListFilter, History, StickyNote, DollarSign, Gift, 
+
     Megaphone, Send, Smartphone, X, Inbox, Repeat, MapPin, Fingerprint, Package, 
+
     Settings, ChevronDown, Minus, Download, Edit, FileSignature, FileText, Printer, 
+
     FileSearch, Fuel, CreditCard, AlertTriangle, Wallet, FileCheck, PieChart
+
 } from 'lucide-react';
-const CURRENT_VERSION = "V14.0.0-alpha11.13";
+
+const CURRENT_VERSION = "V14.0.0-alpha11.14";
+
 const CURRENT_RELEASE_NOTES = [
-    '主管代員工建立的加班／補休時數單，員工現在可在通知中心查看並確認或拒絕。',
-    '主管與店長可從日期明細或通知中心取消尚未確認的時數單。',
-    '修正待確認時數單無法移除、員工看不到確認單的問題。',
-    '員工確認後，時數才會正式寫入出勤統計與薪資結算明細。'
+
+ '修正換班申請已送出 LINE 通知，但系統通知中心看不到的問題。',
+
+ '換班流程改為對方先同意，再由主管或店長核准後正式套用班表。',
+
+ '通知中心會顯示換班雙方、兩個日期與目前審核階段。',
+
+ '舊有尚未處理的換班申請也可直接在通知中心繼續完成。'
+
 ];
+
 const LINE_API_URL = "/api/webhook"; 
+
 const ADMIN_EMAIL = "randy22444289@gmail.com";
+
 const firebaseConfig = {
+
     apiKey: "AIzaSyAr_07n-yBWElUDJk0C1nobLm67XRPgX4w",
+
     authDomain: "our-company-d1ef6.firebaseapp.com",
+
     projectId: "our-company-d1ef6",
+
     storageBucket: "our-company-d1ef6.firebasestorage.app",
+
     messagingSenderId: "354573964228",
+
     appId: "1:354573964228:web:2133ba855b7eedda9c0a91",
+
     measurementId: "G-FDNMNT7QQ6"
+
 };
+
 const app = initializeApp(firebaseConfig);
+
 const auth = getAuth(app);
+
 const provider = new GoogleAuthProvider(); // 補上 Google 登入 Provider
+
 const db = getFirestore(app);
+
 const appId = 'team-shift-pc-v1'; 
 
+ 
+
 const APP_MANIFEST = {
+
     name: 'TEATOP 台中東山店班表系統',
+
     short_name: 'TEATOP班表',
+
     start_url: '/',
+
     scope: '/',
+
     display: 'standalone',
+
     background_color: '#ffffff',
+
     theme_color: '#4f46e5',
+
     icons: []
+
 };
+
+ 
 
 const ensureRuntimeManifest = () => {
+
     if (typeof document === 'undefined') return;
+
     try {
+
         const existingLinks = Array.from(document.querySelectorAll('link[rel="manifest"]'));
+
         existingLinks.forEach(link => {
+
             const href = String(link.getAttribute('href') || '');
+
             if (!href || href.includes('manifest.json')) link.parentNode?.removeChild(link);
+
         });
+
         if (document.querySelector('link[data-teatop-runtime-manifest="true"]')) return;
+
         const blob = new Blob([JSON.stringify(APP_MANIFEST, null, 2)], { type: 'application/manifest+json' });
+
         const manifestUrl = URL.createObjectURL(blob);
+
         const link = document.createElement('link');
+
         link.rel = 'manifest';
+
         link.href = manifestUrl;
+
         link.setAttribute('data-teatop-runtime-manifest', 'true');
+
         document.head.appendChild(link);
+
     } catch (err) {
+
         console.warn('runtime manifest setup failed', err);
+
     }
+
 };
+
+ 
 
 const exportToCSV = (filename, rows) => {
+
     const csvContent = "\uFEFF" + rows.map(row => 
+
         row.map(item => `"${String(item || '').replace(/"/g, '""')}"`).join(",")
+
     ).join("\n");
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
     const link = document.createElement("a");
+
     link.href = URL.createObjectURL(blob);
+
     link.download = `${filename}.csv`;
+
     link.click();
+
 };
+
 const sendLineNotification = async (targetLineIds, messageText) => {
+
     if (!targetLineIds || targetLineIds.length === 0) return false;
+
     try {
+
         const response = await fetch(LINE_API_URL, { 
+
             method: 'POST', 
+
             headers: { 'Content-Type': 'application/json' }, 
+
             body: JSON.stringify({ to: targetLineIds, messages: [{ type: 'text', text: messageText }] }) 
+
         });
+
         if (!response.ok) throw new Error(`LINE API ${response.status}`);
+
         return true;
+
     } catch (e) {
+
         console.error("LINE 通知失敗", e);
+
         return false;
+
     }
+
 };
+
 const getApproverLineIds = (users = {}) => [...new Set(
+
     Object.values(users || {})
+
         .filter(u => !u?.isResigned && (u?.role === 'boss' || u?.role === 'supervisor' || u?.isAdmin === true || u?.isManager === true) && u?.lineUserId)
+
         .map(u => u.lineUserId)
+
         .filter(Boolean)
+
 )];
+
 const getSiblingPendingRequests = (requests = [], req = {}) => {
+
     const requesterUid = req?.uid || req?.fromUid;
+
     return (requests || []).filter(item => {
+
         const itemRequesterUid = item?.uid || item?.fromUid;
+
         if (!item?.id || item.id === req?.id) return false;
+
         if (item?.type !== req?.type) return false;
+
         if (itemRequesterUid !== requesterUid) return false;
+
         if ((item?.date || '') !== (req?.date || '')) return false;
+
         if ((item?.leaveType || '') !== (req?.leaveType || '')) return false;
+
         return String(item?.hours ?? '') === String(req?.hours ?? '');
+
     });
+
 };
+
 const formatDateTime = (value) => {
+
     if (!value) return '—';
+
     const dateObj = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
+
     if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return '—';
+
     const yyyy = dateObj.getFullYear();
+
     const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+
     const dd = String(dateObj.getDate()).padStart(2, '0');
+
     const hh = String(dateObj.getHours()).padStart(2, '0');
+
     const mi = String(dateObj.getMinutes()).padStart(2, '0');
+
     return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+
 };
+
  
+
 const writeAuditLog = async ({ db, appId, actor, action, targetType, targetId = '', detail = {}, createdAt = Date.now() }) => {
+
     try {
+
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'auditLogs'), {
+
             actorUid: actor?.uid || '',
+
             actorName: actor?.name || '系統',
+
             action,
+
             targetType,
+
             targetId,
+
             detail,
+
             createdAt
+
         });
+
     } catch (error) {
+
         console.warn('操作紀錄寫入失敗', error);
+
     }
+
 };
+
 const sortInventoryItems = (items = []) => {
+
     const safeItems = Array.isArray(items) ? [...items] : [];
+
     return safeItems
+
         .map((item, index) => ({ item, index }))
+
         .sort((a, b) => {
+
             const hasOrderA = Number.isFinite(Number(a.item?.sortOrder));
+
             const hasOrderB = Number.isFinite(Number(b.item?.sortOrder));
+
             if (hasOrderA && hasOrderB) {
+
                 const orderDiff = Number(a.item.sortOrder) - Number(b.item.sortOrder);
+
                 if (orderDiff !== 0) return orderDiff;
+
             } else if (hasOrderA !== hasOrderB) {
+
                 return hasOrderA ? -1 : 1;
+
             }
+
             return a.index - b.index;
+
         })
+
         .map(entry => entry.item);
+
 };
+
 const normalizeInventoryItems = (items = []) => (Array.isArray(items) ? items : []).map((item, index) => ({
+
     ...item,
+
     sortOrder: index
+
 }));
+
 const prepareInventoryItems = (items = []) => {
+
     const safeItems = Array.isArray(items) ? [...items] : [];
+
     if (safeItems.length === 0) return [];
+
     const hasExplicitOrder = safeItems.some(item => Number.isFinite(Number(item?.sortOrder)));
+
     return normalizeInventoryItems(hasExplicitOrder ? sortInventoryItems(safeItems) : safeItems);
+
 };
+
 const getDistance = (lat1, lon1, lat2, lon2) => {
+
     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+
     const R = 6371e3; 
+
     const dLat = (lat2 - lat1) * (Math.PI / 180);
+
     const dLon = (lon2 - lon1) * (Math.PI / 180);
+
     const a = Math.sin(dLat/2) ** 2 + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon/2) ** 2;
+
     return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+
 };
+
 const getAnnualLeaveDays = (startDateStr) => {
+
     if (!startDateStr) return 0;
+
     const start = new Date(startDateStr);
+
     const now = new Date();
+
     const diffTime = Math.abs(now - start);
+
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
     const diffYears = diffDays / 365.25;
+
     if (diffYears >= 0.5 && diffYears < 1) return 3;
+
     if (diffYears >= 1 && diffYears < 2) return 7;
+
     if (diffYears >= 2 && diffYears < 3) return 10;
+
     if (diffYears >= 3 && diffYears < 5) return 14;
+
     if (diffYears >= 5 && diffYears < 10) return 15;
+
     if (diffYears >= 10) return Math.min(15 + Math.floor(diffYears - 9), 30);
+
     return 0;
+
 };
+
  
+
 const getAnnualLeaveHours = (startDateStr) => getAnnualLeaveDays(startDateStr) * 8;
+
 const calculateShiftHours = (shiftCode, shiftTypes = DEFAULT_SHIFT_TYPES) => {
+
     const shift = (shiftTypes || []).find(st => st.id === shiftCode);
+
     if (!shift) return 8;
+
     if (Number(shift?.hours) > 0) return Number(shift.hours);
+
     if (!shift.start || !shift.end) return 8;
+
     const [startHour, startMinute] = String(shift.start).split(':').map(Number);
+
     const [endHour, endMinute] = String(shift.end).split(':').map(Number);
+
     let startTotal = (startHour || 0) * 60 + (startMinute || 0);
+
     let endTotal = (endHour || 0) * 60 + (endMinute || 0);
+
     if (endTotal <= startTotal) endTotal += 24 * 60;
+
     const rawHours = Math.round(((endTotal - startTotal) / 60) * 100) / 100;
+
     if (rawHours === 8.5) return 8;
+
     return Math.max(1, rawHours || 8);
+
 };
+
 const resolveLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
+
     const existingHours = Number(assignment?.leaveHours);
+
     if (Number.isFinite(existingHours) && existingHours > 0) return existingHours;
+
     if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
+
     return 8;
+
 };
+
  
+
 const resolveDefaultLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
+
     if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
+
     return 8;
+
 };
+
  
+
 const normalizeCustomLeaveHours = (value, fallbackHours = 8) => {
+
     const fallback = Number(fallbackHours) > 0 ? Number(fallbackHours) : 8;
+
     const raw = Number(value);
+
     if (!Number.isFinite(raw) || raw <= 0) return fallback;
+
     const rounded = Math.round(raw * 2) / 2;
+
     return Math.max(0.5, Math.min(rounded, Math.max(fallback, 12)));
+
 };
+
 const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = '', leaveTypes = [], shiftTypes = DEFAULT_SHIFT_TYPES }) => {
+
     let monthStats = { ot: 0, leaves: {} };
+
     let yearStats = { otEarned: 0, compHoursUsed: 0, leaves: {}, usedAnnualHours: 0 };
+
     let otHistory = [];
+
     let monthOtHistory = [];
+
  
+
     Object.keys(shifts || {}).forEach(date => {
+
         if (!String(date).startsWith(targetYear || '')) return;
+
         const data = shifts?.[date];
+
         if (data?.isClosed) return;
+
         const assign = Array.isArray(data?.assignments) ? data.assignments.find(a => a.uid === uid) : null;
+
         if (!assign) return;
+
  
+
         if (assign.type === 'LEAVE') {
+
             const lType = assign.leaveType || 'unknown';
+
             const typeInfo = (leaveTypes || []).find(t => t.id === lType);
+
             const hrs = resolveLeaveHours(assign, shiftTypes);
+
             if (!yearStats.leaves[lType]) yearStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
+
             yearStats.leaves[lType].days += 1;
+
             if (lType !== 'menstrual') yearStats.leaves[lType].hours += hrs;
+
             if (lType === 'annual') yearStats.usedAnnualHours += hrs;
+
             if (assign.useComp && hrs > 0 && lType !== 'menstrual' && lType !== 'annual') {
+
                 yearStats.compHoursUsed += hrs;
+
                 yearStats.leaves[lType].compHours += hrs;
+
                 otHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣` });
+
                 if (targetMonth && date.startsWith(targetMonth)) {
+
                     monthOtHistory.push({ date, hours: -hrs, reason: `使用「${typeInfo?.label || lType}」抵扣${assign.note ? ` (${assign.note})` : ''}` });
+
                 }
+
             } else if (hrs > 0 && lType !== 'menstrual' && lType !== 'annual') {
+
                 yearStats.leaves[lType].deductHours += hrs;
+
             }
+
             if (targetMonth && date.startsWith(targetMonth)) {
+
                 if (!monthStats.leaves[lType]) monthStats.leaves[lType] = { days: 0, hours: 0, compHours: 0, deductHours: 0 };
+
                 monthStats.leaves[lType].days += 1;
+
                 if (lType !== 'menstrual') monthStats.leaves[lType].hours += hrs;
+
                 if (assign.useComp && lType !== 'menstrual' && lType !== 'annual') monthStats.leaves[lType].compHours += hrs;
+
                 else if (lType !== 'annual' && lType !== 'menstrual') monthStats.leaves[lType].deductHours += hrs;
+
             }
+
         }
+
  
+
         if (assign.otHours && assign.otConfirmed) {
+
             const hrs = parseFloat(assign.otHours);
+
             if (hrs > 0) yearStats.otEarned += hrs;
+
             if (hrs < 0) yearStats.compHoursUsed += Math.abs(hrs);
+
             if (targetMonth && date.startsWith(targetMonth) && hrs > 0) monthStats.ot += hrs;
+
             otHistory.push({ date, hours: hrs, reason: assign.otReason || '無備註' });
+
             if (targetMonth && date.startsWith(targetMonth)) {
+
                 monthOtHistory.push({ date, hours: hrs, reason: (assign.otReason && assign.otReason !== '無備註') ? assign.otReason : (assign.note || '無備註') });
+
             }
+
         }
+
     });
+
  
+
     otHistory.sort((a, b) => b.date.localeCompare(a.date));
+
     monthOtHistory.sort((a, b) => b.date.localeCompare(a.date));
+
  
+
     return {
+
         monthStats,
+
         yearStats,
+
         otHistory,
+
         monthOtHistory,
+
         balance: yearStats.otEarned - yearStats.compHoursUsed
+
     };
+
 };
+
  
+
 const DEFAULT_LEAVE_TYPES = [
+
     { id: 'rostered', label: '自畫假', deduct: false },
+
     { id: 'official', label: '排休', deduct: false }, 
+
     { id: 'annual', label: '特休', deduct: false }, 
+
     { id: 'menstrual', label: '生理假', deduct: false }, 
+
     { id: 'sick', label: '病假', deduct: true }, 
+
     { id: 'personal', label: '事假', deduct: true },
+
 ];
+
 const DEFAULT_SHIFT_TYPES = [
+
     { id: '09A', label: '09A', start: '09:00', end: '17:30', hours: 8, display: '09:00~17:30' },
+
     { id: '09B', label: '09B', start: '09:30', end: '18:00', hours: 8, display: '09:30~18:00' },
+
     { id: '12A', label: '12A', start: '12:00', end: '20:30', hours: 8, display: '12:00~20:30' },
+
     { id: '12B', label: '12B', start: '12:30', end: '21:00', hours: 8, display: '12:30~21:00' },
+
     { id: '0901', label: '0901', start: '09:00', end: '21:00', hours: 8, display: '09:00~13:00 / 17:00~21:00' },
+
     { id: '09O', label: '09O', start: '09:00', end: '21:00', hours: 12, display: '09:00~21:00（舊制保留）' }
+
 ];
+
 const mergeShiftTypes = (customShiftTypes = []) => {
+
     const baseMap = new Map(DEFAULT_SHIFT_TYPES.map(item => [item.id, item]));
+
     (Array.isArray(customShiftTypes) ? customShiftTypes : []).forEach(item => {
+
         const id = String(item?.id || '').trim();
+
         if (!id || baseMap.has(id)) return;
+
         baseMap.set(id, {
+
             id,
+
             label: String(item?.label || id).trim() || id,
+
             start: String(item?.start || '').trim(),
+
             end: String(item?.end || '').trim(),
+
             hours: Number(item?.hours) > 0 ? Number(item.hours) : 8,
+
             display: String(item?.display || '').trim() || `${String(item?.start || '').trim()}~${String(item?.end || '').trim()}`
+
         });
+
     });
+
     return Array.from(baseMap.values());
+
 };
+
 const DEFAULT_INVENTORY_ITEMS = [
+
     { id: 'i1', category: '茶葉類', name: '高山青茶', spec: '斤', price: 370 },
+
     { id: 'i6', category: '果汁與糖漿', name: '梅果漿', spec: '包', price: 165 },
+
     { id: 'i11', category: '奶與粉類', name: '鮮奶', spec: '罐', price: 68 },
+
     { id: 'i14', category: '配料與包材', name: '大吸管(12mm)', spec: '包', price: 0 }
+
 ];
+
 const USER_COLORS = [
+
     'bg-red-100 text-red-900 border-red-400', 'bg-blue-100 text-blue-900 border-blue-400', 'bg-green-100 text-green-900 border-green-400', 
+
     'bg-yellow-100 text-yellow-900 border-yellow-500', 'bg-purple-100 text-purple-900 border-purple-400', 'bg-teal-100 text-teal-900 border-teal-400',    
+
     'bg-pink-100 text-pink-900 border-pink-400', 'bg-orange-100 text-orange-900 border-orange-400', 'bg-indigo-100 text-indigo-900 border-indigo-400', 'bg-rose-100 text-rose-900 border-rose-400'     
+
 ];
+
 const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', monthly: '每月', yearly: '每年' };
+
 const getMonthData = (year, month) => ({ firstDay: new Date(year, month, 1).getDay(), days: new Date(year, month + 1, 0).getDate() });
+
 const getLocalDate = (dateStr) => { const [y, m, d] = dateStr.split('-'); return new Date(y, m - 1, d); };
+
 const checkEventOnDate = (event, checkDateStr) => {
+
     if (!event.startDate) return false;
+
     const eventEndDate = event.endDate || event.startDate;
+
     if (checkDateStr < event.startDate || checkDateStr > eventEndDate) return false;
+
     if (event.repeatType === 'none') return checkDateStr >= event.startDate && checkDateStr <= eventEndDate;
+
     const checkDate = getLocalDate(checkDateStr);
+
     const startDate = getLocalDate(event.startDate);
+
     if (event.repeatType === 'daily') return true;
+
     if (event.repeatType === 'weekly') return checkDate.getDay() === startDate.getDay();
+
     if (event.repeatType === 'monthly') return checkDate.getDate() === startDate.getDate();
+
     if (event.repeatType === 'yearly') return checkDate.getMonth() === startDate.getMonth() && checkDate.getDate() === startDate.getDate();
+
     return false;
+
 };
+
 // ==========================================
+
 // 🪟 共用組件與各類 Modal
+
 // ==========================================
+
 const NavBtn = ({ active, onClick, icon: Icon, label }) => (
+
     <button onClick={onClick} className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold transition-colors ${active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
+
         <Icon className="w-4 h-4" /><span className="hidden xs:inline">{label}</span>
+
     </button>
+
 );
+
 const DropdownItem = ({ onClick, icon: Icon, label, active }) => (
+
     <button onClick={onClick} className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-indigo-50 font-bold transition-colors ${active ? 'text-indigo-600 bg-indigo-50/50' : 'text-gray-600'}`}>
+
         <Icon className="w-4 h-4 opacity-70" /> {label}
+
     </button>
+
 );
+
 const OTModal = ({ isOpen, onClose, onConfirm, modalData, dateStr }) => {
+
     const [hours, setHours] = useState('');
+
     const [reason, setReason] = useState('');
+
     useEffect(() => { if(isOpen && modalData) { setHours(modalData.initialHours || ''); setReason(modalData.initialReason || ''); } }, [isOpen, modalData]);
+
     if (!isOpen || !modalData) return null;
+
     const { user, balance } = modalData;
+
     const numHours = parseFloat(hours);
+
     const isExceeding = numHours < 0 && Math.abs(numHours) > balance;
+
   
+
   return (
+
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
+
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
+
                 <div className="bg-indigo-600 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> 加班 / 補休申請</h3><button onClick={onClose} className="hover:bg-indigo-700 p-1 rounded"><X size={20}/></button></div>
+
                 <div className="p-6 space-y-4">
+
                     <div className="text-sm text-gray-500">正在編輯 <span className="font-bold text-gray-800">{user?.name}</span> 於 <span className="font-bold text-gray-800">{dateStr}</span> 的時數</div>
+
                     <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center"><span className="text-sm font-bold text-indigo-900">年度可用補休時數（不含特休／生理假）：</span><span className={`text-lg font-bold ${balance < 0 ? 'text-red-600' : 'text-green-600'}`}>{balance} hr</span></div>
+
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">增減時數 (小時)</label><input type="number" autoFocus value={hours} onChange={e=>setHours(e.target.value)} placeholder="加班正數，補休負數" className={`w-full border-2 rounded-lg px-3 py-2 text-lg font-bold focus:outline-none ${isExceeding ? 'border-red-300 text-red-600 bg-red-50' : 'border-indigo-100 text-gray-700 focus:border-indigo-500'}`}/>{isExceeding && <p className="text-[11px] font-bold text-red-600 mt-1">⚠️ 申請補休大於剩餘時數，將依規定扣薪！</p>}</div>
+
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">事由 / 備註</label><input type="text" value={reason} onChange={e=>setReason(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"/></div>
+
                     <div className="flex gap-3 pt-2"><button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold hover:bg-gray-200">取消</button><button onClick={() => { if(hours === '') return alert("請輸入時數"); onConfirm(parseFloat(hours), reason); }} className="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-bold shadow hover:bg-indigo-700">送出</button></div>
+
                 </div>
+
             </div>
+
         </div>
+
     );
+
 };
+
 const CompanyEventModal = ({ isOpen, onClose, eventData, onSave, onDelete }) => {
+
     const [formData, setFormData] = useState({ title: '', startDate: '', endDate: '', time: '', repeatType: 'none', note: '' });
+
     useEffect(() => {
+
         if (isOpen && eventData) {
+
             setFormData({
+
                 ...eventData,
+
                 endDate: eventData.endDate || eventData.startDate || ''
+
             });
+
         }
+
     }, [isOpen, eventData]);
+
     if (!isOpen) return null;
+
     return (
+
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4 animate-fade-in">
+
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm max-h-[85vh] overflow-hidden">
+
                 <div className="bg-purple-600 p-4 text-white flex justify-between items-center sticky top-0 z-10"><h3 className="font-bold flex items-center gap-2"><Megaphone className="w-5 h-5"/> 公司行程備忘錄</h3><button onClick={onClose} className="hover:bg-purple-700 p-2 rounded-full"><X size={22}/></button></div>
+
                 <div className="p-6 space-y-4 overflow-y-auto overscroll-contain">
+
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">標題 <span className="text-red-500">*</span></label><input type="text" value={formData.title} onChange={e=>setFormData({...formData, title: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:border-purple-500"/></div>
+
                     <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-bold text-gray-700 mb-1">開始日期</label><input type="date" value={formData.startDate} onChange={e=>setFormData({...formData, startDate: e.target.value, endDate: formData.endDate || e.target.value})} className="w-full border rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">結束日期</label><input type="date" value={formData.endDate || formData.startDate} onChange={e=>setFormData({...formData, endDate: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div></div>
+
                     <div className="grid grid-cols-2 gap-3"><div className="col-span-2"><label className="block text-[11px] font-bold text-purple-600 mb-1">日期區間預設為同一天，可依活動期間調整</label></div><div><label className="block text-xs font-bold text-gray-700 mb-1">時間</label><input type="time" value={formData.time} onChange={e=>setFormData({...formData, time: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"/></div><div><label className="block text-xs font-bold text-gray-700 mb-1">重複</label><select value={formData.repeatType} onChange={e=>setFormData({...formData, repeatType: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none">{Object.entries(REPEAT_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}</select></div></div>
+
                     <div><label className="block text-xs font-bold text-gray-700 mb-1">備註 (選填)</label><textarea value={formData.note || ''} onChange={e=>setFormData({...formData, note: e.target.value})} rows="2" className="w-full border rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none"></textarea></div>
+
                     <div className="flex gap-3 pt-4 border-t">{formData.id && <button onClick={()=>onDelete(formData.id)} className="p-2.5 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg"><Trash2 size={18}/></button>}<button onClick={onClose} className="flex-1 bg-gray-100 text-gray-600 py-2.5 rounded-lg font-bold hover:bg-gray-200">取消</button><button onClick={() => { if(!formData.title) return alert("請輸入標題"); if(!formData.startDate) return alert("請選擇開始日期"); const safeEndDate = formData.endDate || formData.startDate; if (safeEndDate < formData.startDate) return alert("結束日期不可早於開始日期"); onSave({ ...formData, endDate: safeEndDate }); }} className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg font-bold shadow hover:bg-purple-700">儲存</button></div>
+
                 </div>
+
             </div>
+
         </div>
+
     );
+
 };
+
 const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRecords, currentUserInfo }) => {
+
     const [amount, setAmount] = useState('');
+
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+
     if (!isOpen || !user) return null;
+
     const userRecords = Array.isArray(currentRecords?.[user.uid]) ? currentRecords[user.uid] : [];
+
     const totalAmount = userRecords.reduce((sum, record) => sum + Number(record.amount || 0), 0);
+
     const reimbursableAmount = Math.min(totalAmount, 500);
+
     const remainingAllowance = Math.max(0, 500 - reimbursableAmount);
+
     const excessAmount = Math.max(0, totalAmount - 500);
 
+ 
+
     const handleSave = async () => {
+
         const num = parseFloat(amount);
+
         if (Number.isNaN(num) || num <= 0) return alert('請輸入正確金額');
+
         if (!date) return alert('請選擇發票日期');
+
         try {
+
             const newRecord = {
+
                 id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+
                 date,
+
                 amount: num,
+
                 timestamp: Date.now(),
+
                 enteredByUid: currentUserInfo?.uid || user.uid,
+
                 enteredByName: currentUserInfo?.name || user.name || '員工'
+
             };
+
             const updatedRecords = [...userRecords, newRecord];
+
             await setDoc(
+
                 doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', monthStr),
+
                 { [user.uid]: updatedRecords },
+
                 { merge: true }
+
             );
+
             setAmount('');
+
             alert(`✅ 發票登錄成功！\n目前登錄總額：$${totalAmount + num}\n本月可補貼：$${Math.min(totalAmount + num, 500)}`);
+
         } catch (error) {
+
             console.error('油資發票登錄失敗', error);
+
             alert(`發票登錄失敗：${error?.message || '請確認網路或資料庫權限'}`);
+
         }
+
     };
+
+ 
 
     const handleDelete = async (recordId) => {
+
         if (!window.confirm('確定刪除此發票紀錄？')) return;
+
         try {
+
             const updatedRecords = userRecords.filter(record => record.id !== recordId);
+
             await setDoc(
+
                 doc(db, 'artifacts', appId, 'public', 'data', 'gasReceipts', monthStr),
+
                 { [user.uid]: updatedRecords },
+
                 { merge: true }
+
             );
+
         } catch (error) {
+
             console.error('油資發票刪除失敗', error);
+
             alert(`刪除失敗：${error?.message || '請確認網路或資料庫權限'}`);
+
         }
+
+    };
+
+ 
+
+    return (
+
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
+
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
+
+                <div className="bg-teal-600 p-4 text-white flex justify-between items-center">
+
+                    <h3 className="font-bold flex items-center gap-2"><Fuel className="w-5 h-5"/> 油資發票登錄</h3>
+
+                    <button onClick={onClose} className="hover:bg-teal-700 p-1 rounded"><X size={20}/></button>
+
+                </div>
+
+                <div className="p-6 space-y-4">
+
+                    <div className="flex justify-between items-end border-b pb-3">
+
+                        <div><div className="text-sm text-gray-500">員工姓名</div><div className="font-bold text-lg">{user.name}</div></div>
+
+                        <div className="text-right">
+
+                            <div className="text-xs text-gray-500">{monthStr} 已登錄總額</div>
+
+                            <div className="font-bold text-teal-600 text-xl">${totalAmount}</div>
+
+                            <div className="text-[10px] text-gray-400">補貼上限 $500｜目前可補貼 ${reimbursableAmount}</div>
+
+                        </div>
+
+                    </div>
+
+                    <div className="rounded-lg border border-teal-100 bg-teal-50 px-3 py-2 text-[11px] font-bold text-teal-800">
+
+                        可不限筆數、也可登錄超過 $500 的發票總額；薪資補貼仍以每月 $500 為上限。
+
+                        {remainingAllowance > 0 ? ` 尚可補貼 $${remainingAllowance}` : excessAmount > 0 ? ` 已超出補貼上限 $${excessAmount}` : ' 已達補貼上限'}
+
+                    </div>
+
+                    <div className="bg-gray-50 p-3 rounded-lg border flex gap-2 items-end">
+
+                        <div className="w-1/3"><label className="block text-[10px] font-bold text-gray-600 mb-1">發票日期</label><input type="date" value={date} onChange={event => setDate(event.target.value)} className="w-full border rounded px-2 py-1.5 text-xs focus:outline-none"/></div>
+
+                        <div className="flex-1"><label className="block text-[10px] font-bold text-gray-600 mb-1">金額（需有統編）</label><input type="number" value={amount} onChange={event => setAmount(event.target.value)} placeholder="$" className="w-full border rounded px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-teal-500"/></div>
+
+                        <button onClick={handleSave} className="bg-teal-600 text-white px-3 py-1.5 rounded font-bold hover:bg-teal-700 h-[34px]">新增</button>
+
+                    </div>
+
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+
+                        {userRecords.length === 0 ? <div className="text-center text-xs text-gray-400 py-4">本月尚無發票紀錄</div> :
+
+                            [...userRecords].sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0)).map(record => (
+
+                                <div key={record.id} className="flex justify-between items-center bg-white border p-2 rounded hover:bg-gray-50">
+
+                                    <div><div className="text-xs text-gray-500 font-mono">{record.date}</div><div className="text-[9px] text-gray-400">{record.enteredByName ? `登錄：${record.enteredByName}` : ''}</div></div>
+
+                                    <div className="font-bold text-teal-700">${record.amount}</div>
+
+                                    <button onClick={() => handleDelete(record.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
+
+                                </div>
+
+                            ))
+
+                        }
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    );
+
+};
+
+const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, storeConfig }) => {
+
+    const [agree, setAgree] = useState(false);
+
+    const [origDate, setOrigDate] = useState('');
+
+    const [newDate, setNewDate] = useState('');
+
+    
+
+    const { workLocation, salaryAmount, contractStart, contractEnd, isIndefinite } = currentUserInfo;
+
+    const resolvedWorkLocation = workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
+
+    const canvasRef = useRef(null);
+
+    const [isDrawing, setIsDrawing] = useState(false);
+
+    const [hasSigned, setHasSigned] = useState(false);
+
+    const startDrawing = (e) => {
+
+        const canvas = canvasRef.current;
+
+        const ctx = canvas.getContext('2d');
+
+        const rect = canvas.getBoundingClientRect();
+
+        const clientX = e.clientX || e.touches[0].clientX;
+
+        const clientY = e.clientY || e.touches[0].clientY;
+
+        ctx.beginPath();
+
+        ctx.moveTo(clientX - rect.left, clientY - rect.top);
+
+        setIsDrawing(true); setHasSigned(true);
+
+    };
+
+    const draw = (e) => {
+
+        if (!isDrawing) return;
+
+        e.preventDefault(); 
+
+        const canvas = canvasRef.current;
+
+        const ctx = canvas.getContext('2d');
+
+        const rect = canvas.getBoundingClientRect();
+
+        const clientX = e.clientX || e.touches[0].clientX;
+
+        const clientY = e.clientY || e.touches[0].clientY;
+
+        ctx.lineTo(clientX - rect.left, clientY - rect.top);
+
+        ctx.stroke();
+
+    };
+
+    const stopDrawing = () => { setIsDrawing(false); };
+
+    const clearSignature = () => {
+
+        const canvas = canvasRef.current; const ctx = canvas.getContext('2d');
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height); setHasSigned(false);
+
+    };
+
+    const handleSubmit = async () => {
+
+        if (!agree) return alert("請勾選同意條款！");
+
+        if (!hasSigned) return alert("請在白色方框內親筆簽名！");
+
+        
+
+        let customData = {}; let formName = '';
+
+        if (formType === 'holiday') {
+
+            if (!origDate || !newDate) return alert("請完整選擇原假日與調移日期！");
+
+            formName = '國定假日調移同意書'; customData = { origDate, newDate };
+
+        } else if (formType === 'contract') {
+
+            formName = '員工勞動契約暨保密與工作守則同意書'; 
+
+            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount };
+
+        }
+
+        
+
+        const signatureImage = canvasRef.current.toDataURL('image/png');
+
+        const docData = { uid: currentUserInfo.uid, userName: currentUserInfo.name, formType, formName, agreedAt: Date.now(), customData, signatureImage };
+
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), docData);
+
+        alert("✅ 簽署完成！系統已解鎖並自動跳轉至班表頁面。"); 
+
+        
+
+        onClose();
+
+        if (formType === 'contract' && setView) { setTimeout(() => setView('calendar'), 100); }
+
     };
 
     return (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
-                <div className="bg-teal-600 p-4 text-white flex justify-between items-center">
-                    <h3 className="font-bold flex items-center gap-2"><Fuel className="w-5 h-5"/> 油資發票登錄</h3>
-                    <button onClick={onClose} className="hover:bg-teal-700 p-1 rounded"><X size={20}/></button>
-                </div>
-                <div className="p-6 space-y-4">
-                    <div className="flex justify-between items-end border-b pb-3">
-                        <div><div className="text-sm text-gray-500">員工姓名</div><div className="font-bold text-lg">{user.name}</div></div>
-                        <div className="text-right">
-                            <div className="text-xs text-gray-500">{monthStr} 已登錄總額</div>
-                            <div className="font-bold text-teal-600 text-xl">${totalAmount}</div>
-                            <div className="text-[10px] text-gray-400">補貼上限 $500｜目前可補貼 ${reimbursableAmount}</div>
-                        </div>
-                    </div>
-                    <div className="rounded-lg border border-teal-100 bg-teal-50 px-3 py-2 text-[11px] font-bold text-teal-800">
-                        可不限筆數、也可登錄超過 $500 的發票總額；薪資補貼仍以每月 $500 為上限。
-                        {remainingAllowance > 0 ? ` 尚可補貼 $${remainingAllowance}` : excessAmount > 0 ? ` 已超出補貼上限 $${excessAmount}` : ' 已達補貼上限'}
-                    </div>
-                    <div className="bg-gray-50 p-3 rounded-lg border flex gap-2 items-end">
-                        <div className="w-1/3"><label className="block text-[10px] font-bold text-gray-600 mb-1">發票日期</label><input type="date" value={date} onChange={event => setDate(event.target.value)} className="w-full border rounded px-2 py-1.5 text-xs focus:outline-none"/></div>
-                        <div className="flex-1"><label className="block text-[10px] font-bold text-gray-600 mb-1">金額（需有統編）</label><input type="number" value={amount} onChange={event => setAmount(event.target.value)} placeholder="$" className="w-full border rounded px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-teal-500"/></div>
-                        <button onClick={handleSave} className="bg-teal-600 text-white px-3 py-1.5 rounded font-bold hover:bg-teal-700 h-[34px]">新增</button>
-                    </div>
-                    <div className="max-h-48 overflow-y-auto space-y-1">
-                        {userRecords.length === 0 ? <div className="text-center text-xs text-gray-400 py-4">本月尚無發票紀錄</div> :
-                            [...userRecords].sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0)).map(record => (
-                                <div key={record.id} className="flex justify-between items-center bg-white border p-2 rounded hover:bg-gray-50">
-                                    <div><div className="text-xs text-gray-500 font-mono">{record.date}</div><div className="text-[9px] text-gray-400">{record.enteredByName ? `登錄：${record.enteredByName}` : ''}</div></div>
-                                    <div className="font-bold text-teal-700">${record.amount}</div>
-                                    <button onClick={() => handleDelete(record.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14}/></button>
-                                </div>
-                            ))
-                        }
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, storeConfig }) => {
-    const [agree, setAgree] = useState(false);
-    const [origDate, setOrigDate] = useState('');
-    const [newDate, setNewDate] = useState('');
-    
-    const { workLocation, salaryAmount, contractStart, contractEnd, isIndefinite } = currentUserInfo;
-    const resolvedWorkLocation = workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
-    const canvasRef = useRef(null);
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [hasSigned, setHasSigned] = useState(false);
-    const startDrawing = (e) => {
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        const rect = canvas.getBoundingClientRect();
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-        ctx.beginPath();
-        ctx.moveTo(clientX - rect.left, clientY - rect.top);
-        setIsDrawing(true); setHasSigned(true);
-    };
-    const draw = (e) => {
-        if (!isDrawing) return;
-        e.preventDefault(); 
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        const rect = canvas.getBoundingClientRect();
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-        ctx.lineTo(clientX - rect.left, clientY - rect.top);
-        ctx.stroke();
-    };
-    const stopDrawing = () => { setIsDrawing(false); };
-    const clearSignature = () => {
-        const canvas = canvasRef.current; const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height); setHasSigned(false);
-    };
-    const handleSubmit = async () => {
-        if (!agree) return alert("請勾選同意條款！");
-        if (!hasSigned) return alert("請在白色方框內親筆簽名！");
-        
-        let customData = {}; let formName = '';
-        if (formType === 'holiday') {
-            if (!origDate || !newDate) return alert("請完整選擇原假日與調移日期！");
-            formName = '國定假日調移同意書'; customData = { origDate, newDate };
-        } else if (formType === 'contract') {
-            formName = '員工勞動契約暨保密與工作守則同意書'; 
-            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount };
-        }
-        
-        const signatureImage = canvasRef.current.toDataURL('image/png');
-        const docData = { uid: currentUserInfo.uid, userName: currentUserInfo.name, formType, formName, agreedAt: Date.now(), customData, signatureImage };
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), docData);
-        alert("✅ 簽署完成！系統已解鎖並自動跳轉至班表頁面。"); 
-        
-        onClose();
-        if (formType === 'contract' && setView) { setTimeout(() => setView('calendar'), 100); }
-    };
-    return (
+
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4 animate-fade-in">
+
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[95vh]">
+
                 <div className="bg-gray-800 p-4 text-white flex justify-between items-center"><h3 className="font-bold">{formType === 'holiday' ? '填寫：國定假日調移同意書' : '填寫：員工勞動契約暨保密與工作守則同意書'}</h3><button onClick={onClose}><X size={20}/></button></div>
+
                 <div className="p-6 overflow-y-auto flex-1 space-y-4">
+
                     
+
                     {formType === 'holiday' && (
+
                         <div className="bg-orange-50 p-4 rounded-lg border border-orange-200 mb-4 space-y-3 shadow-sm">
+
                             <h4 className="font-bold text-orange-800">請設定調移日期：</h4>
+
                             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2"><label className="text-sm font-bold text-gray-700 w-24">原國定假日</label><input type="date" value={origDate} onChange={e=>setOrigDate(e.target.value)} className="border rounded px-3 py-2 flex-1 w-full text-sm focus:outline-none"/></div>
+
                             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2"><label className="text-sm font-bold text-gray-700 w-24">調移至日期</label><input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)} className="border rounded px-3 py-2 flex-1 w-full text-sm focus:outline-none"/></div>
+
                         </div>
+
                     )}
+
                     <div className="border border-gray-300 rounded-lg p-5 bg-gray-50 h-72 overflow-y-auto text-sm text-gray-700 leading-relaxed shadow-inner">
+
                         {formType === 'holiday' ? (
+
                             <>
+
                                 <h4 className="font-bold text-center text-lg mb-4 text-gray-900">國定假日調移同意書</h4>
+
                                 <p>立同意書人 <strong>{currentUserInfo.name}</strong> 茲同意雇主依勞動基準法第 37 條及相關施行細則規定，將原定之國定假日調移至其他工作日。</p><br/>
+
                                 <p>雙方約定調移明細如下：</p>
+
                                 <ul className="list-disc pl-5 my-2 space-y-1 font-bold text-indigo-700"><li>原定國定假日：{origDate || '【尚未填寫】'}</li><li>同意調移日期：{newDate || '【尚未填寫】'}</li></ul><br/>
+
                                 <p>說明與約定事項：</p>
+
                                 <ol className="list-decimal pl-5 space-y-2 mt-2"><li>調移後之「原國定假日」即轉為「正常工作日」，立同意書人於該日出勤，雇主無須另加給工資。</li><li>調移後之「調移日」即轉為「休假日」，立同意書人依法享有休假。如因業務需求於該「調移日」出勤，雇主將依法發給出勤加倍工資。</li><li>本同意書經雙方確認於系統打勾並親筆簽署後生效。</li></ol>
+
                             </>
+
                         ) : (
+
                             <>
+
                                 <h4 className="font-bold text-center text-xl mb-4 text-gray-900">員工勞動契約暨保密與工作守則同意書</h4>
+
                                 <p className="mb-4">立契約書人 <strong>{currentUserInfo.name}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第一條：契約起訖與工作場所</p>
+
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
+
                                     <li>契約期間：自 <span className="text-indigo-600 font-bold">{contractStart}</span> 起至 <span className="text-indigo-600 font-bold">{isIndefinite ? '不定期契約' : contractEnd}</span> 止。</li>
+
                                     <li>工作地點：乙方應於甲方指定地點（<span className="text-indigo-600 font-bold">{resolvedWorkLocation}</span>）提供勞務，負責相關門市工作。</li>
+
                                 </ol>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第二條：出勤、請假與排班制度</p>
+
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
+
                                     <li>採排班制與變形工時，確實透過 APP 打卡。</li>
+
                                     <li>換假與換班需於 <strong>3 天前</strong> 經雙方確認並送交店長審核核准。未經核准擅自不到班者，依曠職論處。</li>
+
                                     <li><strong>特休</strong>：依勞動基準法第 38 條規定，由系統按到職日自動計算發放。</li>
+
                                     <li><strong>自畫假/排休</strong>：每月自畫休假上限 3 天，且逢星期六、日之假日最多僅能畫休 2 天。</li>
+
                                     <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理；生理假每年最多 3 天、每月最多 1 天；全年事假上限 14 日、病假上限 30 日。</li>
+
                                 </ol>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第三條：寒暑假旺季特別約定</p>
+
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
+
                                     <li>因應門市寒暑假之營運高峰，乙方同意配合延長工時，正常與延長工時合計單日最長不超過 12 小時。</li>
+
                                     <li>針對旺季配合排班衍生之額外工時，甲方得視營運績效另行核發特別獎金。</li>
+
                                 </ol>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第四條：薪資、油資與補休結算</p>
+
                                 <ol className="list-decimal pl-8 space-y-1 mt-2">
+
                                     <li><strong>本薪發放</strong>：甲方每月給付乙方本薪新台幣 <span className="text-indigo-600 font-bold">{salaryAmount}</span> 元整。統一於 <strong>次月 5 日</strong> 轉帳發放。</li>
+
                                     <li><strong>油資補貼約定</strong>：每月最高補貼 500 元。採實報實銷，須提交甲方統編發票核銷。未達 500 元以實際發票核發，未核銷額度不得遞延。</li>
+
                                     <li><strong>國定假日出勤</strong>：乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」，不另計發加倍工資。</li>
+
                                     <li><strong>年度結算</strong>：至當年 12/31 止，未休畢之補休時數依法折發工資。</li>
+
                                 </ol>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第五條：離職與交接</p>
+
                                 <p className="pl-4 mt-2">乙方自請離職須依勞基法提前預告，並確實辦理交接。未依規定致甲方受損害者須負賠償責任。</p>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第六條：法定保障與福利</p>
+
                                 <p className="pl-4 mt-2">甲方依法提撥 6% 勞退、提供勞保。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第七條：懲處與賠償制度</p>
+
                                 <p className="pl-4 mt-2">嚴禁代打卡、偷料。若因乙方重大過失造成損失，應負損害賠償責任（依法甲方不得預扣薪資）。</p>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-indigo-50 px-2 py-1 rounded inline-block">第八條：機密保密</p>
+
                                 <p className="pl-4 mt-2">乙方對職務上知悉之營業機密負絕對保密義務，離職後亦同。如有違反願負一切法律責任。</p>
+
                                 <p className="font-bold text-gray-900 mt-4 bg-amber-50 px-2 py-1 rounded inline-block">請假規則附錄</p>
+
                                 <p className="pl-4 mt-2">本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則。</p>
+
                                 <p className="pl-4 mt-1">1. 生理假：每年最多 3 天，每月最多 1 天。</p>
+
                                 <p className="pl-4 mt-1">2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</p>
+
                                 <p className="pl-4 mt-1">3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
+
                             </>
+
                         )}
+
                     </div>
+
                     <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 cursor-pointer hover:bg-blue-100 transition-colors" onClick={()=>setAgree(!agree)}>
+
                         <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="w-5 h-5 accent-blue-600 cursor-pointer"/><span className="font-bold text-blue-900 leading-tight">本人已詳細審閱、充分了解且同意上述條款及請假規則附錄，並以下方親筆簽名為憑。</span></label>
+
                     </div>
+
                     <div className="border-2 border-gray-300 rounded-lg overflow-hidden relative">
+
                         <div className="bg-gray-100 p-2 text-xs font-bold text-gray-600 flex justify-between items-center border-b border-gray-300">
+
                             <span>✍️ 請在下方空白處親筆簽名</span><button onClick={clearSignature} className="bg-white border px-2 py-1 rounded shadow-sm hover:bg-gray-50 text-red-600">清除重寫</button>
+
                         </div>
+
                         <canvas ref={canvasRef} width={600} height={150} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing} className="w-full bg-white touch-none cursor-crosshair"></canvas>
+
                     </div>
+
                 </div>
+
                 <div className="p-4 border-t bg-gray-50 flex gap-3"><button onClick={onClose} className="flex-1 bg-white border border-gray-300 text-gray-600 py-3 rounded-lg font-bold hover:bg-gray-100 transition-colors">取消</button><button onClick={handleSubmit} className={`flex-1 py-3 rounded-lg font-bold shadow-lg transition-colors ${agree && hasSigned ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}>送出同意並簽署</button></div>
+
             </div>
+
         </div>
+
     );
+
 };
+
 const StartupGuardFallback = ({ title = 'LOADING MODULE...', detail = '資料初始化中，請稍候。' }) => (
+
     <div className="min-h-[40vh] flex items-center justify-center p-6">
+
         <div className="bg-white border border-indigo-100 rounded-3xl shadow-lg px-8 py-10 text-center max-w-lg w-full">
+
             <div className="text-indigo-600 font-black text-2xl tracking-tight">{title}</div>
+
             <div className="mt-3 text-sm text-gray-500 font-bold leading-relaxed">{detail}</div>
+
         </div>
+
     </div>
+
 );
+
  
+
 const ViewSignatureModal = ({ sigData, onClose }) => {
+
     if (!sigData) return null;
+
     const handlePrint = () => { window.print(); };
+
     return (
+
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[90] p-4 animate-fade-in print:bg-white print:p-0">
+
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[95vh] print:shadow-none print:max-h-none print:h-auto">
+
                 <div className="bg-gray-800 p-4 text-white flex justify-between items-center print:hidden">
+
                     <h3 className="font-bold flex items-center gap-2"><FileSearch size={18}/> 檢視電子簽署紀錄</h3>
+
                     <div className="flex gap-2"><button onClick={handlePrint} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-sm font-bold flex items-center gap-1"><Printer size={14}/> 列印 / 轉 PDF</button><button onClick={onClose} className="hover:bg-red-500 p-1 rounded"><X size={20}/></button></div>
+
                 </div>
+
                 <div className="p-8 overflow-y-auto print:overflow-visible text-gray-800 space-y-6">
+
                     <div className="border-b-2 border-gray-800 pb-4 mb-4 text-center">
+
                         <h1 className="text-2xl font-black">{sigData.formName}</h1>
+
                         <p className="text-gray-500 mt-2 font-mono">文件編號: {sigData.id} | 簽署日期: {new Date(sigData.agreedAt).toLocaleString()}</p>
+
                     </div>
+
                     <div className="text-sm leading-loose space-y-4">
+
                         {sigData.formType === 'holiday' ? (
+
                             <>
+
                                 <p>立同意書人 <strong>{sigData.userName}</strong> 茲同意雇主依勞動基準法第 37 條及相關施行細則規定，將原定之國定假日調移至其他工作日。</p>
+
                                 <ul className="list-disc pl-5 font-bold text-lg my-4"><li>原定國定假日：{sigData.customData?.origDate}</li><li>同意調移日期：{sigData.customData?.newDate}</li></ul>
+
                                 <p>說明與約定事項：<br/>1. 調移後之「原國定假日」轉為「正常工作日」，立同意書人於該日出勤，雇主無須加給工資。<br/>2. 調移後之「調移日」轉為「休假日」，立同意書人依法享有休假。如因業務需求於該「調移日」出勤，發給加倍工資。</p>
+
                             </>
+
                         ) : (
+
                             <>
+
                                 <p>立契約書人 <strong>{sigData.userName}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
+
                                 <p><strong>第一條：契約起訖與工作地點</strong><br/>契約期間自 {sigData.customData?.contractStart} 至 {sigData.customData?.contractEnd}。乙方應於甲方指定地點（{sigData.customData?.workLocation}）提供勞務，負責相關門市工作。</p>
+
                                 <p><strong>第二條：出勤、請假與排班制度</strong><br/>採排班制與變形工時。請換假需於 3 天前審核。特休依勞基法發放；每月自畫休假上限 3 天（含假日最多 2 天）。</p>
+
                                 <p><strong>第三條：寒暑假旺季與工時</strong><br/>因應寒暑假（1,2月及7,8月）營運高峰，乙方同意配合延長工時，合計單日最長不超過 12 小時。甲方得視營運績效另行核發「旺季特別獎金」。</p>
+
                                 <p><strong>第四條：薪資、油資與補休結算</strong><br/>甲方每月給付乙方本薪新台幣 <strong>{sigData.customData?.salaryAmount}</strong> 元整。每月最高 500 元油資補貼（憑統編發票實報實銷）。乙方同意若於國定假日出勤，當日出勤工時全數轉換為「補休時數」存入系統，不另計發加倍工資。年度終結未休畢之補休時數，依法或獎金辦法結算發放。</p>
+
                                 <p><strong>第五條：離職與交接</strong><br/>乙方自請離職須依法預告並交接。未依規定致甲方受有損害者，須負損害賠償責任。</p>
+
                                 <p><strong>第六條：法定保障與福利</strong><br/>甲方依法提撥 6% 勞工退休金、提供勞保及職災協助。乙方須嚴格遵守餐飲業食品良好衛生規範（GHP）。</p>
+
                                 <p><strong>第七條：懲處與賠償制度</strong><br/>嚴禁代打卡、偷料。若因乙方個人重大過失造成具體財物損失，乙方應負損害賠償責任（甲方不得自薪資預扣）。</p>
+
                                 <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
+
                                 <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每年最多 3 天，每月最多 1 天。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
+
                             </>
+
                         )}
+
                         <div className="bg-gray-100 p-3 text-sm font-bold text-center border mt-6">☑️ 本人已詳細審閱、充分了解且同意上述條款，並以下方親筆簽名為憑。</div>
+
                     </div>
+
                     <div className="mt-8 flex justify-end">
+
                         <div className="text-center">
+
                             <p className="text-gray-500 mb-2 font-bold">立同意書人 (親筆簽名)</p>
+
                             <div className="border-b-2 border-gray-800 pb-2 mb-2 w-64 min-h-[100px] flex items-end justify-center">
+
                                 {sigData.signatureImage && <img src={sigData.signatureImage} alt="Signature" className="max-h-24 object-contain mix-blend-multiply" />}
+
                             </div>
+
                             <p className="font-mono text-xs text-gray-400">Timestamp: {sigData.agreedAt}</p>
+
                         </div>
+
                     </div>
+
                 </div>
+
             </div>
+
         </div>
+
     );
+
 };
+
 // ==========================================
+
 // 📝 表單簽署中心 (FormsView) 
+
 // ==========================================
+
 const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures, isLocked, setView, isSuperAdmin, storeConfig }) => {
+
     const [activeTab, setActiveTab] = useState('fill'); 
+
     const [signModal, setSignModal] = useState(null); 
+
     const [viewData, setViewData] = useState(null);
+
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
+
     const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
+
     const handleSignContract = () => {
+
         const resolvedWorkLocation = currentUserInfo.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
+
         const isContractReady = currentUserInfo.salaryAmount && currentUserInfo.contractStart && (currentUserInfo.isIndefinite || currentUserInfo.contractEnd);
+
         if (!isContractReady) {
+
             return alert("🚨 管理員尚未設定您的「約定薪資」與「合約日期」！\n\n請先通知店長至【系統設定】完成您的合約基本資料設定，才能進行簽署。");
+
         }
+
         if (!resolvedWorkLocation) {
+
             return alert("🚨 尚未設定工作地點，請先補上門市資訊後再簽署。");
+
         }
+
         setSignModal('contract');
+
     };
+
     return (
+
         <div className="max-w-4xl mx-auto space-y-4 pb-20">
+
             <div className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
+
                 <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><FileSignature/> 表單與同意書簽署</h2>
+
             </div>
+
             <div className="flex gap-2 border-b pb-2">
+
                 <button onClick={()=>setActiveTab('fill')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='fill'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>📝 填寫表單</button>
+
                 {isPrivileged && <button onClick={()=>setActiveTab('records')} className={`px-4 py-2 font-bold rounded-t-lg transition-colors ${activeTab==='records'?'text-indigo-600 border-b-2 border-indigo-600 bg-white':'text-gray-500 hover:bg-gray-50'}`}>🗂️ 簽署紀錄後台</button>}
+
             </div>
+
             {activeTab === 'fill' && (
+
                 <div className="grid sm:grid-cols-2 gap-4">
+
                     <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'ring-4 ring-red-500 ring-opacity-50' : 'hover:shadow-md'}`}>
+
                         <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約暨保密與工作守則同意書</h3></div>
+
                         <p className="text-sm text-gray-500 mb-4 h-10">新進員工報到或年度工作規範及業務機密保密約定。</p>
+
                         <button onClick={handleSignContract} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
+
                             {hasSignedContract ? '重新檢視/簽署' : '立即填寫與簽名'}
+
                         </button>
+
                         <div className="mt-3 text-xs text-gray-400 font-bold">{hasSignedContract ? '✅ 您已完成簽署' : <span className="text-red-500">⚠️ 尚未簽署 (請盡速完成以解鎖系統)</span>}</div>
+
                     </div>
+
                     <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-md'}`}>
+
                         <div className="flex items-center gap-2 mb-2 text-orange-600"><Calendar size={20}/><h3 className="font-bold text-lg">國定假日調移同意書</h3></div>
+
                         <p className="text-sm text-gray-500 mb-4 h-10">依法將特定國定假日調移至其他工作日之同意書填寫。</p>
+
                         <button onClick={()=> !isLocked && setSignModal('holiday')} disabled={isLocked} className={`w-full font-bold py-2 rounded-lg border transition-colors ${isLocked ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'}`}>填寫與簽名</button>
+
                         <div className="mt-3 text-xs text-gray-400">您已累計簽署 {userSignatures.filter(s=>s.formType==='holiday').length} 份</div>
+
                     </div>
+
                 </div>
+
             )}
+
             {activeTab === 'records' && isPrivileged && (
+
                 <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+
                     <div className="p-4 bg-gray-50 border-b font-bold text-gray-700">全體員工簽署紀錄清單</div>
+
                     <div className="overflow-x-auto">
+
                         <table className="w-full text-sm text-left">
+
                             <thead className="bg-gray-100 text-gray-600"><tr><th className="p-3">簽署時間</th><th className="p-3">員工</th><th className="p-3">表單名稱</th><th className="p-3">操作</th></tr></thead>
+
                             <tbody>
+
                                 {signatures.sort((a,b)=>b.agreedAt-a.agreedAt).map(sig => (
+
                                     <tr key={sig.id} className="border-b hover:bg-gray-50">
+
                                         <td className="p-3 text-gray-500 font-mono">{new Date(sig.agreedAt).toLocaleString()}</td>
+
                                         <td className="p-3 font-bold text-indigo-600">{sig.userName}</td>
+
                                         <td className="p-3 font-bold">
+
                                             {sig.formName}
+
                                             <div className="text-xs text-gray-500 font-normal mt-1">
+
                                                 {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
+
                                             </div>
+
                                         </td>
+
                                         <td className="p-3 flex items-center gap-2">
+
                                             <button onClick={()=>setViewData(sig)} className="text-gray-600 hover:text-indigo-600 bg-white border px-2 py-1.5 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Eye size={14}/> 檢視</button>
+
                                             {isSuperAdmin && (
+
                                                 <button onClick={async () => {
+
                                                     if(window.confirm("⚠️ 確定要刪除這筆簽署紀錄嗎？刪除後無法復原！")) {
+
                                                         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'signatures', sig.id));
+
                                                     }
+
                                                 }} className="text-gray-400 hover:text-red-500 bg-white border px-2 py-1.5 rounded shadow-sm text-xs font-bold flex items-center gap-1"><Trash2 size={14}/> 刪除</button>
+
                                             )}
+
                                         </td>
+
                                     </tr>
+
                                 ))}
+
                                 {signatures.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-400">目前尚無任何簽署紀錄</td></tr>}
+
                             </tbody>
+
                         </table>
+
                     </div>
+
                 </div>
+
             )}
+
             
+
             {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
+
             {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
+
         </div>
+
     );
+
 };
+
 // ==========================================
+
 // 📦 庫存盤點頁面 (InventoryView) - 🔴 V8.6 歷史紀錄查詢功能
+
 // ==========================================
+
  
+
 const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
+
     const items = useMemo(() => prepareInventoryItems(inventoryItems), [inventoryItems]);
+
     const categories = useMemo(() => [...new Set(items.map(i => i.category).filter(Boolean))], [items]);
+
     const draftKey = `inventoryDraft_${appId}_${currentUserInfo?.uid || 'guest'}`;
+
  
+
     const [mode, setMode] = useState('count');
+
     const [activeTab, setActiveTab] = useState(categories[0] || '');
+
     const [records, setRecords] = useState({});
+
     const [historyList, setHistoryList] = useState([]);
+
     const [selectedHistory, setSelectedHistory] = useState(null);
+
     const [editingRecordDate, setEditingRecordDate] = useState(null);
+
     const [editingRecordId, setEditingRecordId] = useState(null);
+
  
+
     useEffect(() => {
+
         if (categories.length > 0 && !categories.includes(activeTab)) setActiveTab(categories[0] || '');
+
     }, [categories, activeTab]);
+
  
+
     useEffect(() => {
+
         try {
+
             const savedDraft = localStorage.getItem(draftKey);
+
             if (savedDraft) {
+
                 const parsed = JSON.parse(savedDraft);
+
                 if (parsed?.records && typeof parsed.records === 'object') {
+
                     setRecords(parsed.records);
+
                     if (parsed.activeTab) setActiveTab(parsed.activeTab);
+
                     if (parsed.editingRecordDate) setEditingRecordDate(parsed.editingRecordDate);
+
                     if (parsed.editingRecordId) setEditingRecordId(parsed.editingRecordId);
+
                 }
+
             }
+
         } catch (e) {
+
             console.error('讀取盤點暫存失敗', e);
+
         }
+
     }, [draftKey]);
+
  
+
     useEffect(() => {
+
         try {
+
             if (Object.keys(records).length === 0 && !editingRecordDate && !editingRecordId) {
+
                 localStorage.removeItem(draftKey);
+
             } else {
+
                 localStorage.setItem(draftKey, JSON.stringify({
+
                     records,
+
                     activeTab,
+
                     editingRecordDate,
+
                     editingRecordId,
+
                     savedAt: Date.now()
+
                 }));
+
             }
+
         } catch (e) {
+
             console.error('儲存盤點暫存失敗', e);
+
         }
+
     }, [records, activeTab, editingRecordDate, editingRecordId, draftKey]);
+
  
+
     useEffect(() => {
+
         if (mode === 'history') {
+
             const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords'), (snap) => {
+
                 const list = [];
+
                 snap.forEach(docSnap => list.push({ id: docSnap.id, ...docSnap.data() }));
+
                 list.sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
+
                 setHistoryList(list);
+
             });
+
             return () => unsub();
+
         }
+
     }, [mode, db, appId]);
+
  
+
     const filteredItems = items.filter(i => i.category === activeTab);
+
     const totalValue = useMemo(() => items.reduce((sum, item) => sum + ((records[item.id] || 0) * Number(item.price || 0)), 0), [items, records]);
+
     const roundedTotalValue = useMemo(() => Math.ceil(totalValue), [totalValue]);
+
  
+
     const resetDraft = () => {
+
         setRecords({});
+
         setEditingRecordDate(null);
+
         setEditingRecordId(null);
+
         try {
+
             localStorage.removeItem(draftKey);
+
         } catch (e) {
+
             console.error('清除盤點暫存失敗', e);
+
         }
+
     };
+
  
+
     const loadHistoryForEdit = (hist) => {
+
         const nextRecords = hist?.data && typeof hist.data === 'object' ? hist.data : {};
+
         setRecords(nextRecords);
+
         setEditingRecordDate(hist?.date || null);
+
         setEditingRecordId(hist?.id || hist?.date || null);
+
         setMode('count');
+
         setSelectedHistory(hist || null);
+
         const firstCategory = items.find(item => nextRecords[item.id] !== undefined)?.category || categories[0] || '';
+
         if (firstCategory) setActiveTab(firstCategory);
+
         alert(`已載入 ${hist?.date || ''} 的盤點資料，請直接修改後按「更新檔案」儲存。`);
+
     };
+
  
+
     const handleCountChange = (id, delta) => {
+
         setRecords(prev => {
+
             const current = prev[id] || 0;
+
             return { ...prev, [id]: Math.max(0, current + delta) };
+
         });
+
     };
+
  
+
     const handleInputChange = (id, val) => {
+
         const num = parseFloat(val);
+
         if (!Number.isNaN(num) && num >= 0) setRecords(prev => ({ ...prev, [id]: num }));
+
         else if (val === '') setRecords(prev => {
+
             const nextRecords = { ...prev };
+
             delete nextRecords[id];
+
             return nextRecords;
+
         });
+
     };
+
  
+
     const handleSave = async () => {
+
         if (Object.keys(records).length === 0) return alert('尚未填寫任何盤點數量！');
+
         const now = Date.now();
+
         const targetDate = editingRecordDate || new Date(now).toISOString().split('T')[0];
+
         const targetRecordId = editingRecordId || targetDate;
+
         const existingHistory = historyList.find(hist => hist.id === targetRecordId) || (selectedHistory?.id === targetRecordId ? selectedHistory : null);
+
         const createdAt = existingHistory?.createdAt || existingHistory?.timestamp || now;
+
         const nextEditCount = editingRecordId ? Number(existingHistory?.editCount || 0) + 1 : 0;
+
         const actionLabel = editingRecordId ? `更新 ${targetDate} 的盤點紀錄` : '送出今日盤點結果';
+
         if (!window.confirm(`確定要${actionLabel}嗎？
+
  
+
 儲存後會保留在歷史紀錄中，並清空目前暫存。`)) return;
+
  
+
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords', targetRecordId), {
+
             id: targetRecordId,
+
             date: targetDate,
+
             timestamp: createdAt,
+
             createdAt,
+
             updatedAt: now,
+
             data: records,
+
             lastEditorUid: currentUserInfo?.uid || '',
+
             lastEditorName: currentUserInfo?.name || '未知使用者',
+
             editCount: nextEditCount,
+
             lastEditedAt: editingRecordId ? now : null
+
         }, { merge: true });
+
  
+
         alert(`✅ 盤點資料已成功${editingRecordId ? '更新' : '儲存'}至雲端！`);
+
         resetDraft();
+
         setSelectedHistory(null);
+
         setMode('history');
+
     };
+
  
+
     const handleClearDraft = () => {
+
         if (!window.confirm('確定要清空目前盤點暫存嗎？')) return;
+
         resetDraft();
+
     };
+
  
+
     const handleExportCSV = () => {
+
         const targetDate = editingRecordDate || new Date().toISOString().split('T')[0];
+
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
+
         let exportTotal = 0;
+
         items.forEach(item => {
+
             const qty = records[item.id] || 0;
+
             const subtotal = qty * Number(item.price || 0);
+
             exportTotal += subtotal;
+
             rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]);
+
         });
+
         rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
+
         exportToCSV(`當前盤點表_${targetDate}`, rows);
+
     };
+
  
+
     const handleExportHistoryCSV = (hist) => {
+
         const rows = [['分類', '品名', '盤點單位', '數量', '單價', '總金額(估算)']];
+
         let exportTotal = 0;
+
         items.forEach(item => {
+
             const qty = hist?.data?.[item.id] || 0;
+
             const subtotal = qty * Number(item.price || 0);
+
             exportTotal += subtotal;
+
             rows.push([item.category, item.name, item.spec, qty, item.price, subtotal]);
+
         });
+
         rows.push(['', '', '', '', '庫存總值(無條件進位):', Math.ceil(exportTotal)]);
+
         exportToCSV(`歷史盤點紀錄_${hist?.date || '未命名'}`, rows);
+
     };
+
  
+
     if (items.length === 0) {
+
         return (
+
             <div className="max-w-2xl mx-auto pb-20 text-center mt-10">
+
                 <Package size={64} className="mx-auto text-gray-300 mb-4" />
+
                 <h2 className="text-xl font-bold text-gray-600">目前尚無庫存品項</h2>
+
                 <p className="text-gray-500 mt-2">請使用管理員帳號，前往「管理」➡️「系統設定」新增庫存品項。</p>
+
             </div>
+
         );
+
     }
+
  
+
     return (
+
         <div className="max-w-2xl mx-auto pb-20">
+
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row justify-between items-center mb-4 shadow-sm gap-3">
+
                 <h2 className="font-bold text-lg text-indigo-700 flex items-center gap-2"><Package/> 庫存盤點</h2>
+
                 <div className="flex gap-2 bg-gray-100 p-1 rounded-lg w-full sm:w-auto">
+
                     <button onClick={() => { setMode('count'); setSelectedHistory(null); }} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode === 'count' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}>新增盤點</button>
+
                     <button onClick={() => setMode('history')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-sm font-bold transition-colors ${mode === 'history' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}>歷史紀錄</button>
+
                 </div>
+
             </div>
+
             {mode === 'count' ? (
+
                 <>
+
                     {(editingRecordId || Object.keys(records).length > 0) && (
+
                         <div className="mb-3 bg-amber-50 border border-amber-100 rounded-xl p-3 text-sm font-bold text-amber-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+
                             <div>{editingRecordId ? `目前正在修改 ${editingRecordDate} 的已送出盤點紀錄` : '已為您保留盤點暫存，離開後回來可接續編輯。'}</div>
+
                             <button onClick={handleClearDraft} className="px-3 py-1.5 rounded-lg bg-white border border-amber-200 text-amber-700 text-xs font-black hover:bg-amber-100">清空暫存</button>
+
                         </div>
+
                     )}
+
                     <div className="flex justify-between items-center mb-2 px-1 gap-2 flex-wrap">
+
                         <div className="font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">總值: ${roundedTotalValue.toLocaleString()} <span className="text-[10px] text-red-400 ml-1">(小數點後無條件進位)</span></div>
+
                         <div className="flex gap-2">
+
                             <button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出</span></button>
+
                             <button onClick={handleSave} className="bg-indigo-600 text-white px-4 py-1.5 rounded font-bold shadow hover:bg-indigo-700 flex items-center gap-1"><Save size={16}/> {editingRecordId ? '更新檔案' : '送出'}</button>
+
                         </div>
+
                     </div>
+
                     <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
+
                         {categories.map(category => (
+
                             <button key={category} onClick={() => setActiveTab(category)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap shadow-sm transition-all ${activeTab === category ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'}`}>{category}</button>
+
                         ))}
+
                     </div>
+
                     <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+
                         {filteredItems.map((item, idx) => (
+
                             <div key={item.id} className={`p-4 flex justify-between items-center ${idx !== filteredItems.length - 1 ? 'border-b border-gray-100' : ''}`}>
+
                                 <div>
+
                                     <div className="font-bold text-gray-800 text-lg">{item.name}</div>
+
                                     <div className="text-xs text-gray-400 font-mono">單價: ${Number(item.price || 0)}</div>
+
                                 </div>
+
                                 <div className="flex items-center gap-2 sm:gap-3">
+
                                     <span className="text-lg font-black text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 shadow-sm mr-1 sm:mr-3">{item.spec}</span>
+
                                     <button onClick={() => handleCountChange(item.id, -1)} className="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-transform"><Minus size={20}/></button>
+
                                     <input type="number" value={records[item.id] !== undefined ? records[item.id] : ''} onChange={(e) => handleInputChange(item.id, e.target.value)} placeholder="0" className="w-16 text-center font-bold text-xl border-b-2 border-indigo-200 focus:border-indigo-600 focus:outline-none py-1 bg-transparent" />
+
                                     <button onClick={() => handleCountChange(item.id, 1)} className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-100 active:scale-90 transition-transform"><Plus size={20}/></button>
+
                                 </div>
+
                             </div>
+
                         ))}
+
                     </div>
+
                 </>
+
             ) : (
+
                 <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+
                     {selectedHistory ? (
+
                         <div className="p-4">
+
                             <div className="flex justify-between items-center mb-4 border-b pb-3 flex-wrap gap-2">
+
                                 <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Calendar size={18}/> {selectedHistory.date} 盤點明細</h3>
+
                                 <div className="flex gap-2 flex-wrap">
+
                                     <button onClick={() => loadHistoryForEdit(selectedHistory)} className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-indigo-100 flex items-center gap-1"><Edit size={14}/> 修改此檔</button>
+
                                     <button onClick={() => handleExportHistoryCSV(selectedHistory)} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded text-sm font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={14}/> 匯出</button>
+
                                     <button onClick={() => setSelectedHistory(null)} className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded text-sm font-bold hover:bg-gray-200">返回列表</button>
+
                                 </div>
+
                             </div>
+
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-xs">
+
                                 <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+
                                     <div className="text-gray-400 font-black mb-1">送出時間</div>
+
                                     <div className="font-bold text-gray-700">{formatDateTime(selectedHistory.createdAt || selectedHistory.timestamp)}</div>
+
                                 </div>
+
                                 <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+
                                     <div className="text-gray-400 font-black mb-1">最後編輯</div>
+
                                     <div className="font-bold text-gray-700">{selectedHistory.lastEditorName || '—'}</div>
+
                                     {selectedHistory.updatedAt && <div className="text-[11px] text-gray-400 mt-1">{formatDateTime(selectedHistory.updatedAt)}</div>}
+
                                 </div>
+
                             </div>
+
                             <div className="space-y-2">
+
                                 {items.map(item => {
+
                                     const qty = selectedHistory?.data?.[item.id];
+
                                     if (qty === undefined || qty === 0) return null;
+
                                     return (
+
                                         <div key={item.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-100">
+
                                             <div>
+
                                                 <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold mr-2">{item.category}</span>
+
                                                 <span className="font-bold text-gray-700 text-sm">{item.name}</span>
+
                                             </div>
+
                                             <div className="font-mono font-bold text-indigo-600 text-lg">{qty} <span className="text-xs text-gray-500">{item.spec}</span></div>
+
                                         </div>
+
                                     );
+
                                 })}
+
                             </div>
+
                         </div>
+
                     ) : (
+
                         <div>
+
                             <div className="bg-gray-50 p-3 border-b font-bold text-gray-700">歷次盤點紀錄清單</div>
+
                             {historyList.length === 0 ? (
+
                                 <div className="p-8 text-center text-gray-400">目前尚無歷史紀錄</div>
+
                             ) : (
+
                                 <div className="divide-y">
+
                                     {historyList.map(hist => {
+
                                         const totalCost = items.reduce((sum, item) => sum + (((hist?.data?.[item.id]) || 0) * Number(item.price || 0)), 0);
+
                                         return (
+
                                             <div key={hist.id} onClick={() => setSelectedHistory(hist)} className="p-4 hover:bg-indigo-50 cursor-pointer flex justify-between items-center transition-colors gap-4">
+
                                                 <div className="min-w-0">
+
                                                     <div className="font-bold text-gray-800 text-lg flex items-center gap-2"><Calendar size={16} className="text-indigo-500"/> {hist.date}</div>
+
                                                     <div className="text-xs text-gray-400 mt-1">送出時間: {formatDateTime(hist.createdAt || hist.timestamp)}</div>
+
                                                     {hist.updatedAt && <div className="text-xs text-gray-400 mt-1">最後更新: {formatDateTime(hist.updatedAt)}</div>}
+
                                                     {hist.lastEditorName && <div className="text-xs text-gray-400 mt-1">最後編輯: {hist.lastEditorName}{hist.editCount ? `（已修改 ${hist.editCount} 次）` : ''}</div>}
+
                                                 </div>
+
                                                 <div className="text-right shrink-0">
+
                                                     <div className="text-xs text-gray-500">當次庫存總值</div>
+
                                                     <div className="font-bold text-red-600">${Math.ceil(totalCost).toLocaleString()}</div>
+
                                                     <button onClick={(e) => { e.stopPropagation(); loadHistoryForEdit(hist); }} className="mt-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-indigo-100 flex items-center gap-1 ml-auto"><Edit size={13}/> 修改此檔</button>
+
                                                 </div>
+
                                             </div>
+
                                         );
+
                                     })}
+
                                 </div>
+
                             )}
+
                         </div>
+
                     )}
+
                 </div>
+
             )}
+
         </div>
+
     );
+
 };
+
  
+
 // ==========================================
+
 // 📍 GPS 打卡頁面 (ClockView)// ==========================================
+
 // 📍 GPS 打卡頁面 (ClockView)
+
 // ==========================================
+
 const ClockView = ({ currentUser, currentUserInfo, storeConfig, db, appId }) => {
+
     const [currentTime, setCurrentTime] = useState(new Date());
+
     const [location, setLocation] = useState(null);
+
     const [distance, setDistance] = useState(null);
+
     const [locError, setLocError] = useState('');
+
     const [isPunching, setIsPunching] = useState(false);
+
     useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 1000); return () => clearInterval(timer); }, []);
+
     const fetchLocation = () => {
+
         setLocError(''); setLocation(null); setDistance(null);
+
         if (!navigator.geolocation) { setLocError('不支援定位'); return; }
+
         navigator.geolocation.getCurrentPosition(
+
             (pos) => {
+
                 const lat = pos.coords.latitude; const lng = pos.coords.longitude; setLocation({ lat, lng });
+
                 if (storeConfig && storeConfig.lat && storeConfig.lng) { setDistance(getDistance(lat, lng, storeConfig.lat, storeConfig.lng)); }
+
             },
+
             (err) => { setLocError(err.code === 1 ? '請允許權限' : '定位失敗'); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+
         );
+
     };
+
     useEffect(() => { fetchLocation(); }, [storeConfig]);
+
     const handlePunch = async (type) => {
+
         if (!storeConfig?.lat) return alert("管理員尚未設定座標！");
+
         if (distance === null) return alert("定位中...");
+
         if (distance > (storeConfig.radius || 50)) return alert("超出範圍！");
+
         setIsPunching(true);
+
         try {
+
             const dateStr = `${currentTime.getFullYear()}-${String(currentTime.getMonth()+1).padStart(2,'0')}`;
+
             const todayStr = `${currentTime.getFullYear()}-${String(currentTime.getMonth()+1).padStart(2,'0')}-${String(currentTime.getDate()).padStart(2,'0')}`;
+
             const timeStr = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
+
             const newRecord = { id: `${Date.now()}_${currentUser.uid}`, uid: currentUser.uid, name: currentUserInfo.name, type: type, date: todayStr, time: timeStr, timestamp: Date.now(), distance: distance };
+
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'clockRecords', dateStr);
+
             const snap = await getDoc(docRef);
+
             if (!snap.exists()) { await setDoc(docRef, { records: [newRecord] }); } else { await updateDoc(docRef, { records: arrayUnion(newRecord) }); }
+
             alert(`${type === 'IN' ? '上班' : '下班'}打卡成功！`); fetchLocation(); 
+
         } catch (e) { alert("打卡失敗"); }
+
         setIsPunching(false);
+
     };
+
     const isWithinRange = distance !== null && storeConfig && distance <= (storeConfig.radius || 50);
+
     return (
+
         <div className="max-w-md mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 mt-4">
+
             <div className="bg-indigo-600 p-6 text-center text-white relative">
+
                 <h2 className="text-xl font-bold opacity-90 mb-2">現在時間</h2>
+
                 <div className="text-5xl font-mono font-bold tracking-wider drop-shadow-md">
+
                     {String(currentTime.getHours()).padStart(2,'0')}:{String(currentTime.getMinutes()).padStart(2,'0')}
+
                     <span className="text-2xl ml-1 opacity-75">:{String(currentTime.getSeconds()).padStart(2,'0')}</span>
+
                 </div>
+
                 <div className="text-sm mt-2 opacity-80">{currentTime.toLocaleDateString()}</div>
+
             </div>
+
             <div className="p-6 space-y-6">
+
                 <div className="bg-gray-50 rounded-xl p-4 border relative">
+
                     <div className="flex justify-between items-start mb-2"><h4 className="font-bold text-gray-700 flex items-center gap-1"><MapPin size={16}/> 定位狀態</h4><button onClick={fetchLocation} className="text-xs bg-white border px-2 py-1 rounded hover:bg-gray-100 shadow-sm font-bold text-indigo-600">重新定位</button></div>
+
                     {!storeConfig?.lat ? (<p className="text-sm text-red-500 font-bold">⚠️ 管理員尚未設定店面座標</p>) : locError ? (<p className="text-sm text-red-500 font-bold">❌ {locError}</p>) : distance === null ? (<p className="text-sm text-gray-500 animate-pulse">正在獲取 GPS 訊號...</p>) : (
+
                         <div className="space-y-1">
+
                             <p className="text-sm text-gray-600">距離店面: <span className={`font-bold text-lg ${isWithinRange ? 'text-green-600' : 'text-red-500'}`}>{distance}</span> 公尺</p>
+
                             <p className="text-xs text-gray-400">允許打卡範圍: {storeConfig.radius || 50} 公尺</p>
+
                             {isWithinRange ? <div className="text-sm font-bold text-green-600 flex items-center gap-1 mt-1"><CheckCircle2 size={16}/> 在範圍內，可以打卡</div> : <div className="text-sm font-bold text-red-500 flex items-center gap-1 mt-1"><X size={16}/> 距離過遠，無法打卡</div>}
+
                         </div>
+
                     )}
+
                 </div>
+
                 <div className="grid grid-cols-2 gap-4">
+
                     <button onClick={() => handlePunch('IN')} disabled={!isWithinRange || isPunching} className={`py-4 rounded-xl font-bold text-lg shadow-lg flex flex-col items-center gap-1 transition-all ${isWithinRange ? 'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><Clock size={24}/> 上班打卡</button>
+
                     <button onClick={() => handlePunch('OUT')} disabled={!isWithinRange || isPunching} className={`py-4 rounded-xl font-bold text-lg shadow-lg flex flex-col items-center gap-1 transition-all ${isWithinRange ? 'bg-orange-500 text-white hover:bg-orange-600 active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}><LogOut size={24}/> 下班打卡</button>
+
                 </div>
+
             </div>
+
         </div>
+
     );
+
 };
+
 // ==========================================
+
 // 📋 出勤明細頁面 (AttendanceView)
+
 // ==========================================
+
 const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin, setView, gasReceipts = {} }) => {
+
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
+
     const [attendanceList, setAttendanceList] = useState([]);
+
     const [payrollLockInfo, setPayrollLockInfo] = useState({ status: 'draft', lockedAt: null, lockedByName: '' });
+
     const [loading, setLoading] = useState(false);
+
     const activeUsers = useMemo(() => (users || []).filter(user => !user?.isResigned && !user?.isViewer), [users]);
+
     const [selectedUid, setSelectedUid] = useState(currentUserInfo?.uid || '');
+
     const [gasModalUser, setGasModalUser] = useState(null);
+
  
+
     useEffect(() => {
+
         if (!isSuperAdmin && currentUserInfo?.uid) setSelectedUid(currentUserInfo.uid);
+
     }, [isSuperAdmin, currentUserInfo?.uid]);
+
  
+
     const selectedUser = useMemo(() => activeUsers.find(user => user.uid === selectedUid) || currentUserInfo || activeUsers[0] || null, [activeUsers, selectedUid, currentUserInfo]);
+
  
+
     useEffect(() => {
+
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (snap) => {
+
             const data = snap.exists() ? snap.data() : {};
+
             setPayrollLockInfo({
+
                 status: data.status || 'draft',
+
                 lockedAt: data.lockedAt || null,
+
                 lockedByName: data.lockedByName || ''
+
             });
+
         });
+
         return () => unsub();
+
     }, [targetMonth, db, appId]);
+
  
+
     useEffect(() => {
+
         setLoading(true);
+
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'clockRecords', targetMonth), (snap) => {
+
             const records = snap.exists() ? (snap.data().records || []) : [];
+
             const grouped = {};
+
             records.forEach(record => {
+
                 const key = `${record.date}_${record.uid}`;
+
                 if (!grouped[key]) grouped[key] = { date: record.date, uid: record.uid, name: record.name, in: null, out: null };
+
                 if (record.type === 'IN' && (!grouped[key].in || record.time < grouped[key].in)) grouped[key].in = record.time;
+
                 if (record.type === 'OUT' && (!grouped[key].out || record.time > grouped[key].out)) grouped[key].out = record.time;
+
             });
+
             const processed = Object.values(grouped).map(item => {
+
                 const assignment = shifts?.[item.date]?.assignments?.find(assign => assign.uid === item.uid);
+
                 const shiftInfo = (shiftTypes || []).find(shift => shift.id === assignment?.shiftCode);
+
                 const status = [];
+
                 if (assignment?.type === 'LEAVE') status.push('請假');
+
                 else if (shiftInfo) {
+
                     if (!item.in) status.push('缺卡(上)');
+
                     if (!item.out) status.push('缺卡(下)');
+
                     if (item.in && item.in > shiftInfo.start) status.push('遲到');
+
                     if (item.out && item.out < shiftInfo.end) status.push('早退');
+
                     if (status.length === 0) status.push('正常');
+
                 } else status.push('未排班');
+
                 return { ...item, assignment, shiftInfo, status };
+
             }).sort((a,b) => b.date.localeCompare(a.date));
+
             setAttendanceList(processed);
+
             setLoading(false);
+
         });
+
         return () => unsub();
+
     }, [targetMonth, db, appId, shifts, shiftTypes]);
+
  
+
     const monthAssignments = useMemo(() => Object.entries(shifts || {}).flatMap(([date, day]) => {
+
         if (!date.startsWith(targetMonth) || day?.isClosed) return [];
+
         return (Array.isArray(day?.assignments) ? day.assignments : []).filter(assign => assign.uid === selectedUser?.uid).map(assign => ({ date, ...assign }));
+
     }), [shifts, targetMonth, selectedUser?.uid]);
+
  
+
     const leaveRows = useMemo(() => monthAssignments.filter(assign => assign.type === 'LEAVE').map(assign => {
+
         const leaveMap = {
+
             rostered: '自畫假',
+
             official: '排休',
+
             annual: '特休',
+
             annualLeave: '特休',
+
             annual_leave: '特休',
+
             'annual-leave': '特休',
+
             sick: '病假',
+
             personal: '事假',
+
             menstrual: '生理假'
+
         };
+
         const leaveType = String(assign.leaveType || '').trim();
+
         const leaveLabel = leaveMap[leaveType] || leaveMap[String(assign.type || '').toLowerCase()] || leaveType || '請假';
+
         const hours = resolveLeaveHours(assign, shiftTypes);
+
         const base = Number(selectedUser?.salarySettlementBase || selectedUser?.salaryAmount || selectedUser?.salary || 0);
+
         const hourly = base > 0 ? base / 30 / 8 : 0;
+
         const deduction = leaveLabel === '病假' ? hourly * hours * 0.5 : leaveLabel === '事假' ? hourly * hours : 0;
+
         return { ...assign, leaveLabel, hours, deduction, reason: assign.note || assign.reason || '未填寫理由' };
+
     }).sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, selectedUser, shiftTypes]);
+
  
+
     const overtimeRows = useMemo(() => monthAssignments
+
         .filter(assign => assign.type !== 'LEAVE' && Number(assign.otHours) !== 0 && assign.otConfirmed)
+
         .map(assign => ({
+
             ...assign,
+
             hours: Number(assign.otHours),
+
             reason: assign.otReason || assign.note || '未填寫加班／補休理由',
+
             shiftLabel: (shiftTypes || []).find(shift => shift.id === assign.shiftCode)?.label || assign.shiftCode || '-'
+
         }))
+
         .sort((a,b) => b.date.localeCompare(a.date)), [monthAssignments, shiftTypes]);
+
  
+
     const summary = useMemo(() => {
+
         const scheduledHours = monthAssignments.filter(assign => assign.type !== 'LEAVE').reduce((sum, assign) => sum + calculateShiftHours(assign.shiftCode, shiftTypes), 0);
+
         const userRecords = attendanceList.filter(record => record.uid === selectedUser?.uid);
+
         const lateCount = userRecords.filter(record => record.status.includes('遲到')).length;
+
         const missingCount = userRecords.filter(record => record.status.some(status => status.includes('缺卡'))).length;
+
         const annualHours = leaveRows.filter(row => row.leaveLabel === '特休').reduce((sum, row) => sum + row.hours, 0);
+
         const sickHours = leaveRows.filter(row => row.leaveLabel === '病假').reduce((sum, row) => sum + row.hours, 0);
+
         const personalHours = leaveRows.filter(row => row.leaveLabel === '事假').reduce((sum, row) => sum + row.hours, 0);
+
         const overtimeHours = overtimeRows.filter(row => row.hours > 0).reduce((sum, row) => sum + row.hours, 0);
+
         const compHours = overtimeRows.filter(row => row.hours < 0).reduce((sum, row) => sum + Math.abs(row.hours), 0);
+
         return { scheduledHours, lateCount, missingCount, annualHours, sickHours, personalHours, overtimeHours, compHours, userRecords };
+
     }, [monthAssignments, attendanceList, selectedUser?.uid, leaveRows, overtimeRows, shiftTypes]);
+
  
+
     const getPayrollStatusLabel = () => {
+
         if (payrollLockInfo.status === 'locked') return '已鎖定';
+
         if (payrollLockInfo.status === 'confirmed') return '已結算待鎖定';
+
         return '未結算';
+
     };
+
     const targetYear = targetMonth.slice(0, 4);
+
     const yearlyTimeStats = useMemo(() => getUserYearlyTimeStats({
+
         shifts,
+
         uid: selectedUser?.uid,
+
         targetYear,
+
         targetMonth,
+
         leaveTypes: DEFAULT_LEAVE_TYPES,
+
         shiftTypes
+
     }), [shifts, selectedUser?.uid, targetYear, targetMonth, shiftTypes]);
+
     const annualEntitledHours = useMemo(() => {
+
         const manuallySetHours = Number(selectedUser?.annualLeaveHours || selectedUser?.annualHours || 0);
+
         if (manuallySetHours > 0) return manuallySetHours;
+
         return getAnnualLeaveHours(selectedUser?.startDate || selectedUser?.hireDate || selectedUser?.contractStart || '');
+
     }, [selectedUser]);
+
     const annualUsedHours = Number(yearlyTimeStats?.yearStats?.usedAnnualHours || 0);
+
     const annualRemainingHours = Math.max(0, annualEntitledHours - annualUsedHours);
+
     const compRemainingHours = Number(yearlyTimeStats?.balance || 0);
+
     const remainingHoursLabel = (hours) => `${Math.round(Number(hours || 0) * 10) / 10} hr`;
+
     const selectedGasRecords = useMemo(() => gasReceipts?.[targetMonth]?.[selectedUser?.uid] || [], [gasReceipts, targetMonth, selectedUser?.uid]);
+
     const selectedGasTotal = useMemo(() => selectedGasRecords.reduce((sum, record) => sum + Number(record.amount || 0), 0), [selectedGasRecords]);
+
     const selectedGasReimbursement = Math.min(selectedGasTotal, 500);
 
  
+
+ 
+
     const handleExportCSV = () => {
+
         const rows = [['日期','員工','類型','班別／假別','時數','理由／備註','扣薪／補休影響']];
+
         leaveRows.forEach(row => rows.push([row.date, selectedUser?.name || '', '請假', row.leaveLabel, row.hours, row.reason, row.deduction > 0 ? `扣薪 ${Math.round(row.deduction)}` : '扣薪 0']));
+
         overtimeRows.forEach(row => rows.push([row.date, selectedUser?.name || '', row.hours > 0 ? '加班' : '補休扣抵', row.shiftLabel, row.hours, row.reason, row.hours > 0 ? `加班 +${row.hours}hr` : `補休 ${Math.abs(row.hours)}hr`]));
+
         attendanceList.filter(record => record.uid === selectedUser?.uid).forEach(record => rows.push([record.date, selectedUser?.name || '', '打卡', record.shiftInfo?.label || '-', '', record.status.join(', '), `${record.in || '-'} ~ ${record.out || '-'}`]));
+
         exportToCSV(`出勤統計_${selectedUser?.name || '員工'}_${targetMonth}`, rows);
+
     };
+
  
+
     return (
+
         <div className="space-y-4 pb-20">
+
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
+
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+
                     <div><h2 className="font-bold flex items-center gap-2 text-indigo-700"><FileCheck/> 出勤統計</h2><p className="text-xs text-gray-400 mt-1">整合請假、特休、加班、補休與打卡；本月結算鎖定後，明細保留為唯讀紀錄。</p></div>
+
                     <div className="flex gap-2 flex-wrap"><input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none" />{isSuperAdmin && <select value={selectedUid} onChange={e=>setSelectedUid(e.target.value)} className="border rounded px-2 py-1.5 min-w-[130px]">{activeUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}</select>}<button onClick={handleExportCSV} className="bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded font-bold shadow-sm hover:bg-green-100 flex items-center gap-1"><Download size={16}/><span className="hidden sm:inline">匯出明細</span></button></div>
+
                 </div>
+
             </div>
+
  
+
             <div className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${payrollLockInfo.status === 'locked' ? 'bg-red-50 border-red-200' : payrollLockInfo.status === 'confirmed' ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+
                 <div><div className="font-black text-gray-800">{targetMonth} 月結狀態：{getPayrollStatusLabel()}</div><div className="text-xs text-gray-500 mt-1">此頁明細會依薪資結算月份保存；薪資鎖定後，請假、特休、加班與補休明細維持唯讀供月底核對。</div></div>
+
                 <div className="text-xs font-bold text-gray-600">{payrollLockInfo.lockedAt ? `鎖定時間：${formatDateTime(payrollLockInfo.lockedAt)}${payrollLockInfo.lockedByName ? `｜${payrollLockInfo.lockedByName}` : ''}` : '尚未鎖定'}</div>
+
             </div>
+
  
+
             <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-4 sm:p-5 text-white shadow-lg">
+
                 <div className="flex items-center justify-between gap-3 mb-4">
+
                     <div><div className="text-xs font-bold text-indigo-100">{selectedUser?.name || '員工'}｜{targetYear} 年度可用時數</div><div className="text-lg font-black mt-1">剩餘時數總覽</div></div>
+
                     <div className="text-[10px] bg-white/15 border border-white/20 px-2 py-1 rounded-full">一眼掌握</div>
+
                 </div>
+
                 <div className="grid grid-cols-2 gap-3">
+
                     <div className="bg-white/95 text-gray-800 rounded-xl p-4">
+
                         <div className="text-xs font-black text-purple-600">特休剩餘</div>
+
                         <div className="text-3xl font-black text-purple-700 mt-1">{remainingHoursLabel(annualRemainingHours)}</div>
+
                         <div className="text-[10px] text-gray-500 mt-2">年度額度 {remainingHoursLabel(annualEntitledHours)}｜已用 {remainingHoursLabel(annualUsedHours)}</div>
+
                     </div>
+
                     <div className="bg-white/95 text-gray-800 rounded-xl p-4">
+
                         <div className="text-xs font-black text-teal-600">補休剩餘</div>
+
                         <div className={`text-3xl font-black mt-1 ${compRemainingHours < 0 ? 'text-red-600' : 'text-teal-700'}`}>{remainingHoursLabel(compRemainingHours)}</div>
+
                         <div className="text-[10px] text-gray-500 mt-2">累積加班 {remainingHoursLabel(yearlyTimeStats?.yearStats?.otEarned)}｜已使用 {remainingHoursLabel(yearlyTimeStats?.yearStats?.compHoursUsed)}</div>
+
                     </div>
+
                 </div>
+
             </div>
+
+ 
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">本月已排班</div><div className="text-2xl font-black text-indigo-600 mt-1">{summary.scheduledHours} hr</div></div>
+
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">本月特休使用</div><div className="text-2xl font-black text-purple-600 mt-1">{summary.annualHours} hr</div></div>
+
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">本月加班／補休</div><div className="text-2xl font-black text-teal-600 mt-1">{summary.overtimeHours} / {summary.compHours} hr</div></div>
+
                 <div className="bg-white border rounded-xl p-4"><div className="text-xs text-gray-400">本月病假／事假</div><div className="text-2xl font-black text-red-500 mt-1">{summary.sickHours} / {summary.personalHours} hr</div></div>
+
             </div>
+
+ 
 
             <div className="bg-white border border-teal-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+
                 <div>
+
                     <div className="font-black text-teal-800 flex items-center gap-2"><Fuel size={18}/> 油資發票自行登錄</div>
+
                     <div className="text-xs text-gray-500 mt-1">已登錄 {selectedGasRecords.length} 張｜總額 ${selectedGasTotal}｜本月可補貼 ${selectedGasReimbursement}（上限 $500）</div>
+
                     <div className="text-[10px] text-teal-700 mt-1 font-bold">發票筆數與登錄總額不限，超過 $500 的部分仍保留明細但不列入補貼。</div>
+
                 </div>
+
                 <button onClick={() => setGasModalUser(selectedUser)} disabled={!selectedUser} className="bg-teal-600 text-white px-4 py-2.5 rounded-lg font-black hover:bg-teal-700 disabled:bg-gray-300">登錄／查看發票</button>
+
             </div>
+
  
+
             <div className="bg-white border rounded-xl overflow-hidden">
+
                 <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假、特休明細</h3><p className="text-xs text-gray-400 mt-1">完整保留假別、時數、申請理由與病假／事假扣薪影響。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
+
                 {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}　{row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">理由／備註：{row.reason}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
+
             </div>
+
  
+
             <div className="bg-white border rounded-xl overflow-hidden">
+
                 <div className="p-4 border-b bg-gray-50"><h3 className="font-bold text-gray-700">加班／補休明細</h3><p className="text-xs text-gray-400 mt-1">只列出已確認的加班或補休扣抵，並保留原因供薪資結算核對。</p></div>
+
                 {overtimeRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有已確認的加班或補休紀錄</div> : <div className="divide-y">{overtimeRows.map((row, index) => <div key={`${row.date}-ot-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.hours > 0 ? '加班' : '補休扣抵'}　{row.hours > 0 ? `+${row.hours}` : row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">班別：{row.shiftLabel}｜理由／備註：{row.reason}</div></div><div className={row.hours > 0 ? 'font-black text-orange-600' : 'font-black text-green-600'}>{row.hours > 0 ? `加班 +${row.hours} hr` : `補休 ${Math.abs(row.hours)} hr`}</div></div>)}</div>}
+
             </div>
+
  
+
             <div className="bg-white rounded-xl border overflow-hidden">
+
                 <div className="p-4 bg-gray-50 border-b"><h3 className="font-bold text-gray-700">每日出勤與打卡明細</h3></div>
+
                 {loading ? <div className="p-8 text-center text-gray-400">載入中...</div> : summary.userRecords.length === 0 ? <div className="p-8 text-center text-gray-400">本月尚無打卡紀錄</div> : <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-500 font-bold border-b"><tr><th className="p-3">日期</th><th className="p-3">班別</th><th className="p-3 text-center">上班打卡</th><th className="p-3 text-center">下班打卡</th><th className="p-3">狀態</th></tr></thead><tbody>{summary.userRecords.map((record,index) => { const abnormal = record.status.some(status => status !== '正常'); return <tr key={`${record.date}-${index}`} className="border-b hover:bg-gray-50"><td className="p-3 font-mono text-gray-600">{record.date.substring(5)}</td><td className="p-3 text-xs text-gray-600">{record.shiftInfo?.label || '-'}</td><td className="p-3 text-center font-bold">{record.in || '-'}</td><td className="p-3 text-center font-bold">{record.out || '-'}</td><td className="p-3">{abnormal ? <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-xs font-bold">{record.status.join(', ')}</span> : <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded text-xs font-bold">正常</span>}</td></tr> })}</tbody></table></div>}
+
             </div>
+
             <GasReceiptModal
+
                 isOpen={!!gasModalUser}
+
                 onClose={() => setGasModalUser(null)}
+
                 user={gasModalUser}
+
                 monthStr={targetMonth}
+
                 db={db}
+
                 appId={appId}
+
                 currentRecords={gasReceipts?.[targetMonth] || {}}
+
                 currentUserInfo={currentUserInfo}
+
             />
+
         </div>
+
     );
+
 };
+
 // ==========================================
+
 // 📅 月曆排班模組 (CalendarView)
+
 // ==========================================
+
 // ==========================================
+
 // 📊 門市總覽 Dashboard - V14.0.0-alpha7
+
 // ==========================================
+
 const DashboardView = ({ dbData, currentDate, setView, isSuperAdmin }) => {
+
     const today = new Date();
+
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
     const currentMonthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+
     // 薪資通常在次月初結算前一個月，因此總覽固定顯示上一個結算月份。
+
     const payrollBaseDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+
     const payrollMonthStr = `${payrollBaseDate.getFullYear()}-${String(payrollBaseDate.getMonth() + 1).padStart(2, '0')}`;
+
     const activeUsers = Object.values(dbData.users || {}).filter(user => !user.isResigned && !user.isViewer);
+
     const todayShiftData = dbData.shifts?.[todayStr] || { assignments: [] };
+
     const todayAssignments = Array.isArray(todayShiftData.assignments) ? todayShiftData.assignments : [];
+
     const todayLeaves = todayAssignments
+
         .filter(assignment => assignment.type === 'LEAVE')
+
         .map(assignment => ({ ...assignment, user: dbData.users?.[assignment.uid] }))
+
         .filter(item => item.user);
+
     const workingCount = todayShiftData.isClosed ? 0 : Math.max(0, activeUsers.length - todayLeaves.length);
+
     const pendingLeaveRequests = (dbData.requests || []).filter(request => request.type === 'leave_request' && request.status === 'pending');
+
     const monthPayrollRecords = dbData.payrollRecords || {};
+
     const hasPayrollRecords = Object.keys(monthPayrollRecords).length > 0;
+
  
+
     const getLeaveLabel = (leaveType) => {
+
         const labels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
+
         return labels[leaveType] || '休假';
+
     };
+
  
+
     return (
+
         <div className="max-w-6xl mx-auto space-y-5 pb-20">
+
             <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+
                 <div>
+
                     <div className="flex items-center gap-2 text-indigo-700 font-black text-xl"><FileBarChart size={22} /> TEATOP 台中東山店</div>
+
                     <div className="text-sm text-gray-500 mt-1">門市營運總覽｜快速掌握今天的人力與待辦狀況。</div>
+
                 </div>
+
                 <button onClick={() => setView('calendar')} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-indigo-700 shadow-sm">查看本月排班</button>
+
             </div>
+
  
+
             <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+
                 <button onClick={() => setView('calendar')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
+
                     <div className="text-xs font-black text-indigo-600">今日休假</div>
+
                     <div className="mt-2 text-3xl font-black text-gray-800">{todayLeaves.length}<span className="text-base ml-1">人</span></div>
+
                     <div className="mt-2 text-xs text-gray-500">{todayLeaves.length > 0 ? todayLeaves.map(item => item.user.name).join('、') : '今日無人休假'}</div>
+
                 </button>
+
                 <button onClick={() => setView('calendar')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-green-200 transition-all">
+
                     <div className="text-xs font-black text-green-600">今日上班人數</div>
+
                     <div className="mt-2 text-3xl font-black text-gray-800">{workingCount}<span className="text-base ml-1">/ {activeUsers.length} 人</span></div>
+
                     <div className="mt-2 text-xs text-gray-500">{todayShiftData.isClosed ? '今日設定為店休' : workingCount <= 1 && activeUsers.length > 1 ? '請留意今日人力安排' : '未標休假者預設上班'}</div>
+
                 </button>
+
                 <button onClick={() => setView('inbox')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-amber-200 transition-all">
+
                     <div className="text-xs font-black text-amber-600">待審請假</div>
+
                     <div className="mt-2 text-3xl font-black text-gray-800">{pendingLeaveRequests.length}<span className="text-base ml-1">筆</span></div>
+
                     <div className="mt-2 text-xs text-gray-500">{pendingLeaveRequests.length > 0 ? '點此進入通知中心處理' : '目前沒有待審請假'}</div>
+
                 </button>
+
                 <button onClick={() => setView('payroll')} className="text-left bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-purple-200 transition-all">
+
                     <div className="text-xs font-black text-purple-600">{payrollMonthStr} 薪資</div>
+
                     <div className="mt-2 text-xl font-black text-gray-800">{hasPayrollRecords ? '已建立資料' : '尚未結算'}</div>
+
                     <div className="mt-2 text-xs text-gray-500">{isSuperAdmin ? '點此進入薪資結算中心' : '可查看個人時數與薪資資料'}</div>
+
                 </button>
+
             </div>
+
  
+
             <div className="grid lg:grid-cols-2 gap-4">
+
                 <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+
                     <div className="p-4 border-b bg-gray-50 font-black text-gray-800 flex items-center gap-2"><Calendar size={17} className="text-indigo-600" /> 今日休假與人力</div>
+
                     <div className="p-4 space-y-2">
+
                         {todayShiftData.isClosed ? <div className="bg-gray-100 text-gray-700 rounded-xl p-3 font-bold">今日為店休日</div> : todayLeaves.length === 0 ? <div className="bg-green-50 border border-green-100 text-green-700 rounded-xl p-3 font-bold">✓ 今日全員正常上班</div> : todayLeaves.map(item => <div key={`${item.uid}_${item.leaveType}`} className="flex justify-between items-center bg-gray-50 rounded-xl p-3"><span className="font-bold text-gray-800">{item.user.name}</span><span className="text-sm font-bold text-gray-500">{getLeaveLabel(item.leaveType)}</span></div>)}
+
                         {!todayShiftData.isClosed && <div className="text-xs text-gray-500 pt-2">今日預計上班：<span className="font-bold text-gray-800">{workingCount} 人</span></div>}
+
                     </div>
+
                 </div>
+
                 <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+
                     <div className="p-4 border-b bg-gray-50 font-black text-gray-800 flex items-center gap-2"><Bell size={17} className="text-indigo-600" /> 今日快速操作</div>
+
                     <div className="p-4 grid sm:grid-cols-2 gap-3">
+
                         <button onClick={() => setView('calendar')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">查看／調整班表</div><div className="text-xs text-gray-500 mt-1">點日期可查看班別、休假與調班。</div></button>
+
                         <button onClick={() => setView('clock')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">前往打卡</div><div className="text-xs text-gray-500 mt-1">查看今日出勤與打卡狀況。</div></button>
+
                         <button onClick={() => setView('inbox')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">處理通知</div><div className="text-xs text-gray-500 mt-1">請假、換班與系統通知集中查看。</div></button>
+
                         <button onClick={() => setView('payroll')} className="border rounded-xl px-4 py-3 text-left hover:bg-indigo-50 hover:border-indigo-200"><div className="font-bold text-gray-800">薪資結算</div><div className="text-xs text-gray-500 mt-1">查看病假、事假與本月結算。</div></button>
+
                     </div>
+
                 </div>
+
             </div>
+
         </div>
+
     );
+
 };
+
  
+
 const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db, appId, isSuperAdmin, isPrivileged, isReadOnly }) => {
+
     const [selectedDate, setSelectedDate] = useState(null);
+
     const [editingEvent, setEditingEvent] = useState(null);
+
     const [isAutoFilling, setIsAutoFilling] = useState(false);
+
     const year = currentDate.getFullYear();
+
     const month = currentDate.getMonth();
+
     const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+
     const { firstDay, days } = getMonthData(year, month);
+
     const { shifts, events, users } = dbData;
+
     const isCalendarLoading = dbData.usersLoaded === false || dbData.shiftsLoaded === false;
+
  
+
     const activeUsers = useMemo(() => {
+
         return Object.values(users || {}).filter(user => !user.isResigned && !user.isViewer);
+
     }, [users]);
+
  
+
     const sortedUserIds = useMemo(() => {
+
         return activeUsers
+
             .map(user => user.uid)
+
             .sort((a, b) => String(users[a]?.name || '').localeCompare(String(users[b]?.name || ''), 'zh-Hant'));
+
     }, [activeUsers, users]);
+
  
+
     // 以「人員」為固定跳色，而不是以假別著色。
+
     // 顏色刻意選藍、黃、綠、紫、橘、紅，避免相近色造成誤判。
+
     const PERSON_COLOR_STYLES = [
+
         { cardClassName: 'bg-blue-50 border-blue-400 text-blue-900', badgeClassName: 'bg-blue-100 border-blue-300 text-blue-800', dotClassName: 'bg-blue-600' },
+
         { cardClassName: 'bg-yellow-50 border-yellow-400 text-yellow-900', badgeClassName: 'bg-yellow-100 border-yellow-300 text-yellow-800', dotClassName: 'bg-yellow-500' },
+
         { cardClassName: 'bg-green-50 border-green-400 text-green-900', badgeClassName: 'bg-green-100 border-green-300 text-green-800', dotClassName: 'bg-green-600' },
+
         { cardClassName: 'bg-purple-50 border-purple-400 text-purple-900', badgeClassName: 'bg-purple-100 border-purple-300 text-purple-800', dotClassName: 'bg-purple-600' },
+
         { cardClassName: 'bg-orange-50 border-orange-400 text-orange-900', badgeClassName: 'bg-orange-100 border-orange-300 text-orange-800', dotClassName: 'bg-orange-500' },
+
         { cardClassName: 'bg-rose-50 border-rose-400 text-rose-900', badgeClassName: 'bg-rose-100 border-rose-300 text-rose-800', dotClassName: 'bg-rose-600' }
+
     ];
+
  
+
     const getPersonColor = (uid) => {
+
         const idx = sortedUserIds.indexOf(uid);
+
         if (idx < 0) return { cardClassName: 'bg-gray-50 border-gray-300 text-gray-700', badgeClassName: 'bg-gray-100 border-gray-300 text-gray-700', dotClassName: 'bg-gray-500' };
+
         return PERSON_COLOR_STYLES[idx % PERSON_COLOR_STYLES.length];
+
     };
+
  
+
     const getUserColor = (uid) => getPersonColor(uid).cardClassName;
+
     const getDateString = (day) => `${monthStr}-${String(day).padStart(2, '0')}`;
+
  
+
     const getLeaveLabel = (leaveType) => {
+
         const fallbackLabels = { rostered: '自畫假', official: '排休', annual: '特休', menstrual: '生理假', sick: '病假', personal: '事假' };
+
         return dbData.leaves.find(item => item.id === leaveType)?.label || fallbackLabels[leaveType] || '休假';
+
     };
+
  
+
     // 手機月曆的格子寬度有限，因此姓名優先。
+
     // 中文姓名取最後兩字：例如「梁正儒」顯示為「正儒」；英文姓名仍保留第一個單字。
+
     const getMobileName = (name) => {
+
         const compactName = String(name || '').replace(/\s+/g, '');
+
         if (!compactName) return '員工';
+
         if (/^[A-Za-z]/.test(compactName)) return compactName.split(/[-_]/)[0].slice(0, 6);
+
         return compactName.length > 2 ? compactName.slice(-2) : compactName;
+
     };
+
  
+
     const getMobileLeaveSuffix = (leaveType) => {
+
         const suffixMap = {
+
             rostered: '自畫',
+
             official: '休',
+
             annual: '特休',
+
             menstrual: '生理',
+
             sick: '病',
+
             personal: '事'
+
         };
+
         return suffixMap[leaveType] || '休';
+
     };
+
  
+
     const getMobileLeaveText = (name, leaveType) => `${getMobileName(name)}${getMobileLeaveSuffix(leaveType)}`;
+
  
+
     const monthLeaveSummary = useMemo(() => {
+
         return activeUsers.map(user => {
+
             let leaveDays = 0;
+
             for (let day = 1; day <= days; day += 1) {
+
                 const dateStr = getDateString(day);
+
                 const assignment = (shifts[dateStr]?.assignments || []).find(item => item.uid === user.uid);
+
                 if (assignment?.type === 'LEAVE') leaveDays += 1;
+
             }
+
             return { ...user, leaveDays };
+
         });
+
     }, [activeUsers, days, monthStr, shifts]);
+
  
+
     const getDefaultShiftCode = (user, dateObj) => {
+
         const dayOfWeek = dateObj.getDay();
+
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
         const isManagement = user?.role === 'boss' || user?.role === 'supervisor' || user?.isAdmin === true || user?.isManager === true;
+
  
+
         // 六、日：所有在職人員補 09O。
+
         // 週一至週五：主管、店長補 09O；其餘員工補 09A。
+
         if (isWeekend || isManagement) return '09O';
+
         return '09A';
+
     };
+
  
+
     const handleAutoFillMonthlyShifts = async () => {
+
         if (isReadOnly || !isSuperAdmin) return;
+
         if (activeUsers.length === 0) return alert('目前沒有可填補班別的在職員工。');
+
  
+
         const confirmed = window.confirm(
+
             `確定要自動填補 ${year} 年 ${month + 1} 月所有「空白班別」嗎？\n\n` +
+
             '• 六、日：自動填入 09O\n' +
+
             '• 週一至週五：一般員工填入 09A\n' +
+
             '• 主管、店長：不分平假日皆填入 09O\n\n' +
+
             '系統只會補空白班別，不會覆蓋既有班別、休假或店休。'
+
         );
+
         if (!confirmed) return;
+
  
+
         setIsAutoFilling(true);
+
         let filledCount = 0;
+
         let affectedDateCount = 0;
+
  
+
         try {
+
             for (let day = 1; day <= days; day += 1) {
+
                 const dateStr = getDateString(day);
+
                 const dayData = shifts[dateStr] || { assignments: [] };
+
                 if (dayData.isClosed) continue;
+
  
+
                 const nextAssignments = Array.isArray(dayData.assignments) ? dayData.assignments.map(item => ({ ...item })) : [];
+
                 const dateObj = new Date(year, month, day);
+
                 let changed = false;
+
  
+
                 activeUsers.forEach(user => {
+
                     const existingAssignment = nextAssignments.find(item => item.uid === user.uid);
+
  
+
                     // 休假資料完全保留；有班別者亦不修改。
+
                     if (existingAssignment?.type === 'LEAVE') return;
+
                     if (existingAssignment?.shiftCode) return;
+
  
+
                     const shiftCode = getDefaultShiftCode(user, dateObj);
+
  
+
                     if (existingAssignment) {
+
                         existingAssignment.type = 'WORK';
+
                         existingAssignment.shiftCode = shiftCode;
+
                     } else {
+
                         nextAssignments.push({ uid: user.uid, type: 'WORK', shiftCode });
+
                     }
+
  
+
                     filledCount += 1;
+
                     changed = true;
+
                 });
+
  
+
                 if (changed) {
+
                     affectedDateCount += 1;
+
                     await setDoc(
+
                         doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr),
+
                         { ...dayData, assignments: nextAssignments },
+
                         { merge: true }
+
                     );
+
                 }
+
             }
+
  
+
             alert(filledCount > 0
+
                 ? `✅ 自動填補完成！已補上 ${filledCount} 筆空白班別，共影響 ${affectedDateCount} 天。`
+
                 : '✅ 本月沒有需要填補的空白班別。'
+
             );
+
         } catch (error) {
+
             console.error('自動填補班別失敗', error);
+
             alert('❌ 自動填補失敗，請確認網路與 Firebase 權限後再試一次。');
+
         } finally {
+
             setIsAutoFilling(false);
+
         }
+
     };
+
  
+
     const handleSaveEvent = async (eventData) => {
+
         const isEditing = !!eventData.id;
+
         const normalizedEvent = { ...eventData, endDate: eventData.endDate || eventData.startDate };
+
         if (normalizedEvent.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', normalizedEvent.id), normalizedEvent);
+
         else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), normalizedEvent);
+
         setEditingEvent(null);
+
         alert(`✅ 公司備忘錄 / 行程已${isEditing ? '更新' : '新增'}。`);
+
     };
+
  
+
     const handleDeleteEvent = async (eventId) => {
+
         if (!window.confirm('確定要刪除這個行程嗎？')) return;
+
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companyEvents', eventId));
+
         setEditingEvent(null);
+
     };
+
  
+
     return (
+
         <>
+
             <div className="space-y-4">
+
                 {/* 月曆優先工具列：開啟班表時直接進入月份與月曆，不先佔用手機版高度。 */}
+
                 <div className="bg-white rounded-xl border shadow-sm px-2.5 py-2 flex items-center justify-between gap-2 sticky top-20 z-20">
+
                     <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="上個月"><ChevronLeft size={20} /></button>
+
                     <div className="text-center min-w-0">
+
                         <div className="font-black text-sm text-gray-800 truncate">TEATOP 台中東山店</div>
+
                         <div className="font-bold text-lg text-indigo-700 leading-tight">{year}年 {month + 1}月</div>
+
                     </div>
+
                     <div className="flex items-center gap-1">
+
                         {!isReadOnly && isSuperAdmin && (
+
                             <button
+
                                 onClick={async (event) => { event.stopPropagation(); try { await handleAutoFillMonthlyShifts(); } catch (error) { console.error('自動填補按鍵執行失敗', error); setIsAutoFilling(false); alert('❌ 自動填補班別時發生錯誤，請重新整理後再試一次。'); } }}
+
                                 disabled={isAutoFilling}
+
                                 title="自動填補當月空班"
+
                                 className={`p-2 rounded-lg border transition-colors ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+
                             >
+
                                 <Clock size={18} />
+
                             </button>
+
                         )}
+
                         <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="下個月"><ChevronRight size={20} /></button>
+
                     </div>
+
                 </div>
+
  
+
                 <div className="bg-white rounded-xl border overflow-hidden grid grid-cols-7 shadow-sm">
+
                     {['日', '一', '二', '三', '四', '五', '六'].map(day => <div key={day} className="py-3 text-center font-bold text-gray-600 bg-gray-50 border-b">{day}</div>)}
+
                     {Array.from({ length: firstDay }).map((_, index) => <div key={`empty-${index}`} className="min-h-[148px] border-b border-r bg-gray-50/30" />)}
+
                     {Array.from({ length: days }).map((_, index) => {
+
                         const day = index + 1;
+
                         const dateStr = getDateString(day);
+
                         const data = shifts[dateStr] || {};
+
                         const todaysEvents = (events || []).filter(event => checkEventOnDate(event, dateStr));
+
                         const leaveAssignments = (data.assignments || []).filter(assignment => assignment.type === 'LEAVE');
+
                         const leaveUserIds = new Set(leaveAssignments.map(assignment => assignment.uid));
+
                         const workingUsers = activeUsers.filter(user => !leaveUserIds.has(user.uid));
+
                         const isStaffShortage = !data.isClosed && activeUsers.length > 1 && workingUsers.length <= 1;
+
                         return (
+
                             <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
+
                                 <div className="flex justify-between items-start mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
+
                                 {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
+
                                 {data.isClosed ? <div className="flex-1 flex items-center justify-center"><div className="bg-gray-600 text-white text-sm px-3 py-1 rounded font-bold"><Store size={14} className="inline mr-1" />店休</div></div> : (
+
                                     <div className="space-y-1 flex-1">
+
                                         {isCalendarLoading ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded px-2 py-1.5 font-bold animate-pulse">班表載入中…</div> : leaveAssignments.length === 0 ? null : leaveAssignments.map((assignment, assignmentIndex) => {
+
                                             const user = users[assignment.uid];
+
                                             const personColor = getPersonColor(assignment.uid);
+
                                             if (!user) return null;
+
                                             return (
+
                                                 <div key={assignmentIndex} className={`border rounded px-1.5 py-1 text-[11px] font-bold ${personColor.cardClassName}`}>
+
                                                     <div className="sm:hidden flex items-center gap-1 min-w-0">
+
                                                         <span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />
+
                                                         <span className="truncate">{getMobileLeaveText(user.name, assignment.leaveType || 'unknown')}</span>
+
                                                     </div>
+
                                                     <div className="hidden sm:flex justify-between gap-1 min-w-0">
+
                                                         <span className="truncate flex items-center gap-1"><span className={`w-2 h-2 rounded-full shrink-0 ${personColor.dotClassName}`} />{user.name}</span>
+
                                                         <span className="shrink-0">{getLeaveLabel(assignment.leaveType || 'unknown')}</span>
+
                                                     </div>
+
                                                 </div>
+
                                             );
+
                                         })}
+
                                     </div>
+
                                 )}
+
                             </div>
+
                         );
+
                     })}
+
                 </div>
+
  
+
                 {/* 詳細資訊移至月曆下方，手機開啟時不影響月曆第一眼瀏覽。 */}
+
                 <details className="bg-white rounded-xl border shadow-sm overflow-hidden">
+
                     <summary className="cursor-pointer px-4 py-3 font-bold text-sm text-gray-700 flex items-center gap-2 hover:bg-gray-50">
+
                         <Users size={17} className="text-indigo-600" /> 班表說明與人員顏色
+
                     </summary>
+
                     <div className="border-t p-4 space-y-4">
+
                         <div className="text-xs text-gray-500">休假卡片以人員固定跳色顯示；手機優先顯示「姓名＋假別縮寫」，例如「正儒自畫」、「秉錚休」。未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
+
                         {!isReadOnly && isSuperAdmin && (
+
                             <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 text-xs text-indigo-900">
+
                                 <span className="font-bold">自動填補規則：</span> 六、日填入 <span className="font-bold">09O</span>；週一至週五一般員工填入 <span className="font-bold">09A</span>；主管、店長不分平假日填入 <span className="font-bold">09O</span>。只填補空白班別，休假與已排班別不會變動。
+
                             </div>
+
                         )}
+
                         <div>
+
                             <div className="font-bold text-gray-800 text-sm">人員顏色與本月休假總覽</div>
+
                             <div className="mt-3 flex flex-wrap gap-2">
+
                                 {monthLeaveSummary.map(user => {
+
                                     const personColor = getPersonColor(user.uid);
+
                                     return (
+
                                         <div key={user.uid} className={`border rounded-lg px-3 py-2 text-xs font-bold ${personColor.badgeClassName}`}>
+
                                             <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1.5 ${personColor.dotClassName}`} />
+
                                             <span>{user.name}</span><span className="ml-2">{user.leaveDays > 0 ? `休 ${user.leaveDays} 天` : '本月未排休假'}</span>
+
                                         </div>
+
                                     );
+
                                 })}
+
                                 {activeUsers.length === 0 && <div className="text-sm text-gray-400">尚無在職員工資料</div>}
+
                             </div>
+
                         </div>
+
                     </div>
+
                 </details>
+
  
+
                 {selectedDate && <ShiftModal dateStr={selectedDate} onClose={() => setSelectedDate(null)} dbData={dbData} currentUserInfo={currentUserInfo} setEditingEvent={setEditingEvent} isSuperAdmin={isSuperAdmin} isPrivileged={isPrivileged} getUserColor={getUserColor} db={db} appId={appId} isReadOnly={isReadOnly} />}
+
             </div>
+
             <CompanyEventModal isOpen={!!editingEvent} onClose={() => setEditingEvent(null)} eventData={editingEvent} onSave={handleSaveEvent} onDelete={handleDeleteEvent} />
+
         </>
+
     );
+
 };
+
 // --- 排班細節 Modal ---
+
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
+
     const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
+
     const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
+
     const [note, setNote] = useState(dayData.note || '');
+
     const [expanded, setExpanded] = useState(null);
+
     const [otModalData, setOtModalData] = useState(null); 
+
   
+
     const safeUsers = Object.values(users).filter(u => !u.isResigned || dayData.assignments?.some(a=>a.uid===u.uid));
+
     const isClosed = dayData.isClosed === true;
+
     const todaysEvents = events.filter(e => checkEventOnDate(e, dateStr));
+
   
+
     const yearStr = dateStr.substring(0, 4);
+
     const monthStr = dateStr.substring(0, 7);
+
   
+
  
+
 const getYearlyBalance = (uid, yearToFind) => {
+
     const stats = getUserYearlyTimeStats({ shifts, uid, targetYear: yearToFind, leaveTypes: leaves, shiftTypes: shiftsDef || DEFAULT_SHIFT_TYPES });
+
     return stats.balance;
+
 };
+
  
+
     const update = async (newData) => { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shifts', dateStr), { ...dayData, ...newData }, { merge: true }); setExpanded(null); };
+
     
+
     const toggleClosed = async () => { 
+
         if (!isSuperAdmin) return; 
+
         const newStatus = !isClosed; 
+
         if (newStatus && Array.isArray(dayData.assignments) && dayData.assignments.length > 0) { 
+
             if (!confirm("設定為店休將清除當日所有排班，確定嗎？")) return; 
+
             await update({ isClosed: true, assignments: [] }); 
+
         } else { await update({ isClosed: newStatus }); } 
+
         onClose(); 
+
     };
+
     
+
     const cancelLeave = (uid) => { 
+
         if (!isSuperAdmin) return alert("已鎖定，無法刪除。請聯繫管理員。"); 
+
         let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; 
+
         const idx = next.findIndex(a=>a.uid===uid); 
+
         if(idx>=0) { next.splice(idx, 1); update({ assignments: next }); } 
+
     };
+
   
+
     const updateShiftCode = (uid, code) => {
+
         if (!isSuperAdmin) return alert("只有最高管理員可以排班");
+
         let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid);
+
         if (idx === -1) { next.push({ uid, type: 'WORK', shiftCode: code }); } else { next[idx] = { ...next[idx], shiftCode: code }; }
+
         update({ assignments: next });
+
     };
+
   
+
     // 🟢 手術一：修改請假邏輯，不論有無代班，員工申請皆須簽核
+
     const toggle = async (uid, type, lType = null, subUid = null, useComp = false, customLeaveHours = null) => {
+
         const isMe = uid === currentUserInfo.uid;
+
         if (!isSuperAdmin && !isMe) return alert("無權限");
+
         if (isClosed) return alert("本日店休");
+
         // 🟡 判斷是否為「請假」類型 (LEAVE)
+
         if (type === 'LEAVE') {
+
             // A. 如果是管理員在操作：直接寫入資料庫 (維持原狀)
+
             if (isSuperAdmin) {
+
                 let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
                 const idx = next.findIndex(a => a.uid === uid);
+
                 const baseAssign = idx >= 0 ? next[idx] : null;
+
                 const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+
                 const leaveHours = lType === 'annual' ? normalizeCustomLeaveHours(customLeaveHours, defaultLeaveHours) : resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+
                 const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, useComp: ['sick', 'personal'].includes(lType) ? useComp : false, timestamp: Date.now() };
+
                 if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
+
                 await update({ assignments: next });
+
                 setExpanded(null);
+
             } 
+
             // B. 如果是員工本人申請
+
             else {
+
                 const leaveLabel = leaves.find(l => l.id === lType)?.label || '假別';
+
                 try {
+
                     // 自畫假：員工可直接寫入班表，不需送審、不發審核通知
+
                     if (lType === 'rostered') {
+
                         let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
                         const idx = next.findIndex(a => a.uid === uid);
+
                         const baseAssign = idx >= 0 ? next[idx] : null;
+
                         const leaveHours = resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+
                         const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, useComp: false, timestamp: Date.now() };
+
                         if (idx >= 0) next[idx] = leaveEntry; else next.push(leaveEntry);
+
                         await update({ assignments: next });
+
                         setExpanded(null);
+
                         onClose();
+
                         alert("✅ 自畫假已直接寫入班表，無需主管審核。");
+
                         return;
+
                     }
+
  
+
                     const employeeAssignments = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
                     const employeeAssignIndex = employeeAssignments.findIndex(assignment => assignment.uid === uid);
+
                     const baseAssign = employeeAssignIndex >= 0 ? employeeAssignments[employeeAssignIndex] : null;
+
                     const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+
                     const requestLeaveHours = lType === 'annual'
+
                         ? normalizeCustomLeaveHours(customLeaveHours, defaultLeaveHours)
+
                         : (Number(baseAssign?.leaveHours) > 0 ? Number(baseAssign.leaveHours) : defaultLeaveHours);
 
+ 
+
                     const duplicatedReqs = (requests || []).filter(r => r.type === 'leave_request' && (r.uid === currentUserInfo.uid) && r.date === dateStr);
+
                     await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
+
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
+
                         type: 'leave_request',
+
                         uid: currentUserInfo.uid,
+
                         userName: currentUserInfo.name,
+
                         date: dateStr,
+
                         leaveType: lType,
+
                         leaveLabel: leaveLabel,
+
                         hours: requestLeaveHours,
+
                         subUid: subUid || null,
+
                         subName: subUid ? (users[subUid]?.name || '') : '',
+
                         useComp: ['sick', 'personal'].includes(lType) ? useComp : false,
+
                         timestamp: new Date(),
+
                         status: 'pending'
+
                     });
+
                     alert(`✅ ${leaveLabel} 申請已送出！
+
 請等待主管或管理員於「通知中心」審核。`);
+
                     setExpanded(null);
+
                     onClose(); // 申請完自動關閉彈窗
+
                 } catch (e) {
+
                     console.error('請假申請送出失敗', e);
+
                     alert(`申請送出失敗：${e?.message || '請確認網路連線或資料庫權限'}`);
+
                 }
+
             }
+
             return; // 結束函數，不執行下方的普通排班邏輯
+
         }
+
         // 🔵 處理一般排班 (WORK / OFF) 邏輯 (維持您原本的寫法)
+
         let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
         const idx = next.findIndex(a => a.uid === uid);
+
         if (idx >= 0) next.splice(idx, 1); else next.push({ uid, type });
+
         update({ assignments: next });
+
     };
+
   
-    // 🔴 尋回：完整雙日換假邏輯與 LINE 推播通知
+
+    // 🔄 雙日換班流程：對方先同意，再由主管／店長核准後套用班表
+
     const requestSwap = async (fromUid, toUid, date1) => {
-        const targetUser = users[toUid]; 
-        const date2 = prompt(`【🔄 換班 / 換假申請】\n您準備與 ${targetUser?.name || '對方'} 在 ${date1} 這天換班。\n\n👉 為了公平，請輸入您要「還給對方」的另一天日期 (格式: YYYY-MM-DD)：\n(也就是將這兩天的班別互換)`);
-        
-        if (date2 === null) return; 
+
+        const targetUser = users[toUid];
+
+        if (!targetUser || !toUid) return alert('找不到要交換班別的員工資料。');
+
+        if (fromUid === toUid) return alert('不能與自己提出換班申請。');
+
+ 
+
+        const date2 = prompt(`【🔄 換班 / 換假申請】\n您準備與 ${targetUser.name || '對方'} 在 ${date1} 這天換班。\n\n👉 請輸入另一個互換日期（格式：YYYY-MM-DD）：\n系統會交換雙方在這兩天的班別／休假狀態。`);
+
+        if (date2 === null) return;
+
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date2)) {
-            return alert("🚨 日期格式錯誤！請務必輸入如 2026-10-15 的格式。");
+
+            return alert('🚨 日期格式錯誤！請輸入例如 2026-10-15。');
+
         }
-        if (!confirm(`確定要將您與 ${targetUser?.name} 在【${date1}】與【${date2}】這兩天的班別完全互換嗎？`)) return;
-        
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { 
-            type: 'swap', fromUid, toUid, date1, date2, timestamp: new Date() 
+
+        if (date1 === date2) return alert('兩個互換日期不可相同。');
+
+ 
+
+        const duplicate = (requests || []).find(request =>
+
+            request.type === 'swap' &&
+
+            request.fromUid === fromUid &&
+
+            request.toUid === toUid &&
+
+            request.date1 === date1 &&
+
+            request.date2 === date2
+
+        );
+
+        if (duplicate) return alert('這筆換班申請已在系統中等待處理，請至通知中心查看。');
+
+ 
+
+        if (!confirm(`確定送出換班申請嗎？\n\n申請人：${currentUserInfo.name}\n交換對象：${targetUser.name}\n日期一：${date1}\n日期二：${date2}\n\n對方同意後，仍需主管／店長核准才會正式修改班表。`)) return;
+
+ 
+
+        const requestRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
+
+            type: 'swap',
+
+            status: 'pending_target',
+
+            fromUid,
+
+            fromName: currentUserInfo.name || users[fromUid]?.name || '',
+
+            toUid,
+
+            toName: targetUser.name || '',
+
+            date1,
+
+            date2,
+
+            timestamp: new Date()
+
         });
-        
-        if (targetUser?.lineUserId) {
-            sendLineNotification([targetUser.lineUserId], `🔄 【換班請求】\n${currentUserInfo.name} 想與您交換班別。\n互換日期：${date1} 與 ${date2}\n請登入系統「通知中心」審核。`);
-        }
-        alert("✅ 換假申請已送出！已透過 LINE 通知對方審核。");
-    };
-  
-    const handleOTSave = async (numHours, remark) => {
-        const uid = otModalData.user.uid; const actionType = numHours > 0 ? '加班' : '補休';
-        if (isPrivileged && uid !== currentUserInfo.uid) {
-          const existingReq = requests.find(r => r.date === dateStr && r.uid === uid && r.type === 'ot_confirm');
-          if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
-              type: 'ot_confirm',
-              uid,
-              userName: otModalData.user?.name || '',
-              date: dateStr,
-              hours: numHours,
-              reason: remark || '無備註',
-              status: 'pending',
-              createdByUid: currentUserInfo.uid,
-              createdByName: currentUserInfo.name,
-              timestamp: new Date()
-          });
-          setOtModalData(null); onClose(); setTimeout(() => alert("已送出時數確認單給員工"), 100);
-        } else if (!isPrivileged && uid === currentUserInfo.uid) {
-          const duplicatedReqs = (requests || []).filter(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
-          await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
-          const newRequestRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUserInfo.uid, fromName: currentUserInfo.name, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
-          const approverLineIds = getApproverLineIds(users);
-          if (approverLineIds.length > 0) {
-            const sent = await sendLineNotification(approverLineIds, `🔔 【時數審核申請】
-申請人：${currentUserInfo.name}
-日期：${dateStr}
-時數：${numHours} hr
-原因：${remark || '無備註'}
-請至系統「通知中心」進行審核。`);
+
+ 
+
+        if (targetUser.lineUserId) {
+
+            const sent = await sendLineNotification([targetUser.lineUserId], `🔄 【換班請求】\n${currentUserInfo.name} 想與您交換班別。\n互換日期：${date1} 與 ${date2}\n請登入系統「通知中心」同意或拒絕。`);
+
             if (sent) {
-              await updateDoc(newRequestRef, {
-                lineNotifiedAt: Date.now(),
-                notifiedApproverCount: approverLineIds.length,
-                lastNotificationType: 'create'
-              });
+
+                await updateDoc(requestRef, {
+
+                    lineNotifiedAt: Date.now(),
+
+                    lastNotificationType: 'swap_target'
+
+                }).catch(() => null);
+
             }
-          }
-          setOtModalData(null); onClose(); setTimeout(() => alert("已送出審核明細！請等候主管核准。"), 100);
-        } else {
-          let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid); 
-          const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
-          if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
-          await update({ assignments: next }); setOtModalData(null); onClose(); 
+
         }
+
+        alert('✅ 換班申請已送出！請等待對方同意，再由主管／店長核准。');
+
     };
+
   
-    const cancelPendingTimeRequest = async (requestItem) => {
-        if (!requestItem?.id) return;
-        if (!isPrivileged) return alert('只有主管或店長可以取消這張待確認時數單。');
-        const employee = users?.[requestItem.uid];
-        const employeeName = requestItem.userName || employee?.name || '該員工';
-        if (!window.confirm(`確定取消 ${employeeName} 在 ${requestItem.date} 的待確認時數單嗎？\n時數：${requestItem.hours ?? 0} 小時`)) return;
-        try {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', requestItem.id));
-            if (employee?.lineUserId) {
-                await sendLineNotification([employee.lineUserId], `🗑️ 主管已取消您 ${requestItem.date} 的時數確認單。\n時數：${requestItem.hours ?? 0} hr\n原因：${requestItem.reason || '無備註'}`);
+
+    const handleOTSave = async (numHours, remark) => {
+
+        const uid = otModalData.user.uid; const actionType = numHours > 0 ? '加班' : '補休';
+
+        if (isPrivileged && uid !== currentUserInfo.uid) {
+
+          const existingReq = requests.find(r => r.date === dateStr && r.uid === uid && r.type === 'ot_confirm');
+
+          if (existingReq) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', existingReq.id));
+
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), {
+
+              type: 'ot_confirm',
+
+              uid,
+
+              userName: otModalData.user?.name || '',
+
+              date: dateStr,
+
+              hours: numHours,
+
+              reason: remark || '無備註',
+
+              status: 'pending',
+
+              createdByUid: currentUserInfo.uid,
+
+              createdByName: currentUserInfo.name,
+
+              timestamp: new Date()
+
+          });
+
+          setOtModalData(null); onClose(); setTimeout(() => alert("已送出時數確認單給員工"), 100);
+
+        } else if (!isPrivileged && uid === currentUserInfo.uid) {
+
+          const duplicatedReqs = (requests || []).filter(r => r.date === dateStr && r.fromUid === uid && r.type === 'admin_ot_approve');
+
+          await Promise.all(duplicatedReqs.map(r => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', r.id)).catch(() => null)));
+
+          const newRequestRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), { type: 'admin_ot_approve', fromUid: currentUserInfo.uid, fromName: currentUserInfo.name, date: dateStr, hours: numHours, reason: remark || '無備註', timestamp: new Date() });
+
+          const approverLineIds = getApproverLineIds(users);
+
+          if (approverLineIds.length > 0) {
+
+            const sent = await sendLineNotification(approverLineIds, `🔔 【時數審核申請】
+
+申請人：${currentUserInfo.name}
+
+日期：${dateStr}
+
+時數：${numHours} hr
+
+原因：${remark || '無備註'}
+
+請至系統「通知中心」進行審核。`);
+
+            if (sent) {
+
+              await updateDoc(newRequestRef, {
+
+                lineNotifiedAt: Date.now(),
+
+                notifiedApproverCount: approverLineIds.length,
+
+                lastNotificationType: 'create'
+
+              });
+
             }
-            alert('✅ 待確認時數單已取消。');
-        } catch (error) {
-            console.error('取消待確認時數單失敗', error);
-            alert('取消失敗，請重新整理後再試一次。');
+
+          }
+
+          setOtModalData(null); onClose(); setTimeout(() => alert("已送出審核明細！請等候主管核准。"), 100);
+
+        } else {
+
+          let next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : []; const idx = next.findIndex(a=>a.uid===uid); 
+
+          const newEntry = { otHours: numHours, otReason: remark || '無備註', otConfirmed: true };
+
+          if (idx === -1) next.push({ uid, type: 'WORK', ...newEntry }); else next[idx] = { ...next[idx], ...newEntry };
+
+          await update({ assignments: next }); setOtModalData(null); onClose(); 
+
         }
+
     };
+
+  
+
+    const cancelPendingTimeRequest = async (requestItem) => {
+
+        if (!requestItem?.id) return;
+
+        if (!isPrivileged) return alert('只有主管或店長可以取消這張待確認時數單。');
+
+        const employee = users?.[requestItem.uid];
+
+        const employeeName = requestItem.userName || employee?.name || '該員工';
+
+        if (!window.confirm(`確定取消 ${employeeName} 在 ${requestItem.date} 的待確認時數單嗎？\n時數：${requestItem.hours ?? 0} 小時`)) return;
+
+        try {
+
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', requestItem.id));
+
+            if (employee?.lineUserId) {
+
+                await sendLineNotification([employee.lineUserId], `🗑️ 主管已取消您 ${requestItem.date} 的時數確認單。\n時數：${requestItem.hours ?? 0} hr\n原因：${requestItem.reason || '無備註'}`);
+
+            }
+
+            alert('✅ 待確認時數單已取消。');
+
+        } catch (error) {
+
+            console.error('取消待確認時數單失敗', error);
+
+            alert('取消失敗，請重新整理後再試一次。');
+
+        }
+
+    };
+
+ 
 
     const openOTModal = (user) => { 
+
         const isMe = user.uid === currentUserInfo.uid;
+
         if(!isMe && !isPrivileged) return alert("無權限"); 
+
         if(isClosed) return alert("本日店休"); 
+
         const assign = Array.isArray(dayData.assignments) ? dayData.assignments.find(a=>a.uid===user.uid) : null;
+
         const hasOT = assign?.otHours !== undefined && assign?.otHours !== null && assign?.otHours !== "" && Number(assign?.otHours) !== 0;
+
         const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === user.uid && r.type === 'admin_ot_approve');
+
         const pendingConfirmReq = requests.find(r => r.date === dateStr && r.uid === user.uid && r.type === 'ot_confirm');
+
         if (!isPrivileged && (hasOT || pendingApproveReq || pendingConfirmReq)) return alert("時數已鎖定或審核中，無法修改。");
+
         const balance = getYearlyBalance(user.uid, yearStr);
+
         let initHrs = ''; let initRsn = '';
+
         if (pendingApproveReq) { initHrs = pendingApproveReq.hours; initRsn = pendingApproveReq.reason; } else if (pendingConfirmReq) { initHrs = pendingConfirmReq.hours; initRsn = pendingConfirmReq.reason; } else if (assign?.otHours) { initHrs = assign.otHours; initRsn = assign.otReason; }
+
         setOtModalData({ user, balance, initialHours: initHrs, initialReason: initRsn }); 
+
     }
+
   
+
     const availableSubs = safeUsers.filter(sub => sub.uid !== expanded && !sub.isResigned);
+
   
+
     return (
+
       <>
+
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+
         <div className="bg-white w-full max-w-md rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+
           <div className={`p-4 border-b flex justify-between font-bold items-center ${isClosed ? 'bg-gray-800 text-white' : 'bg-gray-50'}`}><span className="flex items-center gap-2">{dateStr} {isClosed && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded">本日店休</span>}</span><button onClick={onClose} className="hover:text-red-500">✕</button></div>
+
           <div className="p-4 overflow-y-auto space-y-3 flex-1 relative">
+
             
+
             <div className="bg-purple-50 p-3 rounded-lg mb-3 border border-purple-200 shadow-sm">
+
                 <div className="flex justify-between items-center mb-2"><h4 className="font-bold text-purple-800 flex items-center gap-1"><Megaphone size={14}/> 公司備忘錄 / 行程</h4>{!isReadOnly && isSuperAdmin && <button onClick={()=>setEditingEvent({ startDate: dateStr, endDate: dateStr, repeatType: 'none', time: '', title: '', note: '' })} className="text-purple-600 bg-white px-2 py-0.5 rounded border border-purple-200 text-xs font-bold shadow-sm hover:bg-purple-100 transition-colors">+ 新增</button>}</div>
+
                 {todaysEvents.length === 0 ? <div className="text-xs text-purple-400">今日無行程</div> : (
+
                     todaysEvents.map(e => (
+
                         <div key={e.id} className="flex justify-between items-center bg-white p-2 rounded border border-purple-100 mb-1 shadow-sm">
+
                             <div><div className="text-sm font-bold text-gray-800">{e.time && <span className="text-purple-600 mr-1">{e.time}</span>}{e.title}</div>{((e.endDate && e.endDate !== e.startDate) || e.repeatType !== 'none' || e.note) && (<div className="text-[10px] text-gray-500 mt-0.5 flex gap-1 items-center flex-wrap">{e.endDate && e.endDate !== e.startDate && <span className="bg-purple-100 text-purple-700 px-1 rounded">{e.startDate} ～ {e.endDate}</span>}{e.repeatType !== 'none' && <span className="bg-gray-100 px-1 rounded flex items-center gap-0.5"><Repeat size={8}/> {REPEAT_LABELS[e.repeatType]}</span>}{e.note && <span className="truncate max-w-[150px]">{e.note}</span>}</div>)}</div>
+
                             {!isReadOnly && isSuperAdmin && <button onClick={()=>setEditingEvent(e)} className="text-indigo-500 text-xs font-bold bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100">編輯</button>}
+
                         </div>
+
                     ))
+
                 )}
+
             </div>
+
   
+
             {isClosed && (<div className="absolute inset-0 bg-white/95 z-10 flex flex-col items-center justify-center text-center p-4 mt-20"><Store className="w-16 h-16 text-gray-400 mb-2"/><h3 className="text-xl font-bold text-gray-600 mb-4">本日店休</h3>{!isReadOnly && isSuperAdmin && <button onClick={toggleClosed} className="bg-gray-800 text-white px-6 py-2 rounded shadow hover:bg-gray-700 transition-colors">🔓 恢復營業 (解除店休)</button>}</div>)}
+
             
+
             {safeUsers.map(u => {
+
               const assign = Array.isArray(dayData.assignments) ? dayData.assignments.find(a=>a.uid===u.uid) : null; 
+
               const userColor = getUserColor(u.uid); 
+
               const isMe = u.uid === currentUserInfo.uid; 
+
               const canEdit = (isMe || isSuperAdmin) && !isReadOnly; 
+
   
+
               const showSwapBtn = !isMe && !isReadOnly;
+
               
+
               const hasOT = assign?.otHours !== undefined && assign?.otHours !== null && assign?.otHours !== "" && Number(assign?.otHours) !== 0;
+
               const otValue = Number(assign?.otHours);
+
               const isOT = otValue > 0;
+
               const hasLeave = assign?.type === 'LEAVE';
+
   
+
               const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === u.uid && r.type === 'admin_ot_approve');
+
               const pendingConfirmReq = requests.find(r => r.date === dateStr && r.uid === u.uid && r.type === 'ot_confirm');
+
   
+
               const canEditLeave = isSuperAdmin || (isMe && !hasLeave && !isReadOnly);
+
               const canEditOT = isPrivileged || (isMe && !hasOT && !pendingApproveReq && !pendingConfirmReq && !isReadOnly);
+
   
+
               if (hasLeave) {
+
                   return (
+
                       <div key={u.uid} className={`border-2 rounded-lg p-3 ${userColor} bg-opacity-20 shadow-sm transition-all`}>
+
                           <div className="flex justify-between items-center">
+
                               <div className="flex items-center gap-2">
+
                                   <span className="font-bold">{u.name}</span>
+
                                   <span className="bg-white/90 px-2 py-0.5 rounded text-xs border shadow-sm font-bold flex items-center gap-1">
+
                                       🌴 {leaves.find(t=>t.id===assign.leaveType)?.label || '休假'}
+
                                       {assign.leaveHours && assign.leaveType !== 'menstrual' && (<span className={`font-mono ${assign.useComp || assign.leaveType === 'annual' ? 'text-indigo-600' : 'text-red-600'}`}>(-{assign.leaveHours}h{assign.useComp || assign.leaveType === 'annual' ? '抵' : '扣'})</span>)}
+
                                   </span>
+
                                   {assign.subUid && <span className="text-[11px] text-gray-600 font-bold flex items-center gap-1 bg-white/60 px-1 rounded"><ArrowRightLeft size={10}/> {users[assign.subUid]?.name} 代</span>}
+
                               </div>
+
                               {showSwapBtn && <button onClick={() => requestSwap(currentUserInfo.uid, u.uid, dateStr)} className="bg-white border border-indigo-200 text-indigo-600 px-2 py-1 rounded text-[10px] font-bold shadow-sm hover:bg-indigo-50 flex items-center gap-1"><ArrowRightLeft size={10}/> 換班</button>}
+
                               {!isReadOnly && isSuperAdmin && <button onClick={()=>cancelLeave(u.uid)} className="text-red-500 hover:text-red-700 bg-white/80 px-2 py-1 rounded text-xs font-bold shadow-sm border border-red-100 flex items-center gap-1 ml-2"><Trash2 size={12}/> 取消</button>}
+
                           </div>
+
                       </div>
+
                   );
+
               } else {
+
                   let otButtonUi = null;
+
                   if (pendingApproveReq) {
+
                       otButtonUi = <button onClick={() => !isReadOnly && isPrivileged ? openOTModal(u) : alert("審核中。")} className={`flex-1 py-2 text-xs rounded border font-bold shadow-sm bg-blue-50 text-blue-600 border-blue-200 ${(!isPrivileged || isReadOnly) ? 'opacity-60 cursor-not-allowed' : 'hover:bg-blue-100'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />審核中 ({pendingApproveReq.hours}h)</button>;
+
                   } else if (pendingConfirmReq) {
+
                       otButtonUi = (
+
                           <div className="flex-1 flex gap-1">
+
                               <button
+
                                   onClick={() => {
+
                                       if (isPrivileged) return openOTModal(u);
+
                                       alert('這張時數單等待您確認，請到上方「通知中心」查看並確認或駁回。');
+
                                   }}
+
                                   className="flex-1 py-2 text-xs rounded border font-bold shadow-sm bg-pink-50 text-pink-600 border-pink-200 hover:bg-pink-100"
+
                               >
+
                                   <Clock className="w-3.5 h-3.5 inline mr-1" />待確認 ({pendingConfirmReq.hours}h)
+
                               </button>
+
                               {isPrivileged && !isReadOnly && (
+
                                   <button
+
                                       onClick={() => cancelPendingTimeRequest(pendingConfirmReq)}
+
                                       className="px-2 py-2 text-xs rounded border font-bold bg-red-50 text-red-600 border-red-200 hover:bg-red-100"
+
                                       title="取消待確認時數單"
+
                                   >
+
                                       <Trash2 className="w-3.5 h-3.5" />
+
                                   </button>
+
                               )}
+
                           </div>
+
                       );
+
                   } else if (hasOT) {
+
                       otButtonUi = <button onClick={() => !isReadOnly && isPrivileged ? openOTModal(u) : alert("時數已生效，無法修改。")} className={`flex-1 py-2 text-xs rounded border font-bold shadow-sm ${isOT ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-green-100 text-green-700 border-green-200'} ${(!isPrivileged || isReadOnly) ? 'opacity-60 cursor-not-allowed' : (isOT ? 'hover:bg-orange-200' : 'hover:bg-green-200')}`}><Clock className="w-3.5 h-3.5 inline mr-1" />{isOT ? `+${otValue}h` : `${otValue}h`}</button>;
+
                   } else {
+
                       otButtonUi = <button onClick={() => openOTModal(u)} disabled={!canEditOT} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditOT ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50'}`}><Clock className="w-3.5 h-3.5 inline mr-1" />加/補休</button>;
+
                   }
+
   
+
                   return (
+
                     <div key={u.uid} className={`border rounded-lg p-3 ${!canEdit ? 'bg-gray-50 opacity-100' : 'bg-white shadow-sm hover:border-indigo-200 transition-colors'}`}>
+
                       <div className="flex justify-between items-center mb-2">
+
                           <div className="font-bold text-gray-800 flex items-center gap-2">
+
                               <div className={`w-3 h-3 rounded-full ${userColor.split(' ')[0]} border-2 border-gray-400`}></div>{u.name}
+
                           </div>
+
                           {showSwapBtn && <button onClick={() => requestSwap(currentUserInfo.uid, u.uid, dateStr)} className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-1 rounded text-xs font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100"><ArrowRightLeft size={12}/> 換班</button>}
+
                       </div>
+
   
+
                       <div className="flex gap-2 w-full mt-2">
+
                           {!isReadOnly && isSuperAdmin ? (
+
                               <select value={assign?.shiftCode || ''} onChange={(e) => updateShiftCode(u.uid, e.target.value)} className={`flex-1 text-xs border rounded p-1 shadow-sm text-center focus:outline-none ${assign?.shiftCode ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold' : 'bg-white text-gray-500'}`}>
+
                                   <option value="">未排班</option>
+
                                   {shiftsDef.map(st => <option key={st.id} value={st.id}>{st.label}</option>)}
+
                               </select>
+
                           ) : (assign?.shiftCode ? (
+
                               <div className="flex-1 flex items-center justify-center text-xs bg-gray-100 text-gray-600 rounded font-mono border shadow-sm font-bold">班別: {shiftsDef.find(st=>st.id===assign.shiftCode)?.label || assign.shiftCode}</div>
+
                           ) : <div className="flex-1 flex items-center justify-center text-xs bg-gray-50 text-gray-400 rounded font-mono border border-dashed">未排班</div>)}
+
   
+
                           {!isReadOnly && (
+
                               <>
+
                                 {otButtonUi}
+
                                 {!hasLeave && isSuperAdmin && <button onClick={async () => { await toggle(u.uid,'LEAVE','official',null); onClose(); }} disabled={!canEditLeave} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold'}`}>排休</button>}
+
                                 <button onClick={() => canEditLeave ? setExpanded(expanded===u.uid?null:u.uid) : alert("無權限或已鎖定。")} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50 font-bold'}`}>請休假 ▼</button>
+
                               </>
+
                           )}
+
                       </div>
+
   
+
                       {expanded===u.uid && (
+
                         <div className="bg-gray-50 p-3 rounded-lg animate-fade-in border mt-2 shadow-inner">
+
                           <div className="text-xs font-bold text-gray-600 mb-2 border-b pb-1">休假申請表</div>
+
                           <div className="flex items-center gap-2 mb-3">
+
                               <span className="text-xs text-gray-600 font-bold whitespace-nowrap">找人代班:</span>
+
                               <select id={`sub-select-${u.uid}`} className="text-xs border border-gray-300 rounded p-1.5 flex-1 bg-white shadow-sm focus:border-indigo-500 focus:outline-none"><option value="">-- 不需代班 --</option>{availableSubs.map(s => <option key={s.uid} value={s.uid}>{s.name}</option>)}</select>
+
                           </div>
+
                           <label className="flex items-center gap-2 mb-3 text-xs text-indigo-700 font-bold bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+
                               <input id={`use-comp-${u.uid}`} type="checkbox" className="accent-indigo-600" />
+
                               病假 / 事假申請時，使用補休時數扣抵
+
                           </label>
+
                           <div className="grid grid-cols-1 gap-1 mb-3 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2">
+
                               <label className="text-xs text-violet-700 font-black">特休使用時數（小時）</label>
+
                               <input id={`annual-hours-${u.uid}`} type="number" min="0.5" step="0.5" defaultValue={resolveDefaultLeaveHours(assign, shiftsDef || DEFAULT_SHIFT_TYPES)} className="w-full border border-violet-200 rounded px-2 py-1.5 text-sm font-bold text-violet-800 focus:outline-none focus:border-violet-500" />
+
                               <div className="text-[10px] text-violet-600 font-bold">只在點選「特休」時套用；可輸入 0.5、1、2、4、8 小時等，不再固定整天。</div>
+
                           </div>
+
                           <div className="grid grid-cols-3 gap-2">
+
                               {leaves.map(lt => {
+
                                   if (lt.id === 'official') return null;
+
                                   let limitReached = false; let limitMsg = "";
+
                                   
+
                                   const getLeaveCount = (leaveId, prefix) => {
+
                                       let count = 0; Object.keys(shifts).forEach(d => { if (d.startsWith(prefix) && d !== dateStr) { if (Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a => a.uid === u.uid && a.type === 'LEAVE' && a.leaveType === leaveId)) count++; } }); return count;
+
                                   };
+
   
+
                                   if (lt.id === 'menstrual') {
+
                                       if (getLeaveCount('menstrual', yearStr) >= 3) { limitReached = true; limitMsg = "生理假一年最多請 3 天！"; } else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天！"; }
+
                                   } else if (lt.id === 'sick') { if (getLeaveCount('sick', yearStr) >= 30) { limitReached = true; limitMsg = "病假一年最多請 30 天！"; }
+
                                   } else if (lt.id === 'personal') { if (getLeaveCount('personal', yearStr) >= 14) { limitReached = true; limitMsg = "事假一年最多請 14 天！"; }
+
                                   } else if (lt.id === 'rostered') { 
+
                                       let totalRostered = 0; let weekendRostered = 0;
+
                                       Object.keys(shifts).forEach(d => {
+
                                           if (d.startsWith(monthStr) && d !== dateStr) {
+
                                               if (Array.isArray(shifts[d].assignments) && shifts[d].assignments.some(a => a.uid === u.uid && a.type === 'LEAVE' && a.leaveType === 'rostered')) {
+
                                                   totalRostered++;
+
                                                   const dObj = new Date(d);
+
                                                   if (dObj.getDay() === 0 || dObj.getDay() === 6) weekendRostered++;
+
                                               }
+
                                           }
+
                                       });
+
                                       const targetDateObj = new Date(dateStr);
+
                                       const isTargetWeekend = targetDateObj.getDay() === 0 || targetDateObj.getDay() === 6;
+
   
+
                                       if (!isSuperAdmin) { 
+
                                           if (totalRostered >= 3) { limitReached = true; limitMsg = "本月自畫假已達 3 天上限！"; }
+
                                           else if (isTargetWeekend && weekendRostered >= 2) { limitReached = true; limitMsg = "本月假日(六日)畫假已達 2 天上限！"; }
+
                                       } 
+
                                   }
+
   
+
                                   const btnClass = limitReached ? (isSuperAdmin ? 'bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100 shadow-sm' : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed') : (lt.id === 'rostered' || lt.id === 'official' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-sm' : 'bg-white hover:bg-gray-100 shadow-sm');
+
                                   return (
+
                                       <button key={lt.id} onClick={() => { if (limitReached) { if (isSuperAdmin) { if(!window.confirm(`⚠️ 警告：${u.name} 的${limitMsg}\n\n您具有管理員權限，是否要「強制核准」此假單？`)) return; } else { alert(`🚫 拒絕：${limitMsg}`); return; } } const subVal = document.getElementById(`sub-select-${u.uid}`).value; const useCompChecked = ['sick', 'personal'].includes(lt.id) ? !!document.getElementById(`use-comp-${u.uid}`)?.checked : false; const annualHoursInput = document.getElementById(`annual-hours-${u.uid}`)?.value; const customHours = lt.id === 'annual' ? annualHoursInput : null; toggle(u.uid,'LEAVE',lt.id, subVal || null, useCompChecked, customHours); }} className={`text-xs p-2 border rounded font-bold transition-all ${btnClass}`}>
+
                                           {limitReached && isSuperAdmin && <span className="mr-1">⚠️</span>}{lt.label}
+
                                       </button>
+
                                   )
+
                               })}
+
                           </div>
+
                         </div>
+
                       )}
+
                     </div>
+
                   );
+
               }
+
             })}
+
             <div className="border-t pt-3 mt-2">
+
                 <div className="flex gap-2 items-center mb-1"><StickyNote className="w-4 h-4 text-gray-500" /><span className="text-xs font-bold text-gray-600">當日備註 (顯示於右上角紅點)</span></div>
+
                 <div className="flex gap-2">
+
                     <input value={note} disabled={isReadOnly} onChange={e=>setNote(e.target.value)} className={`border flex-1 rounded px-2 py-1 text-base sm:text-sm focus:outline-none focus:border-indigo-500 ${isReadOnly ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white'}`} placeholder="例如: 衛生局檢查..."/>
+
                     {!isReadOnly && <button onClick={()=>setDoc(doc(db,'artifacts',appId,'public', 'data', 'shifts',dateStr),{...dayData,note},{merge:true})} className="bg-indigo-600 text-white px-3 rounded hover:bg-indigo-700"><Save size={16}/></button>}
+
                 </div>
+
             </div>
+
             {!isReadOnly && isSuperAdmin && !isClosed && <div className="pt-2 border-t mt-2"><button onClick={toggleClosed} className="w-full bg-gray-100 text-gray-600 text-xs py-2 rounded hover:bg-gray-200 flex items-center justify-center gap-1 font-bold transition-colors"><Store className="w-3.5 h-3.5" /> 設為店休 (清空當日班表)</button></div>}
+
           </div>
+
         </div>
+
       </div>
+
       <OTModal isOpen={!!otModalData} onClose={()=>setOtModalData(null)} onConfirm={handleOTSave} modalData={otModalData} dateStr={dateStr} />
+
       </>
+
     );
+
 };
+
 // ==========================================
+
 // 📊 統計明細 (SalaryView) - V12 發票登錄版
+
 // ==========================================
+
 const SalaryView = ({ users, shifts, shiftTypes = DEFAULT_SHIFT_TYPES, currentDate, leaveTypes, currentUserInfo, isPrivileged, gasReceipts, db, appId }) => {
+
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
+
     const [showResigned, setShowResigned] = useState(false);
+
     const [gasModalData, setGasModalData] = useState(null);
+
     const visibleUsers = useMemo(() => {
+
         let list = isPrivileged ? Object.values(users) : [currentUserInfo];
+
         if (!showResigned) list = list.filter(u => !u.isResigned);
+
         return list;
+
     }, [users, currentUserInfo, isPrivileged, showResigned]);
+
   
+
  
+
 const calc = (uid) => {
+
     const targetYear = targetMonth.substring(0, 4);
+
     const uObj = users[uid];
+
     const annualLimitHours = getAnnualLeaveHours(uObj?.startDate);
+
     let tenureText = "資料未建檔";
+
     if (uObj?.startDate) {
+
         const start = new Date(uObj.startDate);
+
         const now = new Date();
+
         const diffDays = Math.ceil(Math.abs(now - start) / (1000 * 60 * 60 * 24));
+
         const diffYears = diffDays / 365.25;
+
         if (diffYears < 0.5) tenureText = "未滿半年";
+
         else if (diffYears >= 0.5 && diffYears < 1) tenureText = "滿半年";
+
         else tenureText = `滿 ${Math.floor(diffYears)} 年`;
+
     }
+
     const { monthStats, yearStats, balance, otHistory, monthOtHistory } = getUserYearlyTimeStats({
+
         shifts,
+
         uid,
+
         targetYear,
+
         targetMonth,
+
         leaveTypes,
+
         shiftTypes
+
     });
+
     const gasTotal = (gasReceipts?.[targetMonth]?.[uid] || []).reduce((sum, r) => sum + r.amount, 0);
+
     return { monthStats, yearStats, balance, otHistory, monthOtHistory, targetYear, annualLimitHours, gasTotal, tenureText };
+
 };
+
  
+
     return (
+
         <div className="space-y-4 pb-20">
+
             <div className="bg-white p-4 rounded-xl border flex flex-col sm:flex-row sm:justify-between sm:items-center shadow-sm gap-3">
+
                 <h2 className="font-bold flex gap-2 text-indigo-700"><ListFilter /> 時數結算 / 統計明細</h2>
+
                 <div className="flex gap-2">
+
                     <input type="month" value={targetMonth} onChange={e=>setTargetMonth(e.target.value)} className="border rounded px-2 py-1.5 focus:outline-none"/>
+
                 </div>
+
             </div>
+
             {visibleUsers.map(u => {
+
                 const s = calc(u.uid);
+
                 return (
+
                     <div key={u.uid} className="bg-white p-4 rounded-xl shadow-sm border space-y-4">
+
                         <div className="flex justify-between items-start border-b pb-2">
+
                             <div className="font-bold text-lg">{u.name}</div>
+
                             <div className="text-right">
+
                                 <div className="text-[10px] text-gray-400">年度可用補休時數</div>
+
                                 <div className={`font-bold text-xl ${s.balance < 0 ? 'text-red-600' : 'text-indigo-600'}`}>{s.balance} hr</div>
+
                             </div>
+
                         </div>
+
                         <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200">
+
                             <div className="text-xs font-bold text-indigo-900 mb-2 border-b border-indigo-100 pb-1 flex justify-between">
+
                                 <span><Gift className="w-3 h-3 inline mr-1"/> 特休時數帳戶（獨立，不扣補休）</span>
+
                                 <span className="bg-white px-2 rounded text-indigo-600">剩餘: {Math.max(0, s.annualLimitHours - s.yearStats.usedAnnualHours)} 小時</span>
+
                             </div>
+
                             <div className="grid grid-cols-2 gap-2 text-[11px] text-indigo-800">
+
                                 <div>📌 到職日: {u.startDate || '未設定'}</div>
+
                                 <div>⏳ 系統年資: {s.tenureText}</div>
+
                                 <div>🎯 年度總額: {s.annualLimitHours} 小時</div>
+
                                 <div>🏃 年度已休: {s.yearStats.usedAnnualHours} 小時</div>
+
                             </div>
+
                         </div>
+
                         <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+
                             <div className="text-xs font-bold text-amber-900 mb-2 border-b border-amber-100 pb-1">年度已休假總明細</div>
+
                             <div className="grid grid-cols-2 gap-2 text-[11px] text-amber-800">
+
                                 <div>🩸 生理假：{s.yearStats.leaves.menstrual?.days || 0} 天（每年最多 3 天／每月最多 1 天）</div>
+
                                 <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時（可選擇補休扣抵）</div>
+
                                 <div>🗂️ 事假：{s.yearStats.leaves.personal?.days || 0} 天 / {s.yearStats.leaves.personal?.hours || 0} 小時（可選擇補休扣抵）</div>
+
                                 <div>🌴 特休：{s.yearStats.leaves.annual?.hours || 0} 小時（獨立帳戶）</div>
+
                             </div>
+
                         </div>
+
                         <div className="bg-teal-50 p-3 rounded-lg border border-teal-200 flex justify-between items-center gap-3">
+
                             <div>
+
                                 <div className="font-bold text-sm text-teal-800"><Fuel className="w-3 h-3 inline mr-1"/> 本月油資核銷: ${Math.min(s.gasTotal, 500)}</div>
+
                                 <div className="text-[10px] text-teal-600">已登錄 {(gasReceipts?.[targetMonth]?.[u.uid] || []).length} 張發票，實報實銷 (上限500)</div>
+
                             </div>
+
                             <button onClick={() => setGasModalData(u)} className="shrink-0 bg-teal-600 text-white text-xs font-bold px-3 py-2 rounded-lg hover:bg-teal-700 shadow-sm">{isPrivileged ? '管理發票' : '登錄發票'}</button>
+
                         </div>
+
                         <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+
                             <div className="font-bold text-blue-900 mb-2">本月加減時數明細（加班／補休扣抵）</div>
+
                             {s.monthOtHistory.length === 0 ? (
+
                                 <div className="text-xs text-blue-500">本月尚無加減時數紀錄</div>
+
                             ) : (
+
                                 <div className="space-y-1">
+
                                     {s.monthOtHistory.map((h, i) => (
+
                                         <div key={i} className="flex items-center justify-between text-xs bg-white/80 border border-blue-100 rounded px-2 py-1">
+
                                             <span className="font-mono text-gray-500">{h.date}</span>
+
                                             <span className={`font-bold ${h.hours > 0 ? 'text-orange-600' : 'text-green-600'}`}>{h.hours > 0 ? `+${h.hours}` : h.hours} hr</span>
+
                                             <span className="text-gray-600 text-right ml-2 flex-1 truncate">{h.reason}</span>
+
                                         </div>
+
                                     ))}
+
                                 </div>
+
                             )}
+
                         </div>
+
                         {s.otHistory.length > 0 && (
+
                             <div className="text-[10px] bg-gray-50 p-2 rounded border">
+
                                 <div className="font-bold text-gray-500 mb-1">年度補休增減歷史（最新 5 筆，不含特休）</div>
+
                                 {s.otHistory.slice(0, 5).map((h, i) => (
+
                                     <div key={i} className="flex justify-between border-b border-gray-100 last:border-0 py-0.5">
+
                                         <span>{h.date.substring(5)}</span>
+
                                         <span className={h.hours > 0 ? 'text-orange-600' : 'text-green-600'}>{h.hours > 0 ? `+${h.hours}` : h.hours} hr</span>
+
                                         <span className="text-gray-400 truncate ml-2 w-32 text-right">{h.reason}</span>
+
                                     </div>
+
                                 ))}
+
                             </div>
+
                         )}
+
                     </div>
+
                 )
+
             })}
+
             <GasReceiptModal
+
                 isOpen={!!gasModalData}
+
                 onClose={() => setGasModalData(null)}
+
                 user={gasModalData}
+
                 monthStr={targetMonth}
+
                 db={db}
+
                 appId={appId}
+
                 currentRecords={gasReceipts?.[targetMonth] || {}}
+
                 currentUserInfo={currentUserInfo}
+
             />
+
         </div>
+
     );
+
 };
+
 // ==========================================
+
 // 💰 薪資管理 (PayrollView)
+
 // ==========================================
+
 const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, shiftTypes = DEFAULT_SHIFT_TYPES, currentUserInfo, isSuperAdmin }) => {
+
     const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2,'0')}`);
+
     const [payrollData, setPayrollData] = useState({});
+
     const [payrollHistory, setPayrollHistory] = useState({});
+
     const [showResigned, setShowResigned] = useState(false);
+
     const [gasModalUser, setGasModalUser] = useState(null);
+
     const [employeeKeyword, setEmployeeKeyword] = useState('');
+
     const [selectedUserIds, setSelectedUserIds] = useState([]);
+
     const [expandedHistoryIds, setExpandedHistoryIds] = useState([]);
+
     const [payrollStatus, setPayrollStatus] = useState('draft');
+
     const [payrollLockedAt, setPayrollLockedAt] = useState(null);
+
     const [payrollLockedBy, setPayrollLockedBy] = useState('');
+
  
+
     const getRecentMonthOptions = () => {
+
         const options = [];
+
         const baseDate = new Date(`${targetMonth}-01T00:00:00`);
+
         if (Number.isNaN(baseDate.getTime())) return [targetMonth];
+
  
+
         for (let index = 0; index < 10; index += 1) {
+
             const date = new Date(baseDate.getFullYear(), baseDate.getMonth() - index, 1);
+
             const year = date.getFullYear();
+
             const month = String(date.getMonth() + 1).padStart(2, '0');
+
             options.push(`${year}-${month}`);
+
         }
+
  
+
         return options;
+
     };
+
  
+
     const recentMonthOptions = useMemo(() => getRecentMonthOptions(), [targetMonth]);
+
  
+
     useEffect(() => {
+
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), (docSnap) => {
+
             if (docSnap.exists()) {
+
                 const data = docSnap.data();
+
                 setPayrollData(data.records || {});
+
                 setPayrollStatus(data.status || 'draft');
+
                 setPayrollLockedAt(data.lockedAt || null);
+
                 setPayrollLockedBy(data.lockedByName || '');
+
             } else {
+
                 setPayrollData({});
+
                 setPayrollStatus('draft');
+
                 setPayrollLockedAt(null);
+
                 setPayrollLockedBy('');
+
             }
+
         });
+
  
+
         return () => unsub();
+
     }, [targetMonth, db, appId]);
+
  
+
     useEffect(() => {
+
         const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'payrolls'), (snap) => {
+
             const nextHistory = {};
+
             snap.forEach(docSnap => {
+
                 if (recentMonthOptions.includes(docSnap.id)) {
+
                     nextHistory[docSnap.id] = docSnap.data().records || {};
+
                 }
+
             });
+
             setPayrollHistory(nextHistory);
+
         });
+
  
+
         return () => unsub();
+
     }, [db, appId, recentMonthOptions.join('|')]);
+
  
+
     const updatePayroll = async (uid, field, value) => {
+
         if (payrollStatus === 'locked') return alert('本月薪資已鎖定。如需調整，請先由管理員解除鎖定。');
+
         const newData = {
+
             ...payrollData,
+
             [uid]: {
+
                 ...(payrollData[uid] || {}),
+
                 [field]: value
+
             }
+
         };
+
  
+
         setPayrollData(newData);
+
         await setDoc(
+
             doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth),
+
             { records: newData, status: payrollStatus, updatedAt: Date.now() },
+
             { merge: true }
+
         );
+
     };
+
  
+
     const getPayrollStatusLabel = () => {
+
         if (payrollStatus === 'locked') return '已鎖定';
+
         if (payrollStatus === 'confirmed') return '已結算待鎖定';
+
         return '未結算';
+
     };
+
  
+
     const changePayrollStatus = async (nextStatus) => {
+
         if (!isSuperAdmin) return alert('只有管理員可以確認、鎖定或解除本月薪資。');
+
         const isLocking = nextStatus === 'locked';
+
         const confirmed = nextStatus === 'confirmed';
+
         if (isLocking && !window.confirm(`確定鎖定 ${targetMonth} 薪資？鎖定後將無法修改薪資欄位。`)) return;
+
         if (nextStatus === 'draft' && payrollStatus === 'locked' && !window.confirm(`確定解除 ${targetMonth} 薪資鎖定？`)) return;
+
         const payload = {
+
             records: payrollData,
+
             status: nextStatus,
+
             updatedAt: Date.now(),
+
             lockedAt: isLocking ? Date.now() : null,
+
             lockedByName: isLocking ? (currentUserInfo?.name || '管理員') : '',
+
             confirmedAt: confirmed ? Date.now() : null
+
         };
+
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', targetMonth), payload, { merge: true });
+
         await writeAuditLog({ db, appId, actor: { name: currentUserInfo?.name || '管理員' }, action: isLocking ? 'lock_payroll' : (confirmed ? 'confirm_payroll' : 'unlock_payroll'), targetType: 'payroll', targetId: targetMonth, detail: { status: nextStatus } });
+
     };
+
  
+
     const printPayrollSlip = (user, summary) => {
+
         const printWindow = window.open('', '_blank', 'width=800,height=900');
+
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
+
         printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>薪資結算基數</td><td>${formatMoney(summary.settlementBase)}</td></tr><tr><td>油資 / 津貼 / 獎金</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>預估實領</td><td>${formatMoney(summary.netPay)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+
         printWindow.document.close();
+
     };
+
  
+
     const getNumber = (value) => {
+
         const numberValue = Number(value);
+
         return Number.isFinite(numberValue) ? numberValue : 0;
+
     };
+
  
+
     const formatMoney = (value) => {
+
         const roundedValue = Math.round(getNumber(value));
+
         return `$${roundedValue.toLocaleString('zh-TW')}`;
+
     };
+
  
+
     const normalizePayrollLeaveType = (assignment = {}) => {
+
         const rawLeaveType = String(assignment.leaveType || assignment.type || '').trim().toLowerCase();
+
         const aliases = {
+
             sick: 'sick',
+
             medical: 'sick',
+
             personal: 'personal',
+
             annual: 'annual',
+
             annualleave: 'annual',
+
             annual_leave: 'annual',
+
             'annual-leave': 'annual'
+
         };
+
  
+
         return aliases[rawLeaveType] || '';
+
     };
+
  
+
     const getLeaveSummary = (uid, monthStr) => {
+
         const summary = {
+
             sickHours: 0,
+
             personalHours: 0,
+
             annualHours: 0,
+
             sickDetails: [],
+
             personalDetails: [],
+
             annualDetails: []
+
         };
+
  
+
         Object.keys(shifts || {}).forEach(dateStr => {
+
             if (!dateStr.startsWith(monthStr)) return;
+
  
+
             const dayData = shifts[dateStr];
+
             if (dayData?.isClosed) return;
+
  
+
             const assignment = Array.isArray(dayData?.assignments)
+
                 ? dayData.assignments.find(item => {
+
                     if (item.uid !== uid) return false;
+
                     return Boolean(normalizePayrollLeaveType(item));
+
                 })
+
                 : null;
+
  
+
             if (!assignment) return;
+
  
+
             const normalizedLeaveType = normalizePayrollLeaveType(assignment);
+
             const leaveHours = resolveLeaveHours(assignment, shiftTypes);
+
             const detail = {
+
                 date: dateStr,
+
                 hours: leaveHours,
+
                 note: assignment.note || assignment.reason || '',
+
                 useComp: assignment.useComp === true,
+
                 sourceType: assignment.type || 'LEAVE'
+
             };
+
  
+
             if (normalizedLeaveType === 'sick') {
+
                 summary.sickHours += leaveHours;
+
                 summary.sickDetails.push(detail);
+
             }
+
  
+
             if (normalizedLeaveType === 'personal') {
+
                 summary.personalHours += leaveHours;
+
                 summary.personalDetails.push(detail);
+
             }
+
  
+
             if (normalizedLeaveType === 'annual') {
+
                 summary.annualHours += leaveHours;
+
                 summary.annualDetails.push(detail);
+
             }
+
         });
+
  
+
         summary.sickDetails.sort((a, b) => a.date.localeCompare(b.date));
+
         summary.personalDetails.sort((a, b) => a.date.localeCompare(b.date));
+
         summary.annualDetails.sort((a, b) => a.date.localeCompare(b.date));
+
  
+
         return summary;
+
     };
+
  
+
     const getAnnualLeaveYearStats = (uid, yearStr) => {
+
         let usedHours = 0;
+
         Object.keys(shifts || {}).forEach(dateStr => {
+
             if (!dateStr.startsWith(yearStr)) return;
+
             const dayData = shifts[dateStr];
+
             if (dayData?.isClosed) return;
+
             const assignment = Array.isArray(dayData?.assignments)
+
                 ? dayData.assignments.find(item => item.uid === uid && normalizePayrollLeaveType(item) === 'annual')
+
                 : null;
+
             if (assignment) usedHours += resolveLeaveHours(assignment, shiftTypes);
+
         });
+
         return usedHours;
+
     };
+
  
+
     const getSettlementBase = (user, record = {}) => {
+
         return getNumber(record.settlementBase || user?.salaryAmount || record.base);
+
     };
+
  
+
     const getPayrollSummary = (user, record = {}, monthStr = targetMonth) => {
+
         const settlementBase = getSettlementBase(user, record);
+
         const hourlyRate = settlementBase > 0 ? settlementBase / 30 / 8 : 0;
+
         const leaveSummary = getLeaveSummary(user.uid, monthStr);
+
         const annualUsedYearHours = getAnnualLeaveYearStats(user.uid, String(monthStr || targetMonth).slice(0, 4));
+
         const annualEntitledHours = getAnnualLeaveHours(user?.startDate || user?.hireDate || user?.contractStart || '');
+
         const annualRemainingHours = Math.max(0, annualEntitledHours - annualUsedYearHours);
+
         const sickDeduction = leaveSummary.sickHours * hourlyRate * 0.5;
+
         const personalDeduction = leaveSummary.personalHours * hourlyRate;
+
         const gasRecords = gasReceipts?.[monthStr]?.[user.uid] || [];
+
         const gasTotal = gasRecords.reduce((sum, item) => sum + getNumber(item.amount), 0);
+
         const gasCapped = Math.min(gasTotal, 500);
+
         const subsidy = getNumber(record.subsidy);
+
         const birthdayBonus = getNumber(record.bonus_bday);
+
         const festivalBonus = getNumber(record.bonus_festival);
+
         const yearBonus = getNumber(record.bonus_year);
+
         const manualAdjustment = getNumber(record.manualAdjustment);
+
         const manualDeduction = getNumber(record.manualDeduction);
+
         const totalAdditions = gasCapped + subsidy + birthdayBonus + festivalBonus + yearBonus + manualAdjustment;
+
         const totalDeductions = sickDeduction + personalDeduction + manualDeduction;
+
         const netPay = settlementBase + totalAdditions - totalDeductions;
+
  
+
         return {
+
             settlementBase,
+
             hourlyRate,
+
             leaveSummary,
+
             annualUsedYearHours,
+
             annualEntitledHours,
+
             annualRemainingHours,
+
             sickDeduction,
+
             personalDeduction,
+
             gasTotal,
+
             gasCapped,
+
             subsidy,
+
             birthdayBonus,
+
             festivalBonus,
+
             yearBonus,
+
             manualAdjustment,
+
             manualDeduction,
+
             totalAdditions,
+
             totalDeductions,
+
             netPay
+
         };
+
     };
+
  
+
     const availableUsers = useMemo(() => {
+
         return users.filter(user => showResigned ? true : !user.isResigned);
+
     }, [users, showResigned]);
+
  
+
     const filteredUsers = useMemo(() => {
+
         const normalizedKeyword = employeeKeyword.trim().toLowerCase();
+
  
+
         return availableUsers.filter(user => {
+
             if (!normalizedKeyword) return true;
+
             return String(user.name || '').toLowerCase().includes(normalizedKeyword);
+
         });
+
     }, [availableUsers, employeeKeyword]);
+
  
+
     useEffect(() => {
+
         const activeUserIds = availableUsers.map(user => user.uid);
+
  
+
         setSelectedUserIds(previousIds => {
+
             if (previousIds.length === 0) return activeUserIds;
+
             return previousIds.filter(uid => activeUserIds.includes(uid));
+
         });
+
     }, [availableUsers.map(user => user.uid).join('|')]);
+
  
+
     const displayedUsers = filteredUsers.filter(user => selectedUserIds.includes(user.uid));
+
     const isAllFilteredSelected = filteredUsers.length > 0 && filteredUsers.every(user => selectedUserIds.includes(user.uid));
+
  
+
     const toggleUserSelection = (uid) => {
+
         setSelectedUserIds(previousIds => {
+
             if (previousIds.includes(uid)) return previousIds.filter(id => id !== uid);
+
             return [...previousIds, uid];
+
         });
+
     };
+
  
+
     const toggleAllFilteredUsers = () => {
+
         const filteredIds = filteredUsers.map(user => user.uid);
+
  
+
         setSelectedUserIds(previousIds => {
+
             if (isAllFilteredSelected) {
+
                 return previousIds.filter(uid => !filteredIds.includes(uid));
+
             }
+
  
+
             return [...new Set([...previousIds, ...filteredIds])];
+
         });
+
     };
+
  
+
     const toggleHistory = (uid) => {
+
         setExpandedHistoryIds(previousIds => {
+
             if (previousIds.includes(uid)) return previousIds.filter(id => id !== uid);
+
             return [...previousIds, uid];
+
         });
+
     };
+
  
+
     return (
+
         <div className="space-y-4 pb-20">
+
             <div className="sticky top-2 z-30 bg-slate-900 text-white rounded-2xl shadow-lg border border-slate-700 p-4 space-y-3">
+
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+
                     <div>
+
                         <div className="text-[11px] font-black tracking-widest text-slate-300">薪資操作台</div>
+
                         <div className="font-black text-lg">{targetMonth} 薪資結算流程</div>
+
                         <div className="text-xs text-slate-300 mt-1">先確認，再鎖定；鎖定後欄位不可修改。</div>
+
                     </div>
+
                     <div className="flex flex-wrap gap-2 items-center">
+
                         <span className={`text-xs font-black px-3 py-2 rounded-lg border ${payrollStatus === 'locked' ? 'bg-red-500/20 text-red-100 border-red-300/50' : payrollStatus === 'confirmed' ? 'bg-amber-400/20 text-amber-100 border-amber-300/50' : 'bg-white/10 text-white border-white/20'}`}>目前：{getPayrollStatusLabel()}</span>
+
                         {payrollStatus === 'draft' && <button onClick={() => changePayrollStatus('confirmed')} disabled={!isSuperAdmin} className={`text-xs font-black px-3 py-2 rounded-lg ${isSuperAdmin ? 'bg-amber-400 text-amber-950 hover:bg-amber-300' : 'bg-slate-600 text-slate-300 cursor-not-allowed'}`}>① 確認結算</button>}
+
                         {payrollStatus === 'confirmed' && <button onClick={() => changePayrollStatus('locked')} disabled={!isSuperAdmin} className={`text-xs font-black px-3 py-2 rounded-lg ${isSuperAdmin ? 'bg-red-500 text-white hover:bg-red-400' : 'bg-slate-600 text-slate-300 cursor-not-allowed'}`}>② 鎖定薪資</button>}
+
                         {payrollStatus === 'locked' && <button onClick={() => changePayrollStatus('draft')} disabled={!isSuperAdmin} className={`text-xs font-black px-3 py-2 rounded-lg ${isSuperAdmin ? 'bg-white text-red-700 hover:bg-red-50' : 'bg-slate-600 text-slate-300 cursor-not-allowed'}`}>解除鎖定</button>}
+
                     </div>
+
                 </div>
+
                 {!isSuperAdmin && <div className="text-[11px] font-bold text-amber-200">目前登入帳號非管理員，可查看薪資資料，但不可確認、鎖定或解除鎖定。</div>}
+
                 {payrollStatus === 'locked' && <div className="text-[11px] font-bold bg-red-500/15 border border-red-300/30 text-red-100 px-3 py-2 rounded-lg">🔒 已鎖定{payrollLockedAt ? `｜${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜${payrollLockedBy}` : ''}</div>}
+
             </div>
+
  
+
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
+
                 <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3">
+
                     <div>
+
                         <h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資結算中心 (機密)</h2>
+
                         <p className="text-xs text-gray-400 mt-1">病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p>
+
                     </div>
+
                     <div className="flex flex-wrap gap-2 items-center">
+
                         <label className="text-xs flex items-center gap-1 text-gray-500 cursor-pointer font-bold bg-gray-50 px-2 py-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
+
                             <input type="checkbox" checked={showResigned} onChange={event => setShowResigned(event.target.checked)} className="accent-indigo-600" />
+
                             顯示已離職
+
                         </label>
+
                         <input type="month" value={targetMonth} onChange={event => setTargetMonth(event.target.value)} className="border rounded px-2 py-1.5 focus:outline-none focus:border-indigo-500" />
+
                         <span className={`text-xs font-black px-3 py-1.5 rounded-full border ${payrollStatus === 'locked' ? 'bg-red-50 text-red-700 border-red-200' : payrollStatus === 'confirmed' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>薪資狀態：{getPayrollStatusLabel()}</span>
+
                         <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1.5 rounded">操作按鍵在上方「薪資操作台」</span>
+
                     </div>
+
                 </div>
+
                 {payrollStatus === 'locked' && <div className="bg-red-50 border border-red-100 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">本月薪資已鎖定{payrollLockedAt ? `｜鎖定時間：${formatDateTime(payrollLockedAt)}` : ''}{payrollLockedBy ? `｜操作人：${payrollLockedBy}` : ''}</div>}
+
  
+
                 <div className="border-t pt-3 space-y-3">
+
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+
                         <div className="font-bold text-sm text-gray-700 flex items-center gap-2"><Users size={16}/> 顯示員工 ({displayedUsers.length} / {availableUsers.length})</div>
+
                         <input type="text" value={employeeKeyword} onChange={event => setEmployeeKeyword(event.target.value)} placeholder="搜尋員工姓名" className="w-full sm:w-52 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+
                     </div>
+
                     <div className="flex flex-wrap gap-2 items-center">
+
                         <label className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-1.5 rounded cursor-pointer">
+
                             <input type="checkbox" checked={isAllFilteredSelected} onChange={toggleAllFilteredUsers} className="mr-1 accent-indigo-600" />
+
                             全選目前篩選結果
+
                         </label>
+
                         {filteredUsers.map(user => (
+
                             <label key={user.uid} className="text-xs font-bold text-gray-600 bg-gray-50 border border-gray-200 px-2 py-1.5 rounded cursor-pointer hover:bg-gray-100">
+
                                 <input type="checkbox" checked={selectedUserIds.includes(user.uid)} onChange={() => toggleUserSelection(user.uid)} className="mr-1 accent-indigo-600" />
+
                                 {user.name || '未命名員工'}
+
                             </label>
+
                         ))}
+
                         {filteredUsers.length === 0 && <span className="text-xs text-gray-400">找不到符合的員工</span>}
+
                     </div>
+
                 </div>
+
             </div>
+
  
+
             {displayedUsers.length === 0 ? (
+
                 <div className="bg-white border rounded-xl p-10 text-center text-gray-400 font-bold">請在上方勾選至少一位員工後查看薪資結算。</div>
+
             ) : displayedUsers.map(user => {
+
                 const record = payrollData[user.uid] || {};
+
                 const summary = getPayrollSummary(user, record, targetMonth);
+
                 const isHistoryExpanded = expandedHistoryIds.includes(user.uid);
+
  
+
                 return (
+
                     <div key={user.uid} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${user.isResigned ? 'opacity-70' : ''}`}>
+
                         <div className="p-4 bg-gray-50 border-b flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+
                             <div>
+
                                 <div className="font-black text-lg text-gray-800 flex items-center gap-2">
+
                                     {user.name || '未命名員工'}
+
                                     {user.isResigned && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded border border-red-200">已離職</span>}
+
                                 </div>
+
                                 <div className="text-xs text-gray-500 mt-1">{targetMonth} 薪資結算 | 薪資結算基數為請假扣薪及遲到扣薪的計算基準。</div>
+
                             </div>
+
                             <div className="text-right">
+
                                 <div className="text-xs text-gray-500 font-bold">預估實領薪資</div>
+
                                 <div className="text-2xl font-black text-indigo-700">{formatMoney(summary.netPay)}</div>
+
                                 <button onClick={() => printPayrollSlip(user, summary)} className="mt-2 text-[11px] font-black text-indigo-700 bg-white border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-50">列印 / 另存 PDF</button>
+
                             </div>
+
                         </div>
+
  
+
                         {payrollStatus === 'locked' && <div className="mx-4 mt-4 bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-xs font-black text-gray-600">🔒 已鎖定：本月薪資欄位已停止編輯。管理員可在頁面上方按「解除鎖定」後再調整。</div>}
+
                         <div className="p-4 bg-slate-50 border-b grid grid-cols-2 lg:grid-cols-4 gap-2">
+
                             <div className="bg-white border rounded-xl p-3"><div className="text-[11px] font-bold text-gray-500">薪資結算基數</div><div className="mt-1 font-black text-gray-900">{formatMoney(summary.settlementBase)}</div></div>
+
                             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3"><div className="text-[11px] font-bold text-emerald-700">本月加項</div><div className="mt-1 font-black text-emerald-700">+{formatMoney(summary.totalAdditions)}</div></div>
+
                             <div className="bg-red-50 border border-red-100 rounded-xl p-3"><div className="text-[11px] font-bold text-red-700">病假 / 事假扣薪</div><div className="mt-1 font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.personalDeduction)}</div></div>
+
                             <div className="bg-violet-50 border border-violet-100 rounded-xl p-3"><div className="text-[11px] font-bold text-violet-700">特休</div><div className="mt-1 font-black text-violet-700">{summary.leaveSummary.annualHours} hr <span className="text-[10px] font-bold">扣薪 $0</span></div></div>
+
                         </div>
+
                         <div className="px-4 pt-4"><div className="text-xs font-black text-gray-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">建議核對順序：① 薪資結算基數　② 加項　③ 病假 / 事假扣薪　④ 特休時數（不扣薪）　⑤ 最後確認實領。</div></div>
+
                         <div className="p-4 grid xl:grid-cols-3 gap-4">
+
                             <div className="space-y-3">
+
                                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+
                                     <label className="block text-xs font-black text-indigo-800 mb-1">薪資結算基數</label>
+
                                     <input type="number" min="0" placeholder="例如：37500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.settlementBase ?? user.salaryAmount ?? record.base ?? ''} onChange={event => updatePayroll(user.uid, 'settlementBase', event.target.value)} disabled={payrollStatus === 'locked'} />
+
                                     <div className="text-[11px] text-indigo-600 mt-2">每小時薪資：{formatMoney(summary.hourlyRate)} / hr</div>
+
                                 </div>
+
  
+
                                 <div className="grid grid-cols-2 gap-2">
+
                                     <div className="bg-teal-50 border border-teal-100 rounded-xl p-3">
+
                                         <div className="text-xs font-black text-teal-800">油資核銷</div>
+
                                         <div className="text-lg font-black text-teal-700 mt-1">{formatMoney(summary.gasCapped)}</div>
+
                                         <div className="text-[10px] text-teal-600">登錄 {formatMoney(summary.gasTotal)} / {summary.gasTotal > 500 ? '上限 $500' : '未達上限'}</div>
+
                                         <button onClick={() => setGasModalUser(user)} className="mt-2 text-[11px] font-bold text-white bg-teal-600 hover:bg-teal-700 px-2 py-1 rounded">管理發票</button>
+
                                     </div>
+
                                     <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+
                                         <label className="block text-xs font-black text-gray-700 mb-1">補助 / 津貼</label>
+
                                         <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-indigo-500" value={record.subsidy || ''} onChange={event => updatePayroll(user.uid, 'subsidy', event.target.value)} disabled={payrollStatus === 'locked'} />
+
                                         <div className="text-[10px] text-gray-500 mt-2">計入：{formatMoney(summary.subsidy)}</div>
+
                                     </div>
+
                                 </div>
+
                             </div>
+
  
+
                             <div className="space-y-3">
+
                                 <div className="bg-red-50 border border-red-100 rounded-xl p-3">
+
                                     <div className="flex justify-between items-start gap-2">
+
                                         <div>
+
                                             <div className="text-sm font-black text-red-800">請假扣薪明細</div>
+
                                             <div className="text-[11px] text-red-600 mt-1">病假固定扣半薪；事假固定扣全薪。</div>
+
                                         </div>
+
                                         <div className="text-right font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.personalDeduction)}</div>
+
                                     </div>
+
  
+
                                     <div className="mt-3 space-y-2">
+
                                         <div className="bg-white/80 rounded-lg p-2 border border-red-100">
+
                                             <div className="flex justify-between text-xs font-bold text-gray-700"><span>病假：{summary.leaveSummary.sickHours} hr</span><span className="text-red-700">-{formatMoney(summary.sickDeduction)}</span></div>
+
                                             <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.sickHours} hr × {formatMoney(summary.hourlyRate)} × 50%</div>
+
                                             {summary.leaveSummary.sickDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.sickDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
+
                                         </div>
+
                                         <div className="bg-white/80 rounded-lg p-2 border border-red-100">
+
                                             <div className="flex justify-between text-xs font-bold text-gray-700"><span>事假：{summary.leaveSummary.personalHours} hr</span><span className="text-red-700">-{formatMoney(summary.personalDeduction)}</span></div>
+
                                             <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.personalHours} hr × {formatMoney(summary.hourlyRate)} × 100%</div>
+
                                             {summary.leaveSummary.personalDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.personalDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
+
                                         </div>
+
                                         <div className="bg-emerald-50 rounded-lg p-2 border border-emerald-100">
+
                                             <div className="flex justify-between text-xs font-bold text-emerald-800"><span>特休：{summary.leaveSummary.annualHours} hr</span><span className="text-emerald-700">扣薪 $0</span></div>
+
                                             <div className="text-[10px] text-emerald-700 mt-1">本月特休 {summary.leaveSummary.annualHours} hr｜年度已用 {summary.annualUsedYearHours} hr｜剩餘 {summary.annualRemainingHours} hr</div>
+
                                             {summary.leaveSummary.annualDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.annualDetails.map(detail => <div key={`annual_${detail.date}_${detail.hours}`} className="text-[10px] text-gray-600 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr / 不扣薪</span></div>)}</div>}
+
                                         </div>
+
                                     </div>
+
                                 </div>
+
  
+
                                 <div className="grid grid-cols-2 gap-2">
+
                                     <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+
                                         <label className="block text-xs font-black text-amber-800 mb-1">其他加項</label>
+
                                         <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-amber-500" value={record.manualAdjustment || ''} onChange={event => updatePayroll(user.uid, 'manualAdjustment', event.target.value)} disabled={payrollStatus === 'locked'} />
+
                                     </div>
+
                                     <div className="bg-orange-50 border border-orange-100 rounded-xl p-3">
+
                                         <label className="block text-xs font-black text-orange-800 mb-1">其他扣款</label>
+
                                         <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.manualDeduction || ''} onChange={event => updatePayroll(user.uid, 'manualDeduction', event.target.value)} disabled={payrollStatus === 'locked'} />
+
                                     </div>
+
                                 </div>
+
                             </div>
+
  
+
                             <div className="space-y-3">
+
                                 <div className="bg-white border rounded-xl overflow-hidden">
+
                                     <div className="p-3 font-black text-sm text-gray-700 border-b">獎金與結算摘要</div>
+
                                     <div className="p-3 space-y-2 text-xs">
+
                                         <div className="grid grid-cols-3 gap-2">
+
                                             <label className="bg-pink-50 border border-pink-100 rounded-lg p-2"><span className="block font-bold text-pink-700 mb-1">生日禮金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_bday || ''} onChange={event => updatePayroll(user.uid, 'bonus_bday', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
                                             <label className="bg-purple-50 border border-purple-100 rounded-lg p-2"><span className="block font-bold text-purple-700 mb-1">三節獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_festival || ''} onChange={event => updatePayroll(user.uid, 'bonus_festival', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
                                             <label className="bg-yellow-50 border border-yellow-100 rounded-lg p-2"><span className="block font-bold text-yellow-700 mb-1">年終獎金</span><input type="number" placeholder="0" className="w-full bg-white border rounded px-1 py-1" value={record.bonus_year || ''} onChange={event => updatePayroll(user.uid, 'bonus_year', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
                                         </div>
+
                                         <div className="border-t pt-2 space-y-1">
+
                                             <div className="flex justify-between"><span className="text-gray-500">薪資結算基數</span><span className="font-bold">{formatMoney(summary.settlementBase)}</span></div>
+
                                             <div className="flex justify-between"><span className="text-gray-500">加項合計</span><span className="font-bold text-green-700">+{formatMoney(summary.totalAdditions)}</span></div>
+
                                             <div className="flex justify-between"><span className="text-gray-500">扣款合計</span><span className="font-bold text-red-700">-{formatMoney(summary.totalDeductions)}</span></div>
+
                                             <div className="flex justify-between border-t pt-2 text-base"><span className="font-black text-gray-800">預估實領</span><span className="font-black text-indigo-700">{formatMoney(summary.netPay)}</span></div>
+
                                         </div>
+
                                     </div>
+
                                 </div>
+
  
+
                                 <label className="block text-xs font-bold text-gray-600">結算備註<textarea rows="3" placeholder="例如：本月獎勵、扣款原因、匯款備註..." className="mt-1 w-full border rounded-lg px-2 py-2 text-sm font-normal focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={event => updatePayroll(user.uid, 'note', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
                             </div>
+
                         </div>
+
  
+
                         <div className="border-t bg-gray-50 px-4 py-3">
+
                             <button onClick={() => toggleHistory(user.uid)} className="text-xs font-black text-indigo-600 hover:text-indigo-800 flex items-center gap-1"><History size={14}/>{isHistoryExpanded ? '收合近 10 個月薪資明細' : '查看近 10 個月薪資明細'}</button>
+
                             {isHistoryExpanded && (
+
                                 <div className="mt-3 overflow-x-auto">
+
                                     <table className="w-full min-w-[760px] text-xs text-left bg-white border rounded-lg overflow-hidden">
+
                                         <thead className="bg-indigo-50 text-indigo-800"><tr><th className="p-2">月份</th><th className="p-2">結算基數</th><th className="p-2">病假</th><th className="p-2">事假</th><th className="p-2">特休</th><th className="p-2">請假扣薪</th><th className="p-2">加項</th><th className="p-2">其他扣款</th><th className="p-2">預估實領</th></tr></thead>
+
                                         <tbody>{recentMonthOptions.map(monthStr => {
+
                                             const historyRecord = payrollHistory?.[monthStr]?.[user.uid] || {};
+
                                             const historySummary = getPayrollSummary(user, historyRecord, monthStr);
+
                                             const hasRecord = Object.keys(historyRecord).length > 0 || historySummary.leaveSummary.sickHours > 0 || historySummary.leaveSummary.personalHours > 0;
+
                                             return <tr key={monthStr} className={`border-t ${monthStr === targetMonth ? 'bg-yellow-50' : ''}`}><td className="p-2 font-bold">{monthStr}{monthStr === targetMonth ? '（本月）' : ''}</td><td className="p-2">{hasRecord ? formatMoney(historySummary.settlementBase) : '—'}</td><td className="p-2">{historySummary.leaveSummary.sickHours} hr</td><td className="p-2">{historySummary.leaveSummary.personalHours} hr</td><td className="p-2 text-emerald-700">{historySummary.leaveSummary.annualHours} hr</td><td className="p-2 text-red-700">-{formatMoney(historySummary.sickDeduction + historySummary.personalDeduction)}</td><td className="p-2 text-green-700">+{formatMoney(historySummary.totalAdditions)}</td><td className="p-2 text-red-700">-{formatMoney(historySummary.manualDeduction)}</td><td className="p-2 font-black text-indigo-700">{hasRecord ? formatMoney(historySummary.netPay) : '—'}</td></tr>;
+
                                         })}</tbody>
+
                                     </table>
+
                                 </div>
+
                             )}
+
                         </div>
+
                     </div>
+
                 );
+
             })}
+
  
+
             <GasReceiptModal
+
                 isOpen={!!gasModalUser}
+
                 onClose={() => setGasModalUser(null)}
+
                 user={gasModalUser}
+
                 monthStr={targetMonth}
+
                 db={db}
+
                 appId={appId}
+
                 currentRecords={gasReceipts?.[targetMonth] || {}}
+
                 currentUserInfo={currentUserInfo}
+
             />
+
         </div>
+
     );
+
 };
+
 // ==========================================
+
 // ⚙️ 設定視圖 (SettingsView) - 修正版：加入薪資與合約設定
+
 // ==========================================
+
  
+
  
+
 const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftTypes = DEFAULT_SHIFT_TYPES, appId, storeConfig, db, isSuperAdmin }) => {
+
   const [editingId, setEditingId] = useState(null);
+
   const [formData, setFormData] = useState({});
+
   const [showResigned, setShowResigned] = useState(false);
+
   const [inventoryList, setInventoryList] = useState(prepareInventoryItems(inventoryItems));
+
   const [editingItemId, setEditingItemId] = useState(null);
+
   const [inventoryForm, setInventoryForm] = useState({ category: '', name: '', spec: '', price: '' });
+
   const [sequenceInputs, setSequenceInputs] = useState({});
+
   const defaultShiftTypeIds = useMemo(() => DEFAULT_SHIFT_TYPES.map(item => item.id), []);
+
   const [customShiftList, setCustomShiftList] = useState((Array.isArray(shiftTypes) ? shiftTypes : []).filter(item => !defaultShiftTypeIds.includes(item.id)));
+
   const [editingShiftId, setEditingShiftId] = useState(null);
+
   const [shiftForm, setShiftForm] = useState({ id: '', label: '', display: '', start: '', end: '', hours: '' });
+
   const canManageInventory = isSuperAdmin || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor';
+
  
+
   useEffect(() => {
+
       setInventoryList(prepareInventoryItems(inventoryItems));
+
   }, [inventoryItems]);
+
  
+
   useEffect(() => {
+
       setCustomShiftList((Array.isArray(shiftTypes) ? shiftTypes : []).filter(item => !defaultShiftTypeIds.includes(item.id)));
+
   }, [shiftTypes, defaultShiftTypeIds]);
+
  
+
   const buildInventoryGroups = (sourceItems = []) => {
+
       const groups = [];
+
       (Array.isArray(sourceItems) ? sourceItems : []).forEach(item => {
+
           const category = String(item?.category || '未分類').trim() || '未分類';
+
           let group = groups.find(entry => entry.category === category);
+
           if (!group) {
+
               group = { category, items: [] };
+
               groups.push(group);
+
           }
+
           group.items.push({ ...item, category });
+
       });
+
       return groups;
+
   };
+
  
+
   const flattenInventoryGroups = (groups = []) => normalizeInventoryItems(
+
       (Array.isArray(groups) ? groups : []).flatMap(group =>
+
           (group?.items || []).map(item => ({
+
               ...item,
+
               category: String(group?.category || item?.category || '未分類').trim() || '未分類'
+
           }))
+
       )
+
   );
+
  
+
   const inventoryGroups = useMemo(() => buildInventoryGroups(inventoryList), [inventoryList]);
+
   const inventoryCategories = useMemo(() => inventoryGroups.map(group => group.category), [inventoryGroups]);
+
  
+
   useEffect(() => {
+
       const nextInputs = {};
+
       inventoryGroups.forEach(group => {
+
           group.items.forEach((item, index) => {
+
               nextInputs[item.id] = String(index + 1);
+
           });
+
       });
+
       setSequenceInputs(nextInputs);
+
   }, [inventoryGroups]);
+
  
+
   const userList = Object.values(users || {});
+
   const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
+
  
+
   const saveUser = async () => {
+
       if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
+
           return alert('🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！');
+
       }
+
       const updatedData = {
+
           ...formData,
+
           isAdmin: ['boss', 'supervisor'].includes(formData.role),
+
           workLocation: formData.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店',
+
       };
+
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', editingId), updatedData);
+
       setEditingId(null);
+
       alert('✅ 員工權限與合約資料已更新！');
+
   };
+
  
+
   const roles = [
+
       { id: 'employee', label: '員工', color: 'bg-gray-100 text-gray-600', desc: '僅能查看個人班表、打卡' },
+
       { id: 'supervisor', label: '主管', color: 'bg-blue-100 text-blue-600', desc: '可審核假單、查看團隊出勤' },
+
       { id: 'boss', label: '老闆', color: 'bg-indigo-600 text-white', desc: '全系統最高權限（含薪資、設定）' },
+
       { id: 'observer', label: '觀察者', color: 'bg-amber-100 text-amber-600', desc: '僅可查看所有資料，不可修改' }
+
   ];
+
  
+
   const persistInventoryList = async (nextItems) => {
+
       const normalizedItems = normalizeInventoryItems(nextItems);
+
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), { items: normalizedItems }, { merge: true });
+
       setInventoryList(normalizedItems);
+
       return normalizedItems;
+
   };
+
  
+
   const resetInventoryForm = () => {
+
       setEditingItemId(null);
+
       setInventoryForm({ category: '', name: '', spec: '', price: '' });
+
   };
+
  
+
   const startAddInventoryItem = () => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可新增庫存品項');
+
       setEditingItemId('new');
+
       setInventoryForm({ category: '', name: '', spec: '', price: '' });
+
   };
+
  
+
   const startEditInventoryItem = (item) => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可編輯庫存品項');
+
       setEditingItemId(item.id);
+
       setInventoryForm({
+
           category: item.category || '',
+
           name: item.name || '',
+
           spec: item.spec || '',
+
           price: item.price ?? ''
+
       });
+
   };
+
  
+
   const saveInventoryItem = async () => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可儲存庫存品項');
+
       const category = String(inventoryForm.category || '').trim();
+
       const name = String(inventoryForm.name || '').trim();
+
       const spec = String(inventoryForm.spec || '').trim();
+
       const priceNum = Number(inventoryForm.price);
+
       if (!category || !name || !spec) return alert('請完整填寫分類、品名與單位');
+
       if (Number.isNaN(priceNum) || priceNum < 0) return alert('單價請輸入 0 以上的數字');
+
  
+
       const itemId = editingItemId && editingItemId !== 'new' ? editingItemId : `i_${Date.now()}`;
+
       let nextItems = Array.isArray(inventoryList) ? [...inventoryList] : [];
+
       const idx = nextItems.findIndex(i => i.id === itemId);
+
       const currentItem = idx >= 0 ? nextItems[idx] : null;
+
       const nextItem = {
+
           id: itemId,
+
           category,
+
           name,
+
           spec,
+
           price: priceNum,
+
           sortOrder: Number.isFinite(Number(currentItem?.sortOrder)) ? Number(currentItem.sortOrder) : nextItems.length
+
       };
+
       if (idx >= 0) nextItems[idx] = nextItem;
+
       else nextItems.push(nextItem);
+
  
+
       await persistInventoryList(nextItems);
+
       resetInventoryForm();
+
       alert(`✅ 庫存品項已${idx >= 0 ? '更新' : '新增'}！`);
+
   };
+
  
+
   const deleteInventoryItem = async (itemId) => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可刪除庫存品項');
+
       const target = inventoryList.find(i => i.id === itemId);
+
       if (!window.confirm(`確定要刪除「${target?.name || '這個品項'}」嗎？`)) return;
+
       const nextItems = inventoryList.filter(i => i.id !== itemId);
+
       await persistInventoryList(nextItems);
+
       if (editingItemId === itemId) resetInventoryForm();
+
       alert('✅ 庫存品項已刪除！');
+
   };
+
  
+
   const moveInventoryItemByStep = async (itemId, step) => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可調整排序');
+
       const groups = buildInventoryGroups(inventoryList);
+
       const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
+
       if (groupIndex < 0) return;
+
       const itemIndex = groups[groupIndex].items.findIndex(item => item.id === itemId);
+
       const targetIndex = itemIndex + step;
+
       if (targetIndex < 0 || targetIndex >= groups[groupIndex].items.length) return;
+
       const temp = groups[groupIndex].items[itemIndex];
+
       groups[groupIndex].items[itemIndex] = groups[groupIndex].items[targetIndex];
+
       groups[groupIndex].items[targetIndex] = temp;
+
       await persistInventoryList(flattenInventoryGroups(groups));
+
   };
+
  
+
   const applyInventorySequence = async (itemId) => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可調整排序');
+
       const groups = buildInventoryGroups(inventoryList);
+
       const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
+
       if (groupIndex < 0) return;
+
       const itemIndex = groups[groupIndex].items.findIndex(item => item.id === itemId);
+
       const rawValue = sequenceInputs[itemId];
+
       const parsed = parseInt(rawValue, 10);
+
       if (Number.isNaN(parsed)) return alert('排序序號請輸入正整數');
+
       const clampedIndex = Math.min(Math.max(parsed, 1), groups[groupIndex].items.length) - 1;
+
       const [movingItem] = groups[groupIndex].items.splice(itemIndex, 1);
+
       groups[groupIndex].items.splice(clampedIndex, 0, movingItem);
+
       await persistInventoryList(flattenInventoryGroups(groups));
+
   };
+
  
+
   const updateInventoryCategory = async (itemId, targetCategory) => {
+
       if (!canManageInventory) return alert('只有管理權限帳號可變更分類');
+
       const category = String(targetCategory || '').trim();
+
       if (!category) return alert('請選擇有效分類');
+
       const groups = buildInventoryGroups(inventoryList);
+
       const groupIndex = groups.findIndex(group => group.items.some(item => item.id === itemId));
+
       if (groupIndex < 0) return;
+
       const itemIndex = groups[groupIndex].items.findIndex(item => item.id === itemId);
+
       const [movingItem] = groups[groupIndex].items.splice(itemIndex, 1);
+
       if (groups[groupIndex].items.length === 0) groups.splice(groupIndex, 1);
+
       let targetGroup = groups.find(group => group.category === category);
+
       if (!targetGroup) {
+
           targetGroup = { category, items: [] };
+
           groups.push(targetGroup);
+
       }
+
       targetGroup.items.push({ ...movingItem, category });
+
       await persistInventoryList(flattenInventoryGroups(groups));
+
   };
+
  
+
   const persistCustomShiftList = async (nextList) => {
+
       const normalized = (Array.isArray(nextList) ? nextList : []).map(item => ({
+
           id: String(item?.id || '').trim(),
+
           label: String(item?.label || item?.id || '').trim(),
+
           start: String(item?.start || '').trim(),
+
           end: String(item?.end || '').trim(),
+
           display: String(item?.display || '').trim(),
+
           hours: Number(item?.hours) > 0 ? Number(item.hours) : 8
+
       })).filter(item => item.id && item.label);
+
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftConfig'), { customShiftTypes: normalized }, { merge: true });
+
       setCustomShiftList(normalized);
+
       return normalized;
+
   };
+
  
+
   const resetShiftForm = () => {
+
       setEditingShiftId(null);
+
       setShiftForm({ id: '', label: '', display: '', start: '', end: '', hours: '' });
+
   };
+
  
+
   const startEditShift = (item) => {
+
       if (!isSuperAdmin) return alert('只有最高管理員可以設定特殊班別');
+
       setEditingShiftId(item.id);
+
       setShiftForm({
+
           id: item.id || '',
+
           label: item.label || '',
+
           display: item.display || '',
+
           start: item.start || '',
+
           end: item.end || '',
+
           hours: item.hours ?? ''
+
       });
+
   };
+
  
+
   const saveCustomShift = async () => {
+
       if (!isSuperAdmin) return alert('只有最高管理員可以設定特殊班別');
+
       const id = String(shiftForm.id || '').trim().toUpperCase();
+
       const label = String(shiftForm.label || id).trim();
+
       const start = String(shiftForm.start || '').trim();
+
       const end = String(shiftForm.end || '').trim();
+
       const display = String(shiftForm.display || '').trim() || `${start}~${end}`;
+
       const hours = Number(shiftForm.hours);
+
       if (!id) return alert('請填寫班別代號');
+
       if (defaultShiftTypeIds.includes(id) && editingShiftId !== id) return alert('此代號已是系統預設班別，請改用其他代號');
+
       if (!label) return alert('請填寫班別名稱');
+
       if ((!start || !end) && !display) return alert('請至少填寫顯示時段，建議同時設定開始與結束時間');
+
       if (!Number.isFinite(hours) || hours <= 0) return alert('請填寫正確的小時數');
+
       let nextList = Array.isArray(customShiftList) ? [...customShiftList] : [];
+
       const idx = nextList.findIndex(item => item.id === editingShiftId || item.id === id);
+
       const nextItem = { id, label, start, end, display, hours };
+
       if (idx >= 0) nextList[idx] = nextItem;
+
       else nextList.push(nextItem);
+
       await persistCustomShiftList(nextList);
+
       resetShiftForm();
+
       alert(`✅ 特殊班別已${idx >= 0 ? '更新' : '新增'}！`);
+
   };
+
  
+
   const deleteCustomShift = async (shiftId) => {
+
       if (!isSuperAdmin) return alert('只有最高管理員可以刪除特殊班別');
+
       if (!window.confirm(`確定要刪除特殊班別「${shiftId}」嗎？`)) return;
+
       const nextList = customShiftList.filter(item => item.id !== shiftId);
+
       await persistCustomShiftList(nextList);
+
       if (editingShiftId === shiftId) resetShiftForm();
+
       alert('✅ 特殊班別已刪除！');
+
   };
+
  
+
   return (
+
     <div className="space-y-8 pb-20 max-w-5xl mx-auto animate-fade-in">
+
       <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-xl shadow-indigo-50 text-center relative overflow-hidden">
+
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+
         <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '管理員'}</h2>
+
         <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">Permission Controller</p>
+
       </div>
+
  
+
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
+
           <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-8">
+
               <div>
+
                   <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+
                     <ShieldAlert className="text-indigo-600" size={24}/> 權限等級與合約檔案
+
                   </h3>
+
                   {pendingUsersCount > 0 && <p className="text-[11px] text-red-500 font-black mt-2">尚有 {pendingUsersCount} 位員工未完成合約 / 薪資必要設定</p>}
+
               </div>
+
               <button 
+
                 onClick={() => setShowResigned(!showResigned)}
+
                 className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${showResigned ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}
+
               >
+
                 {showResigned ? '顯示離職' : '隱藏離職'}
+
               </button>
+
           </div>
+
  
+
           <div className="grid gap-4">
+
             {userList
+
               .filter(u => showResigned ? true : !u?.isResigned)
+
               .sort((a, b) => (a?.isResigned === b?.isResigned ? 0 : a?.isResigned ? 1 : -1))
+
               .map(u => {
+
                 const currentRole = roles.find(r => r.id === (u?.role || 'employee'));
+
                 return (
+
                   <div key={u.uid} className={`group border p-6 rounded-[2rem] transition-all duration-300 ${u?.isResigned ? 'bg-gray-50 opacity-60' : 'bg-gray-50 hover:bg-white hover:shadow-xl hover:shadow-indigo-50'}`}>
+
                     {editingId === u.uid ? (
+
                       <div className="space-y-6 animate-scale-in">
+
                         <div className="space-y-3">
+
                             <label className="text-[10px] font-black text-gray-400 ml-2 uppercase tracking-widest">Permission Level 權限等級設定</label>
+
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+
                                 {roles.map(role => (
+
                                     <button
+
                                         key={role.id}
+
                                         onClick={() => setFormData({...formData, role: role.id})}
+
                                         className={`p-3 rounded-2xl text-[11px] font-black transition-all border-2 ${formData.role === role.id ? 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-inner' : 'border-transparent bg-white text-gray-400 hover:bg-gray-50'}`}
+
                                     >
+
                                         {role.label}
+
                                     </button>
+
                                 ))}
+
                             </div>
+
                             <p className="text-[9px] text-gray-400 ml-2 font-bold italic">
+
                                 * {roles.find(r => r.id === formData.role)?.desc}
+
                             </p>
+
                         </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
                             <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">到職日</label><input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+
                             <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">本薪</label><input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+
                         </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
                             <div className="space-y-1"><label className="text-[10px] font-black text-indigo-400 ml-2">合約起點</label><input type="date" value={formData.contractStart || ''} onChange={e=>setFormData({...formData, contractStart:e.target.value})} className="w-full bg-indigo-50/30 border-2 border-indigo-100 p-4 rounded-2xl text-sm font-bold shadow-sm" /></div>
+
                             <div className="space-y-1"><label className="text-[10px] font-black text-purple-400 ml-2">合約到期</label><input type="date" value={formData.contractEnd || ''} onChange={e=>setFormData({...formData, contractEnd:e.target.value})} className="w-full bg-purple-50/30 border-2 border-purple-100 p-4 rounded-2xl text-sm font-bold shadow-sm" /></div>
+
                         </div>
+
                         <div className="flex gap-3 justify-end pt-2">
+
                             <button onClick={()=>setEditingId(null)} className="px-6 py-2 font-black text-gray-400 text-xs">取消</button>
+
                             <button onClick={saveUser} className="bg-indigo-600 text-white px-10 py-4 rounded-2xl font-black text-xs shadow-lg shadow-indigo-100">確認並儲存</button>
+
                         </div>
+
                       </div>
+
                     ) : (
+
                       <div className="flex justify-between items-center gap-4">
+
                         <div className="flex items-center gap-4 min-w-0">
+
                             <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center font-black border-2 shrink-0 ${currentRole?.id === 'boss' ? 'border-indigo-600 bg-indigo-50 text-indigo-600' : 'bg-white border-gray-100 text-gray-400'}`}>
+
                                 {u?.name?.slice(0,1)}
+
                             </div>
+
                             <div className="min-w-0">
+
                                 <div className="font-black text-gray-800 text-lg flex items-center gap-2 flex-wrap">
+
                                   {u?.name}
+
                                   <span className={`text-[9px] px-2 py-1 rounded-lg font-black ${currentRole?.color || 'bg-gray-100 text-gray-400'}`}>
+
                                     {currentRole?.label || '未定身分'}
+
                                   </span>
+
                                 </div>
+
                                 <div className="text-[10px] text-gray-400 font-bold uppercase mt-1 tracking-widest">
+
                                   {u?.contractStart ? `合約期間: ${u.contractStart} ~ ${u.contractEnd || '長期'}` : '⚠️ 合約日期未設定'}
+
                                 </div>
+
                             </div>
+
                         </div>
+
                         <button onClick={()=>{setEditingId(u.uid); setFormData(u)}} className="bg-white border-2 border-gray-50 px-6 py-3 rounded-2xl text-xs font-black text-gray-600 hover:bg-indigo-600 hover:text-white transition-all shrink-0">
+
                             編輯身分
+
                         </button>
+
                       </div>
+
                     )}
+
                   </div>
+
                 )
+
             })}
+
           </div>
+
       </div>
+
  
+
  
+
 <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
+
     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
+
         <div>
+
             <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+
               <Clock className="text-indigo-600" size={24}/> 班別設定
+
             </h3>
+
             <p className="text-sm text-gray-500 mt-2">系統預設班別已建立；如有臨時活動班、教育訓練班或特殊時段，可在此新增「特殊班別」。</p>
+
         </div>
+
         <div className="bg-indigo-50 rounded-2xl px-4 py-3 border border-indigo-100 text-center min-w-[220px]">
+
             <div className="text-[10px] font-black text-indigo-400">目前可用班別數</div>
+
             <div className="text-2xl font-black text-indigo-700">{(shiftTypes || []).length}</div>
+
         </div>
+
     </div>
+
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+
         <div className="bg-gray-50 rounded-[2rem] border border-gray-100 p-6 space-y-3">
+
             <div className="font-black text-gray-800">系統預設班別</div>
+
             <div className="space-y-2">
+
                 {DEFAULT_SHIFT_TYPES.map(item => (
+
                     <div key={item.id} className="flex items-center justify-between bg-white rounded-2xl border border-gray-100 px-4 py-3 text-sm">
+
                         <div>
+
                             <div className="font-black text-gray-800">{item.label}</div>
+
                             <div className="text-[11px] text-gray-500">{item.display || `${item.start}~${item.end}`}</div>
+
                         </div>
+
                         <div className="text-xs font-black text-indigo-600">{item.hours} 小時</div>
+
                     </div>
+
                 ))}
+
             </div>
+
         </div>
+
         <div className="bg-gray-50 rounded-[2rem] border border-gray-100 p-6 space-y-4">
+
             <div className="font-black text-gray-800">特殊班別新增 / 編輯</div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+
                 <input value={shiftForm.id} onChange={e=>setShiftForm({...shiftForm, id: e.target.value.toUpperCase()})} placeholder="班別代號，例如: EVT1" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+
                 <input value={shiftForm.label} onChange={e=>setShiftForm({...shiftForm, label: e.target.value})} placeholder="顯示名稱" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+
                 <input type="time" value={shiftForm.start} onChange={e=>setShiftForm({...shiftForm, start: e.target.value})} className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+
                 <input type="time" value={shiftForm.end} onChange={e=>setShiftForm({...shiftForm, end: e.target.value})} className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" disabled={!isSuperAdmin} />
+
                 <input value={shiftForm.display} onChange={e=>setShiftForm({...shiftForm, display: e.target.value})} placeholder="顯示時段，例如: 09:00~12:00 / 17:00~21:00" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500 md:col-span-2" disabled={!isSuperAdmin} />
+
                 <input type="number" value={shiftForm.hours} onChange={e=>setShiftForm({...shiftForm, hours: e.target.value})} placeholder="實際工時（小時）" className="bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500 md:col-span-2" disabled={!isSuperAdmin} />
+
             </div>
+
             <div className="flex gap-3">
+
                 <button onClick={resetShiftForm} className="px-5 py-3 rounded-2xl bg-gray-100 text-gray-500 text-xs font-black">清空</button>
+
                 <button onClick={saveCustomShift} disabled={!isSuperAdmin} className="flex-1 bg-indigo-600 text-white py-3 rounded-2xl font-black text-sm shadow hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400">{editingShiftId ? '儲存特殊班別' : '新增特殊班別'}</button>
+
             </div>
+
             <div className="pt-2 border-t border-gray-200 space-y-2">
+
                 <div className="text-xs font-black text-gray-500">已建立的特殊班別</div>
+
                 {customShiftList.length === 0 ? <div className="text-xs text-gray-400">目前尚未新增特殊班別</div> : customShiftList.map(item => (
+
                     <div key={item.id} className="flex items-center justify-between gap-3 bg-white rounded-2xl border border-gray-100 px-4 py-3 text-sm">
+
                         <div className="min-w-0">
+
                             <div className="font-black text-gray-800">{item.label} <span className="text-[10px] text-gray-400 ml-1">({item.id})</span></div>
+
                             <div className="text-[11px] text-gray-500 truncate">{item.display || `${item.start}~${item.end}`} / {item.hours} 小時</div>
+
                         </div>
+
                         <div className="flex gap-2 shrink-0">
+
                             <button onClick={()=>startEditShift(item)} disabled={!isSuperAdmin} className="px-3 py-2 rounded-xl bg-indigo-50 text-indigo-600 text-xs font-black disabled:bg-gray-100 disabled:text-gray-400">編輯</button>
+
                             <button onClick={()=>deleteCustomShift(item.id)} disabled={!isSuperAdmin} className="px-3 py-2 rounded-xl bg-red-50 text-red-500 text-xs font-black disabled:bg-gray-100 disabled:text-gray-400">刪除</button>
+
                         </div>
+
                     </div>
+
                 ))}
+
             </div>
+
         </div>
+
     </div>
+
 </div>
+
  
+
       <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-lg">
+
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
+
               <div>
+
                   <h3 className="font-black text-xl text-gray-800 flex items-center gap-3">
+
                     <Package className="text-indigo-600" size={24}/> 庫存品項管理
+
                   </h3>
+
                   <p className="text-sm text-gray-500 mt-2">在這裡統一管理盤點表的品項清單。新增、刪除、編輯後，盤點頁會立即同步更新。</p>
+
                   <p className="text-xs text-indigo-500 font-bold mt-2">排序改為上下移動、數字序號與分類下拉選單，避免拖曳操作不順。</p>
+
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center min-w-[260px]">
+
                   <div className="bg-indigo-50 rounded-2xl px-4 py-3 border border-indigo-100">
+
                       <div className="text-[10px] font-black text-indigo-400">總品項數</div>
+
                       <div className="text-2xl font-black text-indigo-700">{inventoryList.length}</div>
+
                   </div>
+
                   <div className="bg-purple-50 rounded-2xl px-4 py-3 border border-purple-100">
+
                       <div className="text-[10px] font-black text-purple-400">分類數</div>
+
                       <div className="text-2xl font-black text-purple-700">{inventoryCategories.length}</div>
+
                   </div>
+
                   <div className="bg-amber-50 rounded-2xl px-4 py-3 border border-amber-100">
+
                       <div className="text-[10px] font-black text-amber-400">操作權限</div>
+
                       <div className="text-sm font-black text-amber-700 mt-1">{canManageInventory ? '管理權限可編輯' : '僅可檢視'}</div>
+
                   </div>
+
               </div>
+
           </div>
+
  
+
           <div className="grid grid-cols-1 xl:grid-cols-[360px,1fr] gap-6">
+
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5 space-y-4">
+
                   <div className="flex justify-between items-center">
+
                       <h4 className="font-black text-gray-800">品項編輯器</h4>
+
                       {canManageInventory && (
+
                           <button onClick={startAddInventoryItem} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-black shadow hover:bg-indigo-700 flex items-center gap-1">
+
                               <Plus size={14}/> 新增品項
+
                           </button>
+
                       )}
+
                   </div>
+
  
+
                   {!canManageInventory && (
+
                       <div className="bg-amber-50 text-amber-700 border border-amber-100 rounded-2xl p-4 text-sm font-bold">
+
                           目前帳號僅可查看庫存品項，新增、編輯、刪除需使用管理員權限。
+
                       </div>
+
                   )}
+
  
+
                   <div className="space-y-3">
+
                       <div>
+
                           <label className="block text-[11px] font-black text-gray-500 mb-1">分類</label>
+
                           <input type="text" value={inventoryForm.category} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, category: e.target.value})} placeholder="例如：茶葉類" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+
                       </div>
+
                       <div>
+
                           <label className="block text-[11px] font-black text-gray-500 mb-1">品名</label>
+
                           <input type="text" value={inventoryForm.name} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, name: e.target.value})} placeholder="例如：高山青茶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+
                       </div>
+
                       <div className="grid grid-cols-2 gap-3">
+
                           <div>
+
                               <label className="block text-[11px] font-black text-gray-500 mb-1">單位</label>
+
                               <input type="text" value={inventoryForm.spec} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, spec: e.target.value})} placeholder="斤 / 包 / 桶" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+
                           </div>
+
                           <div>
+
                               <label className="block text-[11px] font-black text-gray-500 mb-1">單價</label>
+
                               <input type="number" value={inventoryForm.price} disabled={!canManageInventory} onChange={e=>setInventoryForm({...inventoryForm, price: e.target.value})} placeholder="0" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400" />
+
                           </div>
+
                       </div>
+
                   </div>
+
  
+
                   <div className="bg-white border border-gray-100 rounded-2xl p-4 text-xs text-gray-500 leading-6">
+
                       <div className="font-black text-gray-700 mb-2">欄位說明</div>
+
                       <div>• 分類：決定盤點頁上方的分類頁籤</div>
+
                       <div>• 品名：盤點表中顯示的名稱</div>
+
                       <div>• 單位：如 斤、包、罐、桶</div>
+
                       <div>• 單價：用於估算庫存總值，可填 0</div>
+
                       <div>• 排序：可用上移 / 下移，或直接輸入序號後按套用</div>
+
                   </div>
+
  
+
                   {canManageInventory && (
+
                       <div className="flex gap-3 pt-2">
+
                           <button onClick={resetInventoryForm} className="flex-1 bg-gray-100 text-gray-600 py-3 rounded-2xl font-black text-sm hover:bg-gray-200">清空 / 取消</button>
+
                           <button onClick={saveInventoryItem} className="flex-1 bg-indigo-600 text-white py-3 rounded-2xl font-black text-sm shadow hover:bg-indigo-700">{editingItemId && editingItemId !== 'new' ? '儲存修改' : '新增品項'}</button>
+
                       </div>
+
                   )}
+
               </div>
+
  
+
               <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5">
+
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+
                       <h4 className="font-black text-gray-800">現有品項清單</h4>
+
                       <div className="text-xs text-gray-500 font-bold">操作流程：上下移動 / 修改序號 / 切換分類 → 自動儲存 → 盤點頁立即同步</div>
+
                   </div>
+
  
+
                   {inventoryList.length === 0 ? (
+
                       <div className="bg-white rounded-2xl border border-dashed border-gray-200 p-10 text-center text-gray-400 font-bold">
+
                           目前尚無庫存品項，請先新增第一個品項。
+
                       </div>
+
                   ) : (
+
                       <div className="space-y-3 max-h-[760px] overflow-y-auto pr-1">
+
                           {inventoryGroups.map(group => (
+
                               <div key={group.category} className="bg-white rounded-[1.5rem] border border-gray-100 overflow-hidden">
+
                                   <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+
                                       <div className="font-black text-indigo-700">{group.category}</div>
+
                                       <div className="text-[10px] font-black text-indigo-400">{group.items.length} 項</div>
+
                                   </div>
+
                                   <div className="divide-y divide-gray-100">
+
                                       {group.items.map((item, itemIndex) => {
+
                                           const categoryOptions = Array.from(new Set([...(inventoryCategories || []), item.category].filter(Boolean)));
+
                                           return (
+
                                               <div key={item.id} className="px-5 py-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+
                                                   <div className="min-w-0 flex-1">
+
                                                       <div className="font-black text-gray-800 text-base">{item.name}</div>
+
                                                       <div className="text-xs text-gray-400 font-bold mt-1">ID: {item.id} ｜ 單位: {item.spec} ｜ 單價: ${Number(item.price || 0).toLocaleString()}</div>
+
                                                   </div>
+
                                                   <div className="flex flex-col gap-3 lg:items-end">
+
                                                       <div className="flex flex-wrap items-center gap-2">
+
                                                           <button onClick={() => moveInventoryItemByStep(item.id, -1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory || itemIndex === 0}>上移</button>
+
                                                           <button onClick={() => moveInventoryItemByStep(item.id, 1)} className={`px-3 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory || itemIndex === group.items.length - 1}>下移</button>
+
                                                           <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5">
+
                                                               <span className="text-[11px] font-black text-gray-500">排序</span>
+
                                                               <input
+
                                                                   type="number"
+
                                                                   min="1"
+
                                                                   value={sequenceInputs[item.id] || String(itemIndex + 1)}
+
                                                                   disabled={!canManageInventory}
+
                                                                   onChange={e => setSequenceInputs(prev => ({ ...prev, [item.id]: e.target.value }))}
+
                                                                   onKeyDown={e => { if (e.key === 'Enter') applyInventorySequence(item.id); }}
+
                                                                   className="w-16 bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm font-black text-center focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
+
                                                               />
+
                                                               <button onClick={() => applyInventorySequence(item.id)} className={`px-3 py-1.5 rounded-lg text-xs font-black ${canManageInventory ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`} disabled={!canManageInventory}>套用</button>
+
                                                           </div>
+
                                                       </div>
+
                                                       <div className="flex flex-wrap items-center gap-2 justify-start lg:justify-end">
+
                                                           <select
+
                                                               value={item.category}
+
                                                               disabled={!canManageInventory}
+
                                                               onChange={e => updateInventoryCategory(item.id, e.target.value)}
+
                                                               className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-black text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
+
                                                           >
+
                                                               {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+
                                                           </select>
+
                                                           <button onClick={() => startEditInventoryItem(item)} className={`px-4 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory}>編輯</button>
+
                                                           <button onClick={() => deleteInventoryItem(item.id)} className={`px-4 py-2 rounded-xl text-xs font-black border ${canManageInventory ? 'bg-white text-red-500 border-red-200 hover:bg-red-50' : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'}`} disabled={!canManageInventory}>刪除</button>
+
                                                       </div>
+
                                                   </div>
+
                                               </div>
+
                                           );
+
                                       })}
+
                                   </div>
+
                               </div>
+
                           ))}
+
                       </div>
+
                   )}
+
               </div>
+
           </div>
+
       </div>
+
     </div>
+
   );
+
 };
+
  
+
 // ==========================================
+
 // 🌟 系統主程式 (Main App) - V10.0 完整核心
+
 // ==========================================
+
 function App() {
+
     const [user, setUser] = useState(null);
+
     const [currentUserInfo, setCurrentUserInfo] = useState(null);
+
     const [dbData, setDbData] = useState({ 
+
         users: {}, shifts: {}, events: [], requests: [], signatures: [], 
+
         gasReceipts: {}, payrollRecords: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES,
+
         usersLoaded: false, shiftsLoaded: false
+
     });
+
     const [view, setView] = useState('calendar');
+
     const [loading, setLoading] = useState(true);
+
     const [menuOpen, setMenuOpen] = useState(false);
+
     const [currentDate, setCurrentDate] = useState(new Date());
+
     const currentPayrollMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+
     const [showVersionNotice, setShowVersionNotice] = useState(false);
+
     const versionNoticeKey = user?.uid ? `version_notice_last_seen_${user.uid}` : '';
+
     const currentUserStoredInfo = user?.uid ? dbData.users?.[user.uid] : null;
+
     useEffect(() => {
+
         ensureRuntimeManifest();
+
     }, []);
 
+ 
+
     const dismissVersionNotice = async () => {
+
         try {
+
             if (versionNoticeKey && typeof window !== 'undefined' && window.localStorage) {
+
                 window.localStorage.setItem(versionNoticeKey, CURRENT_VERSION);
+
             }
+
         } catch (err) {
+
             console.warn('version notice local storage unavailable', err);
+
         }
+
         try {
+
             if (user?.uid) {
+
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), {
+
                     lastSeenVersionNotice: CURRENT_VERSION,
+
                     lastSeenVersionNoticeAt: Date.now()
+
                 }, { merge: true });
+
                 setCurrentUserInfo(prev => prev ? {
+
                     ...prev,
+
                     lastSeenVersionNotice: CURRENT_VERSION,
+
                     lastSeenVersionNoticeAt: Date.now()
+
                 } : prev);
+
             }
+
         } catch (err) {
+
             console.warn('version notice Firebase sync failed', err);
+
         }
+
         setShowVersionNotice(false);
+
     };
+
     useEffect(() => {
+
         const unsubAuth = onAuthStateChanged(auth, async (u) => {
+
             if (u) {
+
                 setUser(u);
+
                 const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.uid));
+
                 if (!userDoc.exists()) {
+
                     const initial = { uid: u.uid, name: u.displayName || '新員工', email: u.email, isAdmin: u.email === ADMIN_EMAIL, isManager: false, isResigned: false, startDate: '' };
+
                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.uid), initial);
+
                     setCurrentUserInfo(initial);
+
                 } else { setCurrentUserInfo(userDoc.data()); }
+
             } else { setUser(null); setCurrentUserInfo(null); }
+
             setLoading(false);
+
         });
+
         return () => unsubAuth();
+
     }, []);
+
     useEffect(() => {
+
         if (!user) return;
+
         // 登入、重新連線或切換帳號時，先將月曆資料標記為未完成。
+
         // 避免班表資料尚未從 Firebase 回傳時，錯把空資料當成已完成載入狀態。
+
         setDbData(prev => ({ ...prev, usersLoaded: false, shiftsLoaded: false }));
+
         const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, users: map, usersLoaded: true })); });
+
         const unsubShifts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, shifts: map, shiftsLoaded: true })); });
+
         const unsubSigs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, signatures: list })); });
+
         const unsubReqs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'requests'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, requests: list })); });
+
         const unsubEvents = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companyEvents'), (snap) => { const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setDbData(prev => ({ ...prev, events: list })); });
+
         const unsubGas = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'gasReceipts'), (snap) => { const map = {}; snap.forEach(d => map[d.id] = d.data()); setDbData(prev => ({ ...prev, gasReceipts: map })); });
+
         const unsubLoc = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'storeLocation'), (snap) => setDbData(prev => ({ ...prev, storeLocation: snap.data() })));
+
         const unsubInv = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'inventoryConfig'), (snap) => {
+
             setDbData(prev => ({ ...prev, inventoryItems: snap.exists() && snap.data().items ? snap.data().items : DEFAULT_INVENTORY_ITEMS }));
+
         });
+
         const unsubShiftCfg = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shiftConfig'), (snap) => {
+
             const customShiftTypes = snap.exists() && Array.isArray(snap.data().customShiftTypes) ? snap.data().customShiftTypes : [];
+
             setDbData(prev => ({ ...prev, shiftTypes: mergeShiftTypes(customShiftTypes) }));
+
         });
+
         return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); unsubShiftCfg(); };
+
     }, [user]);
+
  
+
     useEffect(() => {
+
         if (!user) return;
+
         const unsubPayroll = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'payrolls', currentPayrollMonth), (snap) => {
+
             setDbData(prev => ({ ...prev, payrollRecords: snap.exists() ? (snap.data().records || {}) : {} }));
+
         });
+
         return () => unsubPayroll();
+
     }, [user, currentPayrollMonth]);
+
  
+
  
+
 useEffect(() => {
+
     if (loading) return;
+
     if (!user?.uid || !currentUserInfo?.uid) {
+
         setShowVersionNotice(false);
+
         return;
+
     }
+
     try {
+
         const localSeenVersion = (typeof window !== 'undefined' && window.localStorage)
+
             ? window.localStorage.getItem(`version_notice_last_seen_${user.uid}`)
+
             : CURRENT_VERSION;
+
         const firebaseSeenVersion = currentUserInfo?.lastSeenVersionNotice || currentUserStoredInfo?.lastSeenVersionNotice || '';
+
         const hasSeenCurrentVersion = localSeenVersion === CURRENT_VERSION || firebaseSeenVersion === CURRENT_VERSION;
+
         if (hasSeenCurrentVersion && localSeenVersion !== CURRENT_VERSION && typeof window !== 'undefined' && window.localStorage) {
+
             window.localStorage.setItem(`version_notice_last_seen_${user.uid}`, CURRENT_VERSION);
+
         }
+
         setShowVersionNotice(!hasSeenCurrentVersion);
+
     } catch (err) {
+
         console.warn('version notice read failed', err);
+
         setShowVersionNotice(false);
+
     }
+
 }, [loading, user?.uid, currentUserInfo?.uid, currentUserInfo?.lastSeenVersionNotice, currentUserStoredInfo?.lastSeenVersionNotice]);
+
  
+
     useEffect(() => {
+
         if (!user) return;
+
         const memberLineIds = [...new Set(Object.values(dbData.users || {})
+
             .filter(u => !u.isResigned && u.lineUserId)
+
             .map(u => u.lineUserId)
+
             .filter(Boolean))];
+
         if (memberLineIds.length === 0 || !Array.isArray(dbData.events) || dbData.events.length === 0) return;
+
  
+
         let timer = null;
+
         let cancelled = false;
+
  
+
         const sendTodayEventNotifications = async () => {
+
             if (cancelled) return;
+
             const now = new Date();
+
             const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+
             const todaysEvents = dbData.events.filter(e => e?.title && checkEventOnDate(e, todayStr));
+
             if (todaysEvents.length === 0) return;
+
  
+
             for (const evt of todaysEvents) {
+
                 const logId = `${evt.id || evt.startDate || 'event'}_${todayStr}`;
+
                 const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'eventNotificationLogs', logId);
+
                 const sentSnap = await getDoc(logRef);
+
                 if (sentSnap.exists()) continue;
+
  
+
                 const timeText = evt.time ? `\n時間：${evt.time}` : '';
+
                 const repeatText = evt.repeatType && evt.repeatType !== 'none' ? `\n重複：${REPEAT_LABELS[evt.repeatType] || evt.repeatType}` : '';
+
                 const noteText = evt.note ? `\n內容：${evt.note}` : '';
+
  
+
                 await sendLineNotification(memberLineIds, `📢 【今日公司備忘錄 / 行程提醒】\n日期：${todayStr}${timeText}\n標題：${evt.title}${repeatText}${noteText}\n請留意今日安排。`);
+
                 await setDoc(logRef, { eventId: evt.id || null, date: todayStr, sentAt: Date.now(), title: evt.title, repeatType: evt.repeatType || 'none' }, { merge: true });
+
             }
+
         };
+
  
+
         const now = new Date();
+
         const nineAM = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0);
+
         if (now >= nineAM) {
+
             sendTodayEventNotifications();
+
         } else {
+
             timer = setTimeout(sendTodayEventNotifications, nineAM.getTime() - now.getTime());
+
         }
+
  
+
         return () => {
+
             cancelled = true;
+
             if (timer) clearTimeout(timer);
+
         };
+
     }, [user, dbData.events, dbData.users]);
+
  
+
     const safeUsers = dbData?.users || {};
+
     const safeRequests = Array.isArray(dbData?.requests) ? dbData.requests : [];
+
     const safeSignatures = Array.isArray(dbData?.signatures) ? dbData.signatures : [];
+
     const safeShiftTypes = Array.isArray(dbData?.shiftTypes) ? dbData.shiftTypes : DEFAULT_SHIFT_TYPES;
+
     const safeInventoryItems = Array.isArray(dbData?.inventoryItems) ? dbData.inventoryItems : DEFAULT_INVENTORY_ITEMS;
+
     const isSuperAdmin = currentUserInfo?.isAdmin === true;
+
     const canApproveLeaveRequests = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true;
+
     const hasSignedContract = safeSignatures.some(s => s.uid === user?.uid && s.formType === 'contract');
+
     const isLocked = !isSuperAdmin && !hasSignedContract;
+
 // 🟢 手術二：處理核准的「大腦」邏輯
+
 // 🟢 請貼在這裡 (handleRequest 的上方)
+
 const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
+
     const handleRequest = async (req, action) => {
+
         const isTargetEmployeeForTimeConfirmation = req?.type === 'ot_confirm' && req?.uid === currentUserInfo?.uid;
+
         const isTimeConfirmationCreator = req?.type === 'ot_confirm' && req?.createdByUid === currentUserInfo?.uid;
+
         const canCancelTimeConfirmation = req?.type === 'ot_confirm' && (canApproveLeaveRequests || isTimeConfirmationCreator);
-        const canReviewRequest = canApproveLeaveRequests || isTargetEmployeeForTimeConfirmation || (action === 'cancel' && canCancelTimeConfirmation);
+
+        const swapStatus = req?.type === 'swap' ? (req.status || 'pending_target') : '';
+
+        const isSwapTargetReviewer = req?.type === 'swap' && req?.toUid === currentUserInfo?.uid && swapStatus === 'pending_target';
+
+        const isSwapManagerReviewer = req?.type === 'swap' && canApproveLeaveRequests && swapStatus === 'pending_manager';
+
+        const canReviewRequest = canApproveLeaveRequests || isTargetEmployeeForTimeConfirmation || isSwapTargetReviewer || isSwapManagerReviewer || (action === 'cancel' && canCancelTimeConfirmation);
+
         if (!canReviewRequest) return alert("您沒有處理這張單據的權限");
+
         const requestRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id);
+
         const requesterUid = req.uid || req.fromUid;
+
         const targetUser = dbData.users[requesterUid] || Object.values(dbData.users || {}).find(u => u.uid === requesterUid);
+
         const requesterName = req.userName || req.fromName || targetUser?.name || '未知員工';
+
         const reviewerName = currentUserInfo?.name || '未知審核人';
+
         const reviewedAt = Date.now();
+
         const siblingRequests = getSiblingPendingRequests(safeRequests, req);
+
         const writeReviewLog = async (result) => {
+
             await writeAuditLog({ db, appId, actor: currentUserInfo, action: `review_${result}`, targetType: 'request', targetId: req.id, detail: { requesterName, requestDate: req.date || '', leaveLabel: req.leaveLabel || '', requestType: req.type } });
+
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'requestReviewLogs'), {
+
                 requestId: req.id,
+
                 requestType: req.type,
+
                 requesterUid,
+
                 requesterName,
+
                 requestDate: req.date || '',
+
                 leaveType: req.leaveType || '',
+
                 leaveLabel: req.leaveLabel || '',
+
                 subUid: req.subUid || null,
+
                 subName: req.subName || '',
+
                 hours: req.hours ?? null,
+
                 reason: req.reason || '',
+
                 submittedAt: req.timestamp || null,
+
                 reviewedAt,
+
                 reviewedByUid: currentUserInfo?.uid || '',
+
                 reviewedByName: reviewerName,
+
                 result
+
             });
+
         };
+
         const clearSiblingRequests = async () => {
+
             await Promise.all(siblingRequests.map(item => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', item.id)).catch(() => null)));
+
         };
+
         try {
+
+            if (req.type === 'swap') {
+
+                const fromUser = safeUsers?.[req.fromUid] || Object.values(safeUsers || {}).find(userItem => userItem.uid === req.fromUid);
+
+                const toUser = safeUsers?.[req.toUid] || Object.values(safeUsers || {}).find(userItem => userItem.uid === req.toUid);
+
+                const fromName = req.fromName || fromUser?.name || '申請人';
+
+                const toName = req.toName || toUser?.name || '交換對象';
+
+                const currentSwapStatus = req.status || 'pending_target';
+
+ 
+
+                if (action === 'reject') {
+
+                    await writeReviewLog(currentSwapStatus === 'pending_target' ? 'swap_rejected_by_target' : 'swap_rejected_by_manager');
+
+                    await deleteDoc(requestRef);
+
+                    const rejectMessage = `❌ 換班申請未通過。
+
+申請人：${fromName}
+
+交換對象：${toName}
+
+日期：${req.date1} 與 ${req.date2}
+
+處理人：${reviewerName}`;
+
+                    const notifyIds = [...new Set([fromUser?.lineUserId, toUser?.lineUserId].filter(Boolean))];
+
+                    if (notifyIds.length > 0) await sendLineNotification(notifyIds, rejectMessage);
+
+                    alert('✅ 已拒絕這筆換班申請。');
+
+                    return;
+
+                }
+
+ 
+
+                if (action !== 'accept') return;
+
+ 
+
+                if (currentSwapStatus === 'pending_target') {
+
+                    if (!isSwapTargetReviewer) return alert('必須由被邀請換班的員工本人先確認。');
+
+                    await updateDoc(requestRef, {
+
+                        status: 'pending_manager',
+
+                        targetAcceptedAt: Date.now(),
+
+                        targetAcceptedByUid: currentUserInfo.uid,
+
+                        targetAcceptedByName: reviewerName
+
+                    });
+
+                    await writeReviewLog('swap_target_accepted');
+
+                    const approverLineIds = getApproverLineIds(safeUsers);
+
+                    if (approverLineIds.length > 0) {
+
+                        await sendLineNotification(approverLineIds, `🔔 【換班待主管核准】
+
+${toName} 已同意與 ${fromName} 換班。
+
+互換日期：${req.date1} 與 ${req.date2}
+
+請至系統通知中心完成最終核准。`);
+
+                    }
+
+                    if (fromUser?.lineUserId) {
+
+                        await sendLineNotification([fromUser.lineUserId], `✅ ${toName} 已同意您的換班申請，現在等待主管／店長核准。
+
+互換日期：${req.date1} 與 ${req.date2}`);
+
+                    }
+
+                    alert('✅ 已同意換班，申請已送交主管／店長進行最終核准。');
+
+                    return;
+
+                }
+
+ 
+
+                if (currentSwapStatus === 'pending_manager') {
+
+                    if (!isSwapManagerReviewer) return alert('這個階段必須由主管或店長核准。');
+
+                    const approvalText = `申請人：${fromName}
+
+交換對象：${toName}
+
+互換日期：${req.date1} 與 ${req.date2}
+
+ 
+
+核准後會立即交換雙方在這兩天的班別／休假資料。`;
+
+                    if (!window.confirm(`請確認換班內容：
+
+ 
+
+${approvalText}
+
+ 
+
+資料正確才按「確定」套用班表。`)) return;
+
+ 
+
+                    const date1Ref = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date1);
+
+                    const date2Ref = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date2);
+
+                    const [date1Snap, date2Snap] = await Promise.all([getDoc(date1Ref), getDoc(date2Ref)]);
+
+                    const date1Data = date1Snap.exists() ? date1Snap.data() : { assignments: [] };
+
+                    const date2Data = date2Snap.exists() ? date2Snap.data() : { assignments: [] };
+
+ 
+
+                    const swapEmployeeAssignments = dayData => {
+
+                        const assignments = Array.isArray(dayData?.assignments) ? [...dayData.assignments] : [];
+
+                        const fromEntry = assignments.find(item => item.uid === req.fromUid) || null;
+
+                        const toEntry = assignments.find(item => item.uid === req.toUid) || null;
+
+                        const untouched = assignments.filter(item => item.uid !== req.fromUid && item.uid !== req.toUid);
+
+                        if (fromEntry) untouched.push({ ...fromEntry, uid: req.toUid, timestamp: Date.now() });
+
+                        if (toEntry) untouched.push({ ...toEntry, uid: req.fromUid, timestamp: Date.now() });
+
+                        return { ...dayData, assignments: untouched };
+
+                    };
+
+ 
+
+                    const date1HasData = (date1Data.assignments || []).some(item => item.uid === req.fromUid || item.uid === req.toUid);
+
+                    const date2HasData = (date2Data.assignments || []).some(item => item.uid === req.fromUid || item.uid === req.toUid);
+
+                    if (!date1HasData && !date2HasData) return alert('這兩個日期找不到雙方的班別資料，請先確認班表已填入班別後再核准。');
+
+ 
+
+                    await Promise.all([
+
+                        setDoc(date1Ref, swapEmployeeAssignments(date1Data), { merge: true }),
+
+                        setDoc(date2Ref, swapEmployeeAssignments(date2Data), { merge: true })
+
+                    ]);
+
+                    await writeReviewLog('swap_approved_and_applied');
+
+                    await deleteDoc(requestRef);
+
+                    const approvedMessage = `✅ 換班已由 ${reviewerName} 核准並套用班表。
+
+${fromName} ⇄ ${toName}
+
+互換日期：${req.date1} 與 ${req.date2}`;
+
+                    const notifyIds = [...new Set([fromUser?.lineUserId, toUser?.lineUserId].filter(Boolean))];
+
+                    if (notifyIds.length > 0) await sendLineNotification(notifyIds, approvedMessage);
+
+                    alert('✅ 換班已核准，兩個日期的班別／休假資料已完成交換。');
+
+                    return;
+
+                }
+
+            }
+
+ 
+
             if (action === 'cancel' && req.type === 'ot_confirm') {
+
                 await writeReviewLog('cancelled');
+
                 await deleteDoc(requestRef);
+
                 await clearSiblingRequests();
+
                 if (targetUser?.lineUserId) {
+
                     await sendLineNotification([targetUser.lineUserId], `🗑️ 您於 ${req.date} 的時數確認單已由主管取消。\n時數：${req.hours ?? 0} hr\n原因：${req.reason || '無備註'}`);
+
                 }
+
                 alert(`✅ 已取消 ${requesterName} 的待確認時數單。`);
+
                 return;
+
             }
+
             if (action === 'reject') {
+
                 await writeReviewLog('rejected');
+
                 await deleteDoc(requestRef);
+
                 await clearSiblingRequests();
+
                 if (targetUser?.lineUserId) {
+
                     const rejectText = req.type === 'leave_request'
+
                         ? `❌ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}未通過審核。
+
 審核人：${reviewerName}`
+
                         : req.type === 'ot_confirm'
+
                             ? `❌ 您已拒絕 ${req.date} 的時數確認單。
+
 時數：${req.hours ?? 0} hr`
+
                             : `❌ 您於 ${req.date} 送出的時數申請未通過審核。
+
 審核人：${reviewerName}`;
+
                     await sendLineNotification([targetUser.lineUserId], rejectText);
+
                 }
+
                 alert(`✅ 已駁回 ${requesterName} 的申請，並通知員工。`);
+
                 return;
+
             }
+
             if (req.type === 'leave_request') {
+
                 const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+
                 const shiftSnap = await getDoc(shiftRef);
+
                 const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+
                 const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
                 const idx = assigns.findIndex(a => a.uid === req.uid);
+
                 const baseAssign = idx >= 0 ? assigns[idx] : null;
+
                 const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES);
+
                 const leaveHours = req.leaveType === 'annual' ? normalizeCustomLeaveHours(req.hours, defaultLeaveHours) : (Number(req.hours) > 0 ? Number(req.hours) : resolveLeaveHours(baseAssign, DEFAULT_SHIFT_TYPES));
+
                 const requestedUseComp = req.useComp === true;
+
                 const requestReason = String(req.reason || req.note || '未填寫理由').trim() || '未填寫理由';
+
                 const approvalSummary = [
+
                     `申請人：${requesterName}`,
+
                     `日期：${req.date || '未填寫'}`,
+
                     `假別：${req.leaveLabel || '未標示假別'}`,
+
                     `申請時數：${leaveHours} 小時`,
+
                     `理由：${requestReason}`,
+
                     req.subName ? `代理人：${req.subName}` : null
+
                 ].filter(Boolean).join('\n');
+
                 if (!window.confirm(`請確認本次核准內容：\n\n${approvalSummary}\n\n資料正確才按「確定」核准。`)) return;
+
                 const finalUseComp = ['sick', 'personal'].includes(req.leaveType)
+
                     ? window.confirm(`是否使用補休時數扣抵？\n\n員工申請偏好：${requestedUseComp ? '使用補休扣抵' : '不使用補休扣抵'}\n按「確定」= 使用補休扣抵；按「取消」= 不使用補休扣抵`)
+
                     : false;
+
                 const leaveEntry = { 
+
                     uid: req.uid, 
+
                     type: 'LEAVE', 
+
                     leaveType: req.leaveType, 
+
                     leaveHours, 
+
                     shiftCode: baseAssign?.shiftCode || null,
+
                     subUid: req.subUid || null,
+
                     useComp: finalUseComp,
+
                     note: requestReason,
+
                     reason: requestReason,
+
                     timestamp: Date.now() 
+
                 };
+
                                 if (idx >= 0) assigns[idx] = leaveEntry; else assigns.push(leaveEntry);
+
                 await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+
                 await writeReviewLog('approved');
+
                 await deleteDoc(requestRef);
+
                 await clearSiblingRequests();
+
                 if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的${req.leaveLabel || '假單'}已核准，班表已同步更新。\n申請時數：${leaveHours} hr\n理由：${requestReason}${['sick', 'personal'].includes(req.leaveType) ? `\n補休扣抵：${finalUseComp ? '是' : '否'}` : ''}
+
 審核人：${reviewerName}`);
+
                 alert(`✅ ${requesterName} 的假單已核准，班表已更新，並已通知員工。`);
+
             } else if (req.type === 'admin_ot_approve') {
+
                 const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+
                 const shiftSnap = await getDoc(shiftRef);
+
                 const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+
                 const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
                 const idx = assigns.findIndex(a => a.uid === requesterUid);
+
                 const baseEntry = idx >= 0 ? assigns[idx] : { uid: requesterUid, type: 'WORK' };
+
                 const updatedEntry = { ...baseEntry, uid: requesterUid, type: baseEntry.type || 'WORK', otHours: req.hours, otReason: req.reason || '無備註', otConfirmed: true, timestamp: Date.now() };
+
                 if (idx >= 0) assigns[idx] = updatedEntry; else assigns.push(updatedEntry);
+
                 await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+
                 await writeReviewLog('approved');
+
                 await deleteDoc(requestRef);
+
                 await clearSiblingRequests();
+
                 if (targetUser?.lineUserId) await sendLineNotification([targetUser.lineUserId], `✅ 您於 ${req.date} 送出的時數申請已核准，結算明細已同步更新。
+
 審核人：${reviewerName}`);
+
                 alert(`✅ ${requesterName} 的時數申請已核准，並已通知員工。`);
+
             } else if (req.type === 'ot_confirm') {
+
                 if (!isTargetEmployeeForTimeConfirmation) return alert('這張確認單必須由指定員工本人確認。');
+
                 const shiftRef = doc(db, 'artifacts', appId, 'public', 'data', 'shifts', req.date);
+
                 const shiftSnap = await getDoc(shiftRef);
+
                 const dayData = shiftSnap.exists() ? shiftSnap.data() : { assignments: [] };
+
                 const assigns = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
                 const idx = assigns.findIndex(a => a.uid === req.uid);
+
                 const baseEntry = idx >= 0 ? assigns[idx] : { uid: req.uid, type: 'WORK' };
+
                 const updatedEntry = {
+
                     ...baseEntry,
+
                     uid: req.uid,
+
                     type: baseEntry.type || 'WORK',
+
                     otHours: Number(req.hours) || 0,
+
                     otReason: req.reason || '無備註',
+
                     otConfirmed: true,
+
                     timestamp: Date.now()
+
                 };
+
                 if (idx >= 0) assigns[idx] = updatedEntry; else assigns.push(updatedEntry);
+
                 await setDoc(shiftRef, { ...dayData, assignments: assigns }, { merge: true });
+
                 await writeReviewLog('confirmed_by_employee');
+
                 await deleteDoc(requestRef);
+
                 await clearSiblingRequests();
+
                 const creator = safeUsers?.[req.createdByUid];
+
                 if (creator?.lineUserId) {
+
                     await sendLineNotification([creator.lineUserId], `✅ ${requesterName} 已確認 ${req.date} 的時數單。\n時數：${req.hours ?? 0} hr\n原因：${req.reason || '無備註'}`);
+
                 }
+
                 alert('✅ 時數確認完成，已寫入出勤統計與薪資結算明細。');
+
             }
+
         } catch (e) {
+
             console.error('審核處理失敗', e);
+
             alert('這筆申請可能已被其他主管處理，請重新整理後再確認。');
+
         }
+
     };
+
     
+
     // 🔔 計算主管需要看到的通知數量
-    const myNotifications = safeRequests.filter(r => 
-        (r.type === 'leave_request' && canApproveLeaveRequests) ||
-        (r.type === 'admin_ot_approve' && canApproveLeaveRequests) ||
-        (r.type === 'ot_confirm' && r.uid === currentUserInfo?.uid) ||
-        (r.type === 'ot_confirm' && canApproveLeaveRequests)
-    ) || [];
+
+    const myNotifications = safeRequests.filter(request => {
+
+        if (request.type === 'leave_request') return canApproveLeaveRequests;
+
+        if (request.type === 'admin_ot_approve') return canApproveLeaveRequests;
+
+        if (request.type === 'ot_confirm') return request.uid === currentUserInfo?.uid || canApproveLeaveRequests;
+
+        if (request.type === 'swap') {
+
+            const status = request.status || 'pending_target';
+
+            const isParticipant = request.fromUid === currentUserInfo?.uid || request.toUid === currentUserInfo?.uid;
+
+            if (status === 'pending_target') return isParticipant;
+
+            if (status === 'pending_manager') return isParticipant || canApproveLeaveRequests;
+
+        }
+
+        return false;
+
+    }) || [];
+
     const notificationCount = Array.isArray(myNotifications) ? myNotifications.length : 0;
+
     const coreDataReady = !!user && !!currentUserInfo && Array.isArray(safeSignatures) && Array.isArray(safeRequests) && !!safeUsers;
+
  
+
     useEffect(() => {
+
         const pendingRequests = safeRequests.filter(r => (r.type === 'leave_request' || r.type === 'admin_ot_approve') && !r.lineNotifiedAt && !r.lineNotifyProcessingAt);
+
         if (pendingRequests.length === 0) return;
+
         const approverLineIds = getApproverLineIds(dbData.users);
+
         if (approverLineIds.length === 0) return;
+
         let cancelled = false;
+
         const backfillPendingNotifications = async () => {
+
             for (const req of pendingRequests) {
+
                 if (cancelled) return;
+
                 const reqRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.id);
+
                 await updateDoc(reqRef, {
+
                     lineNotifyProcessingAt: Date.now(),
+
                     lastNotificationType: 'queue'
+
                 }).catch(() => null);
+
                 const requesterName = req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工';
+
                 const msg = req.type === 'leave_request'
+
                     ? `🔔 【待審核假單提醒】
+
 申請人：${requesterName}
+
 日期：${req.date}
+
 類別：${req.leaveLabel || '假單'}${['sick', 'personal'].includes(req.leaveType) ? `
+
 補休扣抵：${req.useComp ? '是' : '否'}` : ''}${req.subName ? `
+
 代理人：${req.subName}` : ''}
+
 請至系統「通知中心」進行審核。`
+
                     : `🔔 【待審核時數提醒】
+
 申請人：${requesterName}
+
 日期：${req.date}
+
 時數：${req.hours} hr
+
 原因：${req.reason || '無備註'}
+
 請至系統「通知中心」進行審核。`;
+
                 const sent = await sendLineNotification(approverLineIds, msg);
+
                 if (sent) {
+
                     await updateDoc(reqRef, {
+
                         lineNotifiedAt: Date.now(),
+
                         notifiedApproverCount: approverLineIds.length,
+
                         lastNotificationType: 'backfill',
+
                         lineNotifyProcessingAt: null
+
                     }).catch(() => null);
+
                 } else {
+
                     await updateDoc(reqRef, {
+
                         lineNotifyProcessingAt: null
+
                     }).catch(() => null);
+
                 }
+
             }
+
         };
+
         backfillPendingNotifications();
+
         return () => { cancelled = true; };
+
     }, [safeRequests, safeUsers]);
+
  
+
     const renderView = () => {
+
         // 如果還沒簽約，強制跳轉到表單頁
+
         if (!currentUserInfo) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">LOADING PROFILE...</div>;
+
         if (isLocked && view !== 'forms') {
+
             return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
+
         }
+
         switch (view) {
+
             case 'dashboard': return <DashboardView dbData={{ ...dbData, users: safeUsers, requests: safeRequests }} currentDate={currentDate} setView={setView} isSuperAdmin={isSuperAdmin} />;
+
             case 'calendar': return <CalendarView currentDate={currentDate} setCurrentDate={setCurrentDate} dbData={{ ...dbData, leaves: DEFAULT_LEAVE_TYPES, shiftsDef: safeShiftTypes, shiftTypes: safeShiftTypes, users: safeUsers, requests: safeRequests, signatures: safeSignatures, inventoryItems: safeInventoryItems }} currentUserInfo={currentUserInfo} db={db} appId={appId} isSuperAdmin={isSuperAdmin} isPrivileged={isSuperAdmin} isReadOnly={false} />;
+
             case 'clock': return <ClockView currentUser={user} currentUserInfo={currentUserInfo} storeConfig={dbData.storeLocation} db={db} appId={appId} />;
+
             case 'inventory': return <InventoryView db={db} appId={appId} inventoryItems={safeInventoryItems} currentUserInfo={currentUserInfo} />;
+
             case 'forms': return <FormsView users={Object.values(safeUsers)} currentUserInfo={currentUserInfo} db={db} appId={appId} isPrivileged={isSuperAdmin} signatures={safeSignatures} isLocked={isLocked} setView={setView} isSuperAdmin={isSuperAdmin} storeConfig={dbData.storeLocation} />;
+
             case 'salary': return <SalaryView users={safeUsers} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentDate={currentDate} leaveTypes={DEFAULT_LEAVE_TYPES} currentUserInfo={currentUserInfo} isPrivileged={isSuperAdmin} gasReceipts={dbData.gasReceipts} db={db} appId={appId} />;
+
             case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} />;
+
             case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} setView={setView} gasReceipts={dbData.gasReceipts} />;
+
             
+
             // 🟢 修正：只保留一個 settings，並加上空值保護
+
             case 'settings': return <SettingsView users={safeUsers} currentUserInfo={currentUserInfo} inventoryItems={safeInventoryItems} shiftTypes={safeShiftTypes} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+
             
+
             case 'inbox': return (
+
                 <div className="max-w-md mx-auto space-y-4">
+
                     <div className="bg-white p-6 rounded-[2rem] border shadow-sm flex items-center gap-3">
+
                         <Bell className="text-indigo-600"/><div><h2 className="font-black text-xl">通知中心</h2><p className="text-xs text-gray-400 font-bold mt-1">請假 / 調班 / 時數申請集中處理，核准或駁回後會同步寫入操作紀錄。</p></div>
+
                     </div>
+
                     <div className="flex flex-wrap gap-2 text-xs font-black"><span className="px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">全部 {myNotifications?.length || 0}</span><span className="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">請假 {myNotifications?.filter(item => item.type === 'leave_request').length || 0}</span><span className="px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100">時數 / 調班 {myNotifications?.filter(item => item.type !== 'leave_request').length || 0}</span></div>
+
                     {/* 🟢 修正：確保 myNotifications 存在 */}
+
                     {(!myNotifications || myNotifications.length === 0) ? (
+
                         <div className="text-center py-20 text-gray-300 font-bold uppercase tracking-widest">No Notifications</div>
+
                     ) : (
+
                         myNotifications.map(req => (
+
                             <div key={req.id} className="bg-white p-6 rounded-[2rem] border border-l-8 border-l-indigo-500 shadow-xl animate-scale-in">
+
                                 <h3 className="font-black text-gray-800">
-                                    {req.type === 'leave_request' ? '🌴 請假申請' : req.type === 'ot_confirm' ? '⏱️ 員工時數確認單' : '⏱️ 時數審核申請'}
+
+                                    {req.type === 'leave_request' ? '🌴 請假申請' : req.type === 'ot_confirm' ? '⏱️ 員工時數確認單' : req.type === 'swap' ? '🔄 換班申請' : '⏱️ 時數審核申請'}
+
                                 </h3>
-                                <p className="text-sm font-bold text-gray-500 mt-1">申請人：{req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工'} | 日期：{req.date}</p>
+
+                                <p className="text-sm font-bold text-gray-500 mt-1">
+
+                                    {req.type === 'swap'
+
+                                        ? `${req.fromName || dbData.users?.[req.fromUid]?.name || '申請人'} ⇄ ${req.toName || dbData.users?.[req.toUid]?.name || '交換對象'} | ${req.date1} / ${req.date2}`
+
+                                        : `申請人：${req.userName || req.fromName || dbData.users?.[req.uid || req.fromUid]?.name || '未知員工'} | 日期：${req.date}`}
+
+                                </p>
+
                                 <div className="grid grid-cols-2 gap-3 mt-3 mb-3 text-xs font-black">
+
                                     <div className="bg-gray-50 rounded-2xl px-3 py-2 border border-gray-100">
+
                                         <div className="text-[10px] text-gray-400 mb-1">送出時間</div>
+
                                         <div className="text-gray-700">{formatDateTime(req.timestamp)}</div>
+
                                     </div>
+
                                     <div className="bg-gray-50 rounded-2xl px-3 py-2 border border-gray-100">
+
                                         <div className="text-[10px] text-gray-400 mb-1">審核人</div>
+
                                         <div className="text-gray-700">{req.reviewedByName || '待審核'}</div>
+
                                     </div>
+
                                 </div>
+
                                 {req.type === 'leave_request' ? (
+
                                     <div className="my-3 space-y-3">
+
                                         <div className="grid grid-cols-2 gap-3">
+
                                             <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3">
+
                                                 <div className="text-[10px] font-black text-indigo-400">申請假別</div>
+
                                                 <div className="mt-1 text-base font-black text-indigo-700">{req.leaveLabel || '未標示'}</div>
+
                                             </div>
+
                                             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+
                                                 <div className="text-[10px] font-black text-amber-500">申請時數</div>
+
                                                 <div className="mt-1 text-xl font-black text-amber-700">{Number(req.hours) > 0 ? Number(req.hours) : 8} 小時</div>
+
                                             </div>
+
                                         </div>
+
                                         <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3">
+
                                             <div className="text-[10px] font-black text-gray-400">申請理由／備註</div>
+
                                             <div className="mt-1 text-sm font-bold text-gray-700 whitespace-pre-wrap">{req.reason || req.note || '未填寫理由'}</div>
+
                                         </div>
+
                                         {['sick', 'personal'].includes(req.leaveType) && <div className="bg-red-50 border border-red-100 rounded-2xl p-3 text-xs font-bold space-y-1"><div className="text-amber-700">補休扣抵：{req.useComp ? '是（主管核准時可調整）' : '否（主管核准時可調整）'}</div><div className="text-red-600">扣薪規則：{req.leaveType === 'sick' ? '病假扣半薪' : '事假扣全薪'}</div></div>}
+
                                         {req.subName && <div className="text-xs font-bold text-indigo-500">代理人：{req.subName}</div>}
+
                                     </div>
-                                ) : (
-                                    <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700 space-y-1">
-                                        <div>時數：{req.hours} hr</div>
-                                        {req.type === 'ot_confirm' && <div className="text-xs text-pink-600">由主管 {req.createdByName || '管理員'} 建立，需由員工本人確認後才會寫入明細。</div>}
-                                        <div className="text-xs text-indigo-500">原因：{req.reason || '無備註'}</div>
-                                    </div>
-                                )}
-                                                                {req.type === 'ot_confirm' ? (
-                                    req.uid === currentUserInfo?.uid ? (
-                                        <div className="flex gap-3">
-                                            <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-500 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">不同意</button>
-                                            <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-pink-600 text-white py-3 rounded-xl font-black shadow-lg shadow-pink-100 hover:bg-pink-700 transition-all">確認時數</button>
+
+                                ) : req.type === 'swap' ? (
+
+                                    <div className="my-3 space-y-3">
+
+                                        <div className="grid grid-cols-2 gap-3">
+
+                                            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3">
+
+                                                <div className="text-[10px] font-black text-blue-400">日期一</div>
+
+                                                <div className="mt-1 text-sm font-black text-blue-700">{req.date1}</div>
+
+                                            </div>
+
+                                            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3">
+
+                                                <div className="text-[10px] font-black text-emerald-500">日期二</div>
+
+                                                <div className="mt-1 text-sm font-black text-emerald-700">{req.date2}</div>
+
+                                            </div>
+
                                         </div>
-                                    ) : (
-                                        <button onClick={()=>handleRequest(req, 'cancel')} className="w-full bg-red-50 text-red-600 border border-red-200 py-3 rounded-xl font-black hover:bg-red-100 transition-all">取消這張待確認單</button>
-                                    )
-                                ) : (
-                                    <div className="flex gap-3">
-                                        <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-400 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">駁回</button>
-                                        <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">核准</button>
+
+                                        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 text-sm font-bold text-gray-700">
+
+                                            <div>{req.fromName || dbData.users?.[req.fromUid]?.name || '申請人'} 與 {req.toName || dbData.users?.[req.toUid]?.name || '交換對象'}</div>
+
+                                            <div className="mt-1 text-xs text-gray-500">處理階段：{(req.status || 'pending_target') === 'pending_target' ? '等待交換對象同意' : '對方已同意，等待主管／店長核准'}</div>
+
+                                        </div>
+
                                     </div>
+
+                                ) : (
+
+                                    <div className="bg-indigo-50 p-3 my-3 rounded-2xl text-sm font-black text-indigo-700 space-y-1">
+
+                                        <div>時數：{req.hours} hr</div>
+
+                                        {req.type === 'ot_confirm' && <div className="text-xs text-pink-600">由主管 {req.createdByName || '管理員'} 建立，需由員工本人確認後才會寫入明細。</div>}
+
+                                        <div className="text-xs text-indigo-500">原因：{req.reason || '無備註'}</div>
+
+                                    </div>
+
                                 )}
+
+                                                                {req.type === 'swap' ? (
+
+                                    (req.status || 'pending_target') === 'pending_target' ? (
+
+                                        req.toUid === currentUserInfo?.uid ? (
+
+                                            <div className="flex gap-3">
+
+                                                <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-500 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">不同意換班</button>
+
+                                                <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-black shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all">同意並送主管</button>
+
+                                            </div>
+
+                                        ) : (
+
+                                            <div className="w-full bg-amber-50 text-amber-700 border border-amber-200 py-3 px-4 rounded-xl text-center text-sm font-black">等待對方回覆換班申請</div>
+
+                                        )
+
+                                    ) : canApproveLeaveRequests ? (
+
+                                        <div className="flex gap-3">
+
+                                            <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-500 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">駁回</button>
+
+                                            <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">核准並套用班表</button>
+
+                                        </div>
+
+                                    ) : (
+
+                                        <div className="w-full bg-indigo-50 text-indigo-700 border border-indigo-200 py-3 px-4 rounded-xl text-center text-sm font-black">對方已同意，等待主管／店長核准</div>
+
+                                    )
+
+                                ) : req.type === 'ot_confirm' ? (
+
+                                    req.uid === currentUserInfo?.uid ? (
+
+                                        <div className="flex gap-3">
+
+                                            <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-500 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">不同意</button>
+
+                                            <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-pink-600 text-white py-3 rounded-xl font-black shadow-lg shadow-pink-100 hover:bg-pink-700 transition-all">確認時數</button>
+
+                                        </div>
+
+                                    ) : (
+
+                                        <button onClick={()=>handleRequest(req, 'cancel')} className="w-full bg-red-50 text-red-600 border border-red-200 py-3 rounded-xl font-black hover:bg-red-100 transition-all">取消這張待確認單</button>
+
+                                    )
+
+                                ) : (
+
+                                    <div className="flex gap-3">
+
+                                        <button onClick={()=>handleRequest(req, 'reject')} className="flex-1 bg-gray-50 text-gray-400 py-3 rounded-xl font-black hover:bg-gray-100 transition-all">駁回</button>
+
+                                        <button onClick={()=>handleRequest(req, 'accept')} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">核准</button>
+
+                                    </div>
+
+                                )}
+
                             </div>
+
                         ))
+
                     )}
+
                 </div>
+
             );
+
             default: return null;
+
         }
+
     };
+
     const safeRenderView = () => {
+
         try {
+
             return renderView();
+
         } catch (err) {
+
             console.error('safeRenderView failed:', err);
+
             return <StartupGuardFallback title="MODULE LOAD FAILED" detail={err?.message || '畫面模組載入失敗，請重新整理或回報此訊息。'} />;
+
         }
+
     };
+
     if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">SYNCHRONIZING...</div>;
+
     if (user && !currentUserInfo) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse tracking-tighter">LOADING PROFILE...</div>;
+
     // 🟠 1. TEATOP 台中東山店：最終純淨版大門 (已移除 T 與小字，修復點擊)
+
     if (!user) return (
+
         <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-6 animate-fade-in relative overflow-hidden">
+
             {/* 背景裝飾 */}
+
             <div className="absolute -top-20 -left-20 w-80 h-80 bg-orange-100 rounded-full blur-3xl opacity-50 pointer-events-none"></div>
+
             <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-orange-200 rounded-full blur-3xl opacity-40 pointer-events-none"></div>
+
             <div className="w-full max-w-md space-y-12 text-center relative z-10">
+
                 <div className="flex flex-col items-center gap-3">
+
                     <h1 className="font-black text-6xl text-[#F26F21] tracking-tighter">TEATOP</h1>
+
                     <h2 className="font-extrabold text-4xl text-gray-800 tracking-tight mt-2">台中東山店</h2>
+
                 </div>
+
                 <div className="bg-white/80 backdrop-blur-sm border border-gray-100 p-10 rounded-[3rem] shadow-2xl shadow-orange-200/50">
+
                     <div className="flex items-center justify-center gap-3 mb-10 text-[#F26F21]">
+
                         <Fingerprint size={32} />
+
                         <h3 className="font-black text-2xl text-gray-800">身分驗證</h3>
+
                     </div>
+
                     
+
                     {/* 🟢 修復後的按鈕：加上 cursor-pointer 與 z-50 確保可點擊 */}
+
                     <button 
+
                         onClick={() => signInWithPopup(auth, provider)} 
+
                         className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-black px-8 py-6 rounded-2xl border-2 border-gray-50 hover:bg-orange-50 hover:text-[#F26F21] hover:border-orange-100 shadow-xl shadow-gray-100/50 transition-all duration-300 active:scale-95 cursor-pointer relative z-50"
+
                     >
+
                         <img src="https://auth.firebase.com/v2/images/google_logo.svg" alt="Google" className="w-6 h-6" />
+
                         <span className="text-xl">使用 Google 帳號登入</span>
+
                     </button>
+
                     
+
                     <p className="text-[11px] font-bold text-gray-400 mt-10 leading-relaxed">
+
                         請使用東山店內部授權帳號登入系統<br/>
+
                         若無法登入請聯繫管理人員
+
                     </p>
+
                 </div>
+
             </div>
+
             <div className="absolute bottom-8 text-center text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">
+
                 TEATOP DONGSHAN © 2026
+
             </div>
+
         </div>
+
     );
+
     // 🔵 2. 主要系統架構 (地雷字元全面清除)
+
     return (
+
         <div className="min-h-screen bg-gray-50 flex flex-col">
+
             <header className="bg-white/80 border-b border-gray-100 shadow-sm sticky top-0 z-40 backdrop-blur-md">
+
                 <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+
                     <div className="flex items-center gap-3">
+
                         <div className="w-10 h-10 bg-[#F26F21] rounded-2xl flex items-center justify-center shadow-lg shadow-orange-100">
+
                             <Calendar className="text-white" size={20} />
+
                         </div>
+
                         <h1 className="font-black text-xl text-gray-800 hidden xs:block tracking-tight">TEATOP 東山店</h1>
+
                     </div>
+
                     <nav className="flex items-center gap-2">
+
                         <NavBtn active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={FileBarChart} label="總覽" />
+
                         <NavBtn active={view === 'calendar'} onClick={() => setView('calendar')} icon={Calendar} label="班表" />
+
                         <NavBtn active={view === 'clock'} onClick={() => setView('clock')} icon={Clock} label="打卡" />
+
                         <NavBtn active={view === 'inventory'} onClick={() => setView('inventory')} icon={Package} label="盤點" />
+
                         
+
                         <div className="relative">
+
                             <button 
+
                                 onClick={() => setMenuOpen(!menuOpen)} 
+
                                 className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs relative transition-all ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-100':'text-gray-400 hover:bg-gray-100'}`}
+
                             >
+
                                 <Settings size={16}/>
+
                                 <ChevronDown size={14}/>
+
                                 {needsSetupCount > 0 && isSuperAdmin && (
+
                                     <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></span>
+
                                 )}
+
                             </button>
+
                             {menuOpen && (
+
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
+
                                     {isSuperAdmin ? <DropdownItem onClick={() => { setView('payroll'); setMenuOpen(false); }} icon={Wallet} label="薪資結算" /> : null}
+
                                     <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />
+
                                     <DropdownItem onClick={() => {setView('forms'); setMenuOpen(false)}} icon={FileText} label="表單簽署" />
+
                                     <div className="border-t my-2 border-gray-50"></div>
+
                                     <DropdownItem onClick={() => {setView('settings'); setMenuOpen(false)}} icon={Settings} label="系統設定" />
+
                                     <button onClick={() => signOut(auth)} className="w-full text-left px-6 py-3 text-red-500 text-xs font-black hover:bg-red-50">登出系統</button>
+
                                 </div>
+
                             )}
+
                         </div>
+
                         <button 
+
                             onClick={() => setView('inbox')} 
+
                             className={`p-2.5 relative rounded-xl transition-all ${view === 'inbox' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-100'}`}
+
                         >
+
                             <Bell size={20} />
+
                             {notificationCount > 0 && (
+
                                 <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-ping"></span>
+
                             )}
+
                         </button>
+
                     </nav>
+
                 </div>
+
             </header>
+
             <main className="flex-1 p-6 max-w-7xl mx-auto w-full animate-fade-in">
+
                 {coreDataReady ? safeRenderView() : <StartupGuardFallback title="WAITING FOR CORE DATA..." detail="登入資料或使用者權限尚未完成同步，系統暫不載入主畫面。" />}
+
             </main>
+
  
+
 {showVersionNotice && user?.uid && !loading && currentUserInfo?.uid && coreDataReady && (
+
     <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="version-notice-title" aria-describedby="version-notice-description">
+
         <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
+
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+
                 <div>
+
                     <div className="text-xs font-black tracking-widest opacity-80">VERSION UPDATE</div>
+
                     <div id="version-notice-title" className="text-lg font-black">系統版本更新提醒</div>
+
                 </div>
+
                 <button onClick={dismissVersionNotice} className="text-white/80 hover:text-white font-black">✕</button>
+
             </div>
+
             <div className="p-6 space-y-3 text-sm text-gray-700">
+
                 <div className="font-black text-gray-800">已更新至：{CURRENT_VERSION}</div>
+
                 <div id="version-notice-description" className="text-xs text-gray-500">按下「我知道了」後，本版本不會再重複顯示；下一次版本更新才會再提醒。</div>
+
                 <ul className="list-disc pl-5 space-y-2">
+
                     {CURRENT_RELEASE_NOTES.map(note => <li key={note}>{note}</li>)}
+
                 </ul>
+
                 <div className="pt-3">
+
                     <button onClick={dismissVersionNotice} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
+
                 </div>
+
             </div>
+
         </div>
+
     </div>
+
 )}
+
  
+
             {isLocked && (
+
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs py-3 px-8 rounded-full z-50 flex items-center gap-3 font-black shadow-2xl animate-bounce">
+
                     <Lock size={16}/> 
+
                     {/* 🟢 安全寫法：用 → 取代 > */}
+
                     <span>請點擊「管理 → 系統設定」完成員工合約！</span>
+
                 </div>
+
             )}
+
         </div>
+
     );
+
 }
+
 export { App as default };
