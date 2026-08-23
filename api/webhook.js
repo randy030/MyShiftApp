@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.5.1 百香雙Q＋常客塑膠袋偏好版
+// TEA TOP LINE 接單 V3.6.0 店員暫停接單＋店休連動版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -1378,6 +1378,510 @@ async function findActiveStaffByLineUserId(
   );
 }
 
+
+function storeOrderSettingsRef() {
+  return getFirestoreDb()
+    .collection('storeOrderSettings')
+    .doc('current');
+}
+
+function getTaipeiNowParts() {
+  const now = new Date();
+
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }
+    ).formatToParts(now);
+
+  const values = {};
+
+  for (const part of parts) {
+    if (
+      [
+        'year',
+        'month',
+        'day',
+        'hour',
+        'minute'
+      ].includes(part.type)
+    ) {
+      values[part.type] = part.value;
+    }
+  }
+
+  return {
+    ...values,
+    dateKey:
+      `${values.year}-${values.month}-${values.day}`,
+    nowMs:
+      Date.now(),
+  };
+}
+
+function getTaipeiNextMidnightMs() {
+  const parts =
+    getTaipeiNowParts();
+
+  // 台灣固定 UTC+8，建立「明日 00:00」的 UTC 時間。
+  const utcMs =
+    Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      16,
+      0,
+      0,
+      0
+    );
+
+  return utcMs;
+}
+
+function formatTaipeiTime(ms) {
+  if (!ms) return '';
+
+  return new Intl.DateTimeFormat(
+    'zh-TW',
+    {
+      timeZone: 'Asia/Taipei',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }
+  ).format(new Date(ms));
+}
+
+async function getTodayShiftState() {
+  const db = getFirestoreDb();
+  const todayStr =
+    getTaipeiDateString();
+
+  const snap =
+    await db.collection('artifacts')
+      .doc('team-shift-pc-v1')
+      .collection('public')
+      .doc('data')
+      .collection('shifts')
+      .doc(todayStr)
+      .get();
+
+  const data =
+    snap.exists
+      ? snap.data() || {}
+      : {};
+
+  return {
+    dateKey: todayStr,
+    isClosed:
+      data.isClosed === true,
+    shiftData: data,
+  };
+}
+
+async function getOrderAcceptanceState() {
+  const shiftState =
+    await getTodayShiftState();
+
+  if (shiftState.isClosed) {
+    return {
+      acceptingOrders: false,
+      source: 'shift_closed',
+      reason: '今日班表設定為店休',
+      resumeAtMs: null,
+      dateKey:
+        shiftState.dateKey,
+    };
+  }
+
+  const ref =
+    storeOrderSettingsRef();
+
+  const snap =
+    await ref.get();
+
+  if (!snap.exists) {
+    return {
+      acceptingOrders: true,
+      source: 'default',
+      reason: '',
+      resumeAtMs: null,
+      dateKey:
+        shiftState.dateKey,
+    };
+  }
+
+  const data =
+    snap.data() || {};
+
+  const resumeAtMs =
+    Number(data.resumeAtMs || 0);
+
+  if (
+    data.acceptingOrders === false &&
+    resumeAtMs > 0 &&
+    Date.now() >= resumeAtMs
+  ) {
+    await ref.set(
+      {
+        acceptingOrders: true,
+        pauseMode: '',
+        pauseReason: '',
+        resumeAtMs: 0,
+        autoResumedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return {
+      acceptingOrders: true,
+      source: 'auto_resumed',
+      reason: '',
+      resumeAtMs: 0,
+      dateKey:
+        shiftState.dateKey,
+    };
+  }
+
+  return {
+    acceptingOrders:
+      data.acceptingOrders !== false,
+    source:
+      data.acceptingOrders === false
+        ? 'manual_pause'
+        : 'manual_open',
+    reason:
+      data.pauseReason || '',
+    pauseMode:
+      data.pauseMode || '',
+    pausedByName:
+      data.pausedByName || '',
+    resumeAtMs:
+      resumeAtMs || null,
+    dateKey:
+      shiftState.dateKey,
+  };
+}
+
+function buildCustomerClosedMessage(state) {
+  if (
+    state.source ===
+    'shift_closed'
+  ) {
+    return [
+      '🏪 今日暫停 LINE 接單',
+      '',
+      '今日門市班表設定為店休，目前無法建立新的 LINE 訂單。',
+      '已成立的訂單不受影響。'
+    ].join('\n');
+  }
+
+  const lines = [
+    '⏸️ LINE 點餐目前暫停接單',
+    ''
+  ];
+
+  if (state.reason) {
+    lines.push(
+      `原因：${state.reason}`
+    );
+  }
+
+  if (state.resumeAtMs) {
+    lines.push(
+      `預計恢復：${formatTaipeiTime(state.resumeAtMs)}`
+    );
+  }
+
+  lines.push('');
+  lines.push(
+    '目前不接受新的訂單，已成立的訂單仍會正常處理。'
+  );
+
+  return lines.join('\n');
+}
+
+function makeOrderControlMessage(state) {
+  let text;
+
+  if (
+    state.source ===
+    'shift_closed'
+  ) {
+    text = [
+      '🏪 LINE 接單控制',
+      '',
+      '目前狀態：🔴 班表店休',
+      '今日班表 isClosed = true。',
+      '',
+      '店員不能從 LINE 解除班表店休；請先由管理員在班表解除店休。'
+    ].join('\n');
+
+    return {
+      type: 'text',
+      text
+    };
+  }
+
+  if (state.acceptingOrders) {
+    text = [
+      '🏪 LINE 接單控制',
+      '',
+      '目前狀態：🟢 正常接單',
+      '',
+      '只有今天上班的人員可以操作。'
+    ].join('\n');
+  } else {
+    text = [
+      '🏪 LINE 接單控制',
+      '',
+      '目前狀態：🔴 暫停接單',
+      state.reason
+        ? `原因：${state.reason}`
+        : '',
+      state.pausedByName
+        ? `操作人：${state.pausedByName}`
+        : '',
+      state.resumeAtMs
+        ? `預計恢復：${formatTaipeiTime(state.resumeAtMs)}`
+        : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  return {
+    type: 'text',
+    text,
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '⏱ 暫停30分',
+            data: 'store_pause|30',
+            displayText:
+              '暫停LINE接單30分鐘'
+          }
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '⏱ 暫停1小時',
+            data: 'store_pause|60',
+            displayText:
+              '暫停LINE接單1小時'
+          }
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '🌙 今日停止',
+            data: 'store_pause|today',
+            displayText:
+              '今日停止LINE接單'
+          }
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '🟢 恢復接單',
+            data: 'store_resume',
+            displayText:
+              '恢復LINE接單'
+          }
+        }
+      ]
+    }
+  };
+}
+
+async function notifyOtherWorkingStaff(
+  actorLineUserId,
+  text
+) {
+  const staff =
+    await getActiveStaffWithLineIds();
+
+  const targetIds =
+    [...new Set(
+      staff
+        .map(
+          member =>
+            member.lineUserId
+        )
+        .filter(
+          id =>
+            id &&
+            id !== actorLineUserId
+        )
+    )];
+
+  if (
+    targetIds.length === 0
+  ) {
+    return;
+  }
+
+  try {
+    await sendLinePush(
+      targetIds,
+      [{
+        type: 'text',
+        text
+      }]
+    );
+  } catch (error) {
+    console.error(
+      '接單狀態廣播失敗',
+      error
+    );
+  }
+}
+
+async function pauseStoreOrders(
+  staff,
+  mode
+) {
+  const shiftState =
+    await getTodayShiftState();
+
+  if (shiftState.isClosed) {
+    throw new Error(
+      '今日班表已設定店休，不需要另外暫停 LINE 接單。'
+    );
+  }
+
+  const nowMs =
+    Date.now();
+
+  let resumeAtMs = 0;
+  let pauseReason = '';
+  let pauseMode = '';
+
+  if (mode === '30') {
+    resumeAtMs =
+      nowMs + 30 * 60 * 1000;
+    pauseReason =
+      '訂單量較大，暫停30分鐘';
+    pauseMode =
+      '30_minutes';
+  } else if (mode === '60') {
+    resumeAtMs =
+      nowMs + 60 * 60 * 1000;
+    pauseReason =
+      '訂單量較大，暫停1小時';
+    pauseMode =
+      '60_minutes';
+  } else if (
+    mode === 'today'
+  ) {
+    resumeAtMs =
+      getTaipeiNextMidnightMs();
+    pauseReason =
+      '今日停止接單';
+    pauseMode =
+      'today';
+  } else {
+    throw new Error(
+      '不支援的暫停模式。'
+    );
+  }
+
+  await storeOrderSettingsRef()
+    .set(
+      {
+        acceptingOrders: false,
+        pauseMode,
+        pauseReason,
+        pausedByUid:
+          staff.uid,
+        pausedByName:
+          staff.name,
+        pausedByRole:
+          staff.role || '',
+        pausedByLineUserId:
+          staff.lineUserId,
+        pausedAt:
+          FieldValue.serverTimestamp(),
+        pausedAtMs:
+          nowMs,
+        resumeAtMs,
+        pauseDateKey:
+          getTaipeiDateString(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+  return {
+    acceptingOrders: false,
+    source: 'manual_pause',
+    reason: pauseReason,
+    pauseMode,
+    pausedByName:
+      staff.name,
+    resumeAtMs,
+  };
+}
+
+async function resumeStoreOrders(
+  staff
+) {
+  const shiftState =
+    await getTodayShiftState();
+
+  if (shiftState.isClosed) {
+    throw new Error(
+      '今日班表設定為店休。請先由管理員在班表解除店休後，才能恢復 LINE 接單。'
+    );
+  }
+
+  await storeOrderSettingsRef()
+    .set(
+      {
+        acceptingOrders: true,
+        pauseMode: '',
+        pauseReason: '',
+        resumeAtMs: 0,
+        resumedByUid:
+          staff.uid,
+        resumedByName:
+          staff.name,
+        resumedByRole:
+          staff.role || '',
+        resumedByLineUserId:
+          staff.lineUserId,
+        resumedAt:
+          FieldValue.serverTimestamp(),
+        resumedAtMs:
+          Date.now(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+  return {
+    acceptingOrders: true,
+    source: 'manual_open',
+  };
+}
+
 function buildStaffOrderSummary(orderDoc) {
   const lines = [
     '🔔 【新 LINE 訂單】',
@@ -2477,13 +2981,12 @@ async function proceedToBagStage(
       });
     }
 
-    messages.push({
-      type: 'text',
-      text:
-        buildFinalDraftText(
-          updated
-        )
-    });
+    messages.push(
+      makeFinalConfirmationMessage(
+        draftId,
+        updated
+      )
+    );
 
     await replyLineMessages(
       replyToken,
@@ -2680,6 +3183,47 @@ function buildFinalDraftText(draftDoc) {
     .slice(0, 4800);
 }
 
+function makeFinalConfirmationMessage(
+  draftId,
+  draftDoc
+) {
+  return {
+    type: 'text',
+    text: buildFinalDraftText(draftDoc),
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '✅ 確認訂單',
+            data: `confirmdraft|${draftId}`,
+            displayText: '確認訂單'
+          }
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '✏️ 修改訂單',
+            data: `modifydraft|${draftId}`,
+            displayText: '修改訂單'
+          }
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '❌ 取消',
+            data: `canceldraft|${draftId}`,
+            displayText: '取消訂單'
+          }
+        }
+      ]
+    }
+  };
+}
+
 async function replyFinalConfirmation(replyToken, draftId) {
   const draftDoc = await getDraftDocument(draftId);
 
@@ -2692,41 +3236,12 @@ async function replyFinalConfirmation(replyToken, draftId) {
 
   return replyLineMessages(
     replyToken,
-    [{
-      type: 'text',
-      text: buildFinalDraftText(draftDoc),
-      quickReply: {
-        items: [
-          {
-            type: 'action',
-            action: {
-              type: 'postback',
-              label: '✅ 確認訂單',
-              data: `confirmdraft|${draftId}`,
-              displayText: '確認訂單'
-            }
-          },
-          {
-            type: 'action',
-            action: {
-              type: 'postback',
-              label: '✏️ 修改訂單',
-              data: `modifydraft|${draftId}`,
-              displayText: '修改訂單'
-            }
-          },
-          {
-            type: 'action',
-            action: {
-              type: 'postback',
-              label: '❌ 取消',
-              data: `canceldraft|${draftId}`,
-              displayText: '取消訂單'
-            }
-          }
-        ]
-      }
-    }]
+    [
+      makeFinalConfirmationMessage(
+        draftId,
+        draftDoc
+      )
+    ]
   );
 }
 
@@ -2932,15 +3447,12 @@ export default async function handler(req, res) {
                     text:
                       '♻️ 已記住：之後這個 LINE 帳號預設都不需要塑膠袋。\n如要取消，可輸入「恢復詢問塑膠袋」。'
                   },
-                  {
-                    type: 'text',
-                    text:
-                      buildFinalDraftText(
-                        await getDraftDocument(
-                          draftId
-                        )
-                      )
-                  }
+                  makeFinalConfirmationMessage(
+                    draftId,
+                    await getDraftDocument(
+                      draftId
+                    )
+                  )
                 ]
               );
             } catch (error) {
@@ -2998,6 +3510,144 @@ export default async function handler(req, res) {
               replyToken,
               draftId
             );
+            continue;
+          }
+
+          if (data.startsWith('store_pause|')) {
+            const mode =
+              data.split('|')[1] || '';
+
+            const currentState =
+              await getOrderAcceptanceState();
+
+            if (
+              currentState.source ===
+              'shift_closed'
+            ) {
+              await replyLineMessage(
+                replyToken,
+                buildCustomerClosedMessage(
+                  currentState
+                )
+              );
+              continue;
+            }
+
+            const staff =
+              await findActiveStaffByLineUserId(
+                lineUserId
+              );
+
+            if (!staff) {
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 只有今天上班且已綁定 LINE ID 的店員可以暫停接單。'
+              );
+              continue;
+            }
+
+            try {
+              const state =
+                await pauseStoreOrders(
+                  staff,
+                  mode
+                );
+
+              const replyText = [
+                '🔴 LINE 接單已暫停',
+                '',
+                `操作人：${staff.name}`,
+                `原因：${state.reason}`,
+                state.resumeAtMs
+                  ? `預計恢復：${formatTaipeiTime(state.resumeAtMs)}`
+                  : ''
+              ].filter(Boolean).join('\n');
+
+              await replyLineMessage(
+                replyToken,
+                replyText
+              );
+
+              await notifyOtherWorkingStaff(
+                lineUserId,
+                replyText
+              );
+            } catch (error) {
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 無法暫停接單。',
+                  `原因：${error.message || '未知錯誤'}`
+                ].join('\n')
+              );
+            }
+
+            continue;
+          }
+
+          if (data === 'store_resume') {
+            const currentState =
+              await getOrderAcceptanceState();
+
+            if (
+              currentState.source ===
+              'shift_closed'
+            ) {
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 今日班表設定為店休。',
+                  '店員不能從 LINE 直接解除。',
+                  '請先由管理員在班表解除店休。'
+                ].join('\n')
+              );
+              continue;
+            }
+
+            const staff =
+              await findActiveStaffByLineUserId(
+                lineUserId
+              );
+
+            if (!staff) {
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 只有今天上班且已綁定 LINE ID 的店員可以恢復接單。'
+              );
+              continue;
+            }
+
+            try {
+              await resumeStoreOrders(
+                staff
+              );
+
+              const replyText = [
+                '🟢 LINE 接單已恢復',
+                '',
+                `操作人：${staff.name}`,
+                '現在可接受新的 LINE 訂單。'
+              ].join('\n');
+
+              await replyLineMessage(
+                replyToken,
+                replyText
+              );
+
+              await notifyOtherWorkingStaff(
+                lineUserId,
+                replyText
+              );
+            } catch (error) {
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 無法恢復接單。',
+                  `原因：${error.message || '未知錯誤'}`
+                ].join('\n')
+              );
+            }
+
             continue;
           }
 
@@ -3248,6 +3898,25 @@ export default async function handler(req, res) {
             const draftId =
               data.slice('confirmdraft|'.length);
 
+            const acceptanceState =
+              await getOrderAcceptanceState();
+
+            if (
+              !acceptanceState.acceptingOrders
+            ) {
+              await replyLineMessage(
+                replyToken,
+                [
+                  buildCustomerClosedMessage(
+                    acceptanceState
+                  ),
+                  '',
+                  '這份草稿仍會保留，但暫停期間不能正式送出。'
+                ].join('\n')
+              );
+              continue;
+            }
+
             try {
               const result =
                 await createFormalOrderFromDraft(
@@ -3408,6 +4077,56 @@ export default async function handler(req, res) {
         }
 
         if (!userMsg) continue;
+
+        if (
+          [
+            '接單控制',
+            'LINE接單控制',
+            'line接單控制',
+            '接單狀態'
+          ].includes(userMsg)
+        ) {
+          const state =
+            await getOrderAcceptanceState();
+
+          if (
+            state.source ===
+            'shift_closed'
+          ) {
+            await replyLineMessages(
+              replyToken,
+              [
+                makeOrderControlMessage(
+                  state
+                )
+              ]
+            );
+            continue;
+          }
+
+          const staff =
+            await findActiveStaffByLineUserId(
+              userId
+            );
+
+          if (!staff) {
+            await replyLineMessage(
+              replyToken,
+              '⚠️ 只有今天上班且已綁定 LINE ID 的店員可以操作接單控制。'
+            );
+            continue;
+          }
+
+          await replyLineMessages(
+            replyToken,
+            [
+              makeOrderControlMessage(
+                state
+              )
+            ]
+          );
+          continue;
+        }
 
         // V3.2：如果使用者正在「再加1杯」或「重新輸入完整訂單」
         // 優先處理該 Session，不建立新的獨立草稿。
@@ -3633,6 +4352,21 @@ export default async function handler(req, res) {
         }
 
         if (PASSTHROUGH_KEYWORDS.has(userMsg)) {
+          continue;
+        }
+
+        const acceptanceState =
+          await getOrderAcceptanceState();
+
+        if (
+          !acceptanceState.acceptingOrders
+        ) {
+          await replyLineMessage(
+            replyToken,
+            buildCustomerClosedMessage(
+              acceptanceState
+            )
+          );
           continue;
         }
 
