@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.1 加料＋買10送1計算測試版
+// TEA TOP LINE 接單 V3.2 優惠互動＋塑膠袋測試版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -490,6 +490,322 @@ function toppingsTotal(toppings) {
   );
 }
 
+
+// ==========================================
+// V3.2 LINE 訂單互動 Session
+// ==========================================
+
+function getLineSessionRef(lineUserId) {
+  return getFirestoreDb()
+    .collection('lineOrderSessions')
+    .doc(lineUserId);
+}
+
+async function setLineSession(lineUserId, data) {
+  await getLineSessionRef(lineUserId).set({
+    ...data,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function clearLineSession(lineUserId) {
+  await getLineSessionRef(lineUserId).delete().catch(() => {});
+}
+
+async function getLineSession(lineUserId) {
+  const snap = await getLineSessionRef(lineUserId).get();
+  return snap.exists ? snap.data() : null;
+}
+
+function normalizeStoredDrafts(storedDrafts) {
+  return (storedDrafts || []).map(draft => ({
+    fulfillment: draft.fulfillment || '未指定',
+    time: draft.time || '未指定',
+    address: draft.address || '',
+    items: (draft.items || []).map(item => ({
+      productId: item.productId || '',
+      name: item.name || '',
+      qty: Number(item.qty || 0),
+      size: item.size || '',
+      sugar: item.sugar || '',
+      ice: item.ice || '',
+      temp: item.temp || '冷',
+      price: Number(item.basePrice ?? item.price ?? 0),
+      basePrice: Number(item.basePrice ?? item.price ?? 0),
+      toppings: Array.isArray(item.toppings) ? item.toppings : [],
+      toppingsTotal: Number(item.toppingsTotal || 0),
+      unitFinalPrice: Number(
+        item.unitFinalPrice ??
+        (
+          Number(item.basePrice ?? item.price ?? 0) +
+          Number(item.toppingsTotal || 0)
+        )
+      ),
+      issues: Array.isArray(item.issues) ? item.issues : [],
+    })),
+  }));
+}
+
+function mergeDrafts(existingDrafts, addedDrafts) {
+  const normalized = normalizeStoredDrafts(existingDrafts);
+  const additions = normalizeStoredDrafts(
+    serializeDraftsForFirestore(addedDrafts)
+  );
+
+  // 優惠「再加1杯」沿用原訂單的取餐方式 / 時間 / 地址
+  // 新增的那一杯只併進第一張訂單。
+  if (normalized.length === 0) {
+    return additions;
+  }
+
+  const newItems = additions.flatMap(d => d.items || []);
+  normalized[0].items.push(...newItems);
+  return normalized;
+}
+
+async function updateDraftDocument(draftId, drafts, extra = {}) {
+  const db = getFirestoreDb();
+  const draftRef = db.collection('orderDrafts').doc(draftId);
+  const snap = await draftRef.get();
+
+  if (!snap.exists) {
+    throw new Error(`找不到草稿 ${draftId}`);
+  }
+
+  const summary = summarizeDrafts(drafts);
+  const current = snap.data() || {};
+  const bagQty = Number(extra.bagQty ?? current.bags?.qty ?? 0);
+  const bagUnitPrice = 1;
+  const bagSubtotal = bagQty * bagUnitPrice;
+
+  await draftRef.set({
+    drafts: serializeDraftsForFirestore(drafts),
+    drinkCount: summary.drinkCount,
+    originalTotal: summary.originalTotal,
+    hasIssue: summary.hasIssue,
+    promotion: summary.promotion,
+    discountAmount: summary.discountAmount,
+    bags: {
+      qty: bagQty,
+      unitPrice: bagUnitPrice,
+      subtotal: bagSubtotal,
+    },
+    finalTotal: summary.finalTotal + bagSubtotal,
+    updatedAt: FieldValue.serverTimestamp(),
+    ...extra.fields,
+  }, { merge: true });
+
+  return {
+    draftId,
+    summary,
+    bagQty,
+    bagSubtotal,
+    finalTotal: summary.finalTotal + bagSubtotal,
+  };
+}
+
+async function getDraftDocument(draftId) {
+  const snap = await getFirestoreDb()
+    .collection('orderDrafts')
+    .doc(draftId)
+    .get();
+
+  if (!snap.exists) return null;
+
+  return {
+    id: snap.id,
+    ...snap.data(),
+  };
+}
+
+async function replyPromoChoice(replyToken, text, draftId) {
+  return replyLineMessages(
+    replyToken,
+    [{
+      type: 'text',
+      text,
+      quickReply: {
+        items: [
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '➕ 再加一杯',
+              data: `promo_add|${draftId}`,
+              displayText: '再加一杯'
+            }
+          },
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '直接結帳',
+              data: `promo_checkout|${draftId}`,
+              displayText: '直接結帳'
+            }
+          },
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '❌ 取消',
+              data: `canceldraft|${draftId}`,
+              displayText: '取消訂單'
+            }
+          }
+        ]
+      }
+    }]
+  );
+}
+
+async function replyBagQuestion(replyToken, draftId) {
+  return replyLineMessages(
+    replyToken,
+    [{
+      type: 'text',
+      text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
+      quickReply: {
+        items: [0, 1, 2, 3].map(qty => ({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: qty === 0 ? '不用' : `${qty}個`,
+            data: `bag|${draftId}|${qty}`,
+            displayText:
+              qty === 0
+                ? '不用塑膠袋'
+                : `塑膠袋${qty}個`
+          }
+        }))
+      }
+    }]
+  );
+}
+
+function buildFinalDraftText(draftDoc) {
+  const drafts = normalizeStoredDrafts(draftDoc.drafts || []);
+  const output = ['🧋 最終訂單確認', ''];
+
+  for (const draft of drafts) {
+    for (const item of draft.items || []) {
+      const unitFinalPrice =
+        Number(item.unitFinalPrice || 0);
+      const subtotal =
+        unitFinalPrice * Number(item.qty || 0);
+
+      output.push(
+        `${item.name} ${item.size} ×${item.qty}　$${subtotal}`
+      );
+
+      const specs = [];
+      if (item.sugar) specs.push(item.sugar);
+      if (item.temp && item.temp !== '冷') {
+        specs.push(item.temp);
+      } else if (item.ice) {
+        specs.push(item.ice);
+      }
+      if (specs.length) {
+        output.push(`　${specs.join(' / ')}`);
+      }
+
+      for (const topping of item.toppings || []) {
+        const toppingSubtotal =
+          Number(topping.unitPrice || 0) *
+          Number(topping.qty || 0);
+
+        output.push(
+          `　＋${topping.name}` +
+          `${Number(topping.qty || 0) > 1 ? ` ×${topping.qty}` : ''}` +
+          `　+$${toppingSubtotal}`
+        );
+      }
+    }
+
+    output.push(
+      draft.fulfillment === '外送'
+        ? `📍 外送${draft.address ? `｜${draft.address}` : ''}`
+        : '📍 自取'
+    );
+    output.push(`⏱ ${draft.time || '未指定'}`);
+  }
+
+  output.push('');
+  output.push(`🥤 飲品共 ${Number(draftDoc.drinkCount || 0)} 杯`);
+  output.push(`原價：$${Number(draftDoc.originalTotal || 0)}`);
+
+  const freeCount =
+    Number(draftDoc.promotion?.freeDrinkCount || 0);
+  const discount =
+    Number(draftDoc.discountAmount || 0);
+
+  if (freeCount > 0) {
+    output.push(`🎁 買10送1 ×${freeCount}：-$${discount}`);
+  }
+
+  const bagQty = Number(draftDoc.bags?.qty || 0);
+  if (bagQty > 0) {
+    output.push(`🛍️ 塑膠袋 ×${bagQty}：+$${bagQty}`);
+  }
+
+  output.push('----------------');
+  output.push(`💰 應收：$${Number(draftDoc.finalTotal || 0)}`);
+  output.push('');
+  output.push('🧪 目前仍是測試模式，尚未建立正式 orders 訂單。');
+
+  return output.join('\n').slice(0, 4800);
+}
+
+async function replyFinalConfirmation(replyToken, draftId) {
+  const draftDoc = await getDraftDocument(draftId);
+
+  if (!draftDoc) {
+    return replyLineMessage(
+      replyToken,
+      '⚠️ 找不到這份訂單草稿，請重新輸入訂單。'
+    );
+  }
+
+  return replyLineMessages(
+    replyToken,
+    [{
+      type: 'text',
+      text: buildFinalDraftText(draftDoc),
+      quickReply: {
+        items: [
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '✅ 確認訂單',
+              data: `confirmdraft|${draftId}`,
+              displayText: '確認訂單'
+            }
+          },
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '✏️ 修改訂單',
+              data: `modifydraft|${draftId}`,
+              displayText: '修改訂單'
+            }
+          },
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '❌ 取消',
+              data: `canceldraft|${draftId}`,
+              displayText: '取消訂單'
+            }
+          }
+        ]
+      }
+    }]
+  );
+}
+
 // LINE OA 既有自動回覆關鍵字。
 // 這些文字交給 LINE Official Account Manager 原本的自動回覆處理，
 // 避免 Webhook 再多回一則。
@@ -559,48 +875,187 @@ export default async function handler(req, res) {
 
         if (event.type === 'postback') {
           const data = String(event.postback?.data || '');
+          const lineUserId = event.source?.userId || '';
 
-          if (data === 'cancel') {
+          if (data.startsWith('promo_add|')) {
+            const draftId = data.slice('promo_add|'.length);
+
+            const draftDoc = await getDraftDocument(draftId);
+
+            if (!draftDoc) {
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 找不到這份草稿，請重新輸入訂單。'
+              );
+              continue;
+            }
+
+            await getFirestoreDb()
+              .collection('orderDrafts')
+              .doc(draftId)
+              .set({
+                status: 'waiting_add_one',
+                updatedAt: FieldValue.serverTimestamp(),
+              }, { merge: true });
+
+            await setLineSession(lineUserId, {
+              mode: 'waiting_add_one',
+              draftId,
+            });
+
             await replyLineMessage(
               replyToken,
-              '❌ 已取消這份訂單草稿。\n\n目前仍是測試模式，沒有建立任何正式訂單。'
+              [
+                '➕ 好的，請輸入要再加的「1杯飲料」。',
+                '',
+                '例如：',
+                '綠茶一分糖去冰',
+                '奶茶加珍珠微糖微冰',
+                '',
+                '這一階段只接受 1 杯，原本訂單會保留。'
+              ].join('\n')
             );
             continue;
           }
 
-          if (data.startsWith('confirm|')) {
-            const originalMsg = data.slice('confirm|'.length);
-            const drafts = parseOrderMessage(originalMsg);
-            const hasIssue = drafts.some(d =>
-              d.fulfillment === '未指定' ||
-              (d.fulfillment === '外送' && !d.address) ||
-              d.items.some(item => item.issues.length > 0)
+          if (data.startsWith('promo_checkout|')) {
+            const draftId =
+              data.slice('promo_checkout|'.length);
+
+            await getFirestoreDb()
+              .collection('orderDrafts')
+              .doc(draftId)
+              .set({
+                status: 'waiting_bag',
+                updatedAt: FieldValue.serverTimestamp(),
+              }, { merge: true });
+
+            await clearLineSession(lineUserId);
+            await replyBagQuestion(replyToken, draftId);
+            continue;
+          }
+
+          if (data.startsWith('bag|')) {
+            const parts = data.split('|');
+            const draftId = parts[1];
+            const bagQty = Math.max(
+              0,
+              Math.min(99, Number(parts[2] || 0))
             );
 
-            if (!drafts.length || hasIssue) {
+            const draftDoc =
+              await getDraftDocument(draftId);
+
+            if (!draftDoc) {
               await replyLineMessage(
                 replyToken,
-                '⚠️ 這份草稿仍有缺漏或不符合商品規則，暫時不能確認。\n請重新輸入完整訂單內容。'
+                '⚠️ 找不到這份草稿，請重新輸入訂單。'
               );
               continue;
             }
+
+            const runtimeDrafts =
+              normalizeStoredDrafts(draftDoc.drafts || []);
+
+            await updateDraftDocument(
+              draftId,
+              runtimeDrafts,
+              {
+                bagQty,
+                fields: {
+                  status: 'waiting_confirm',
+                },
+              }
+            );
+
+            await clearLineSession(lineUserId);
+            await replyFinalConfirmation(
+              replyToken,
+              draftId
+            );
+            continue;
+          }
+
+          if (data.startsWith('confirmdraft|')) {
+            const draftId =
+              data.slice('confirmdraft|'.length);
+
+            await getFirestoreDb()
+              .collection('orderDrafts')
+              .doc(draftId)
+              .set({
+                status: 'confirmed_test',
+                confirmedTestAt:
+                  FieldValue.serverTimestamp(),
+                updatedAt:
+                  FieldValue.serverTimestamp(),
+              }, { merge: true });
+
+            await clearLineSession(lineUserId);
 
             await replyLineMessage(
               replyToken,
               [
                 '✅ 已收到「確認訂單」操作。',
                 '',
-                '目前是互動測試模式，所以尚未寫入正式訂單資料庫。',
-                '下一階段才會把確認後的訂單寫入 Firestore，並通知店員後台。'
+                '目前仍是 V3.2 測試模式，',
+                '尚未建立正式 orders 訂單。',
+                '下一階段才會轉成正式訂單並通知店員後台。'
               ].join('\n')
             );
             continue;
           }
 
-          if (data.startsWith('modify|')) {
+          if (data.startsWith('modifydraft|')) {
+            const draftId =
+              data.slice('modifydraft|'.length);
+
+            await setLineSession(lineUserId, {
+              mode: 'replace_order',
+              draftId,
+            });
+
             await replyLineMessage(
               replyToken,
-              '✏️ 請直接修改輸入框中的訂單內容後重新送出。'
+              [
+                '✏️ 請重新輸入完整訂單內容。',
+                '送出後會覆蓋目前這份草稿。',
+                '',
+                '目前測試版請把飲品、糖冰、自取／外送資料一次輸入完整。'
+              ].join('\n')
+            );
+            continue;
+          }
+
+          if (data.startsWith('canceldraft|')) {
+            const draftId =
+              data.slice('canceldraft|'.length);
+
+            await getFirestoreDb()
+              .collection('orderDrafts')
+              .doc(draftId)
+              .set({
+                status: 'cancelled',
+                cancelledAt:
+                  FieldValue.serverTimestamp(),
+                updatedAt:
+                  FieldValue.serverTimestamp(),
+              }, { merge: true });
+
+            await clearLineSession(lineUserId);
+
+            await replyLineMessage(
+              replyToken,
+              '❌ 已取消這份訂單草稿。\n目前沒有建立正式訂單。'
+            );
+            continue;
+          }
+
+          // 保留舊 V2 測試 postback 相容性
+          if (data === 'cancel') {
+            await replyLineMessage(
+              replyToken,
+              '❌ 已取消這份訂單草稿。\n\n目前仍是測試模式，沒有建立任何正式訂單。'
             );
             continue;
           }
@@ -619,6 +1074,159 @@ export default async function handler(req, res) {
         const userId = event.source?.userId || '';
 
         if (!userMsg) continue;
+
+        // V3.2：如果使用者正在「再加1杯」或「重新輸入完整訂單」
+        // 優先處理該 Session，不建立新的獨立草稿。
+        const activeSession =
+          await getLineSession(userId);
+
+        if (
+          activeSession?.mode === 'waiting_add_one' &&
+          activeSession?.draftId
+        ) {
+          const addedDrafts =
+            parseOrderMessage(userMsg);
+
+          const addedSummary =
+            summarizeDrafts(addedDrafts);
+
+          if (
+            addedDrafts.length === 0 ||
+            addedSummary.hasIssue
+          ) {
+            await replyLineMessage(
+              replyToken,
+              '⚠️ 新增的飲料資料不完整，請重新輸入「1杯」完整飲料內容。'
+            );
+            continue;
+          }
+
+          if (addedSummary.drinkCount !== 1) {
+            await replyLineMessage(
+              replyToken,
+              `⚠️ 目前辨識到 ${addedSummary.drinkCount} 杯。\n這一步只需要再加 1 杯，請重新輸入。`
+            );
+            continue;
+          }
+
+          const draftDoc =
+            await getDraftDocument(
+              activeSession.draftId
+            );
+
+          if (!draftDoc) {
+            await clearLineSession(userId);
+            await replyLineMessage(
+              replyToken,
+              '⚠️ 原本的訂單草稿已不存在，請重新輸入完整訂單。'
+            );
+            continue;
+          }
+
+          const mergedDrafts =
+            mergeDrafts(
+              draftDoc.drafts || [],
+              addedDrafts
+            );
+
+          const updated =
+            await updateDraftDocument(
+              activeSession.draftId,
+              mergedDrafts,
+              {
+                fields: {
+                  status: 'waiting_bag',
+                  lastAddedMessage: userMsg,
+                },
+              }
+            );
+
+          await clearLineSession(userId);
+
+          const addedName =
+            addedDrafts[0]?.items?.[0]?.name ||
+            '飲料';
+
+          await replyLineMessage(
+            replyToken,
+            [
+              `✅ 已加入：${addedName} ×1`,
+              `🥤 現在共 ${updated.summary.drinkCount} 杯`,
+              updated.summary.promotion.freeDrinkCount > 0
+                ? `🎁 買10送1 ×${updated.summary.promotion.freeDrinkCount}，折抵 $${updated.summary.promotion.discountAmount}`
+                : '',
+              `💰 飲品優惠後：$${updated.summary.finalTotal}`
+            ].filter(Boolean).join('\n')
+          );
+
+          await replyBagQuestion(
+            replyToken,
+            activeSession.draftId
+          );
+          continue;
+        }
+
+        if (
+          activeSession?.mode === 'replace_order' &&
+          activeSession?.draftId
+        ) {
+          const replacementDrafts =
+            parseOrderMessage(userMsg);
+
+          const replacementSummary =
+            summarizeDrafts(replacementDrafts);
+
+          if (
+            replacementDrafts.length === 0 ||
+            replacementSummary.hasIssue
+          ) {
+            await replyLineMessage(
+              replyToken,
+              '⚠️ 新訂單資料仍有缺漏，請重新輸入完整內容。'
+            );
+            continue;
+          }
+
+          await updateDraftDocument(
+            activeSession.draftId,
+            replacementDrafts,
+            {
+              bagQty: 0,
+              fields: {
+                status:
+                  replacementSummary.promotion.shouldRemindAddOne
+                    ? 'waiting_promo_choice'
+                    : 'waiting_bag',
+                rawMessage: userMsg,
+              },
+            }
+          );
+
+          await clearLineSession(userId);
+
+          const replacementText =
+            buildDraftReply(replacementDrafts);
+
+          if (
+            replacementSummary.promotion.shouldRemindAddOne
+          ) {
+            await replyPromoChoice(
+              replyToken,
+              replacementText,
+              activeSession.draftId
+            );
+          } else {
+            await replyLineMessage(
+              replyToken,
+              replacementText
+            );
+            await replyBagQuestion(
+              replyToken,
+              activeSession.draftId
+            );
+          }
+          continue;
+        }
 
         const normalizedIdCommand = userMsg
           .replace(/[’'`]/g, '')
@@ -689,19 +1297,58 @@ export default async function handler(req, res) {
 
         const replyText =
           buildDraftReply(drafts) +
-          `\n\n🗃️ V3.0 測試草稿：${savedDraft.draftId}`;
+          `\n\n🗃️ 草稿編號：${savedDraft.draftId}`;
 
-        const hasIssue = drafts.some(d =>
-          d.fulfillment === '未指定' ||
-          (d.fulfillment === '外送' && !d.address) ||
-          d.items.some(item => item.issues.length > 0)
+        const currentSummary =
+          summarizeDrafts(drafts);
+
+        if (currentSummary.hasIssue) {
+          await replyOrderDraft(
+            replyToken,
+            replyText,
+            userMsg,
+            true
+          );
+          continue;
+        }
+
+        if (
+          currentSummary.promotion.shouldRemindAddOne
+        ) {
+          await getFirestoreDb()
+            .collection('orderDrafts')
+            .doc(savedDraft.draftId)
+            .set({
+              status: 'waiting_promo_choice',
+              updatedAt:
+                FieldValue.serverTimestamp(),
+            }, { merge: true });
+
+          await replyPromoChoice(
+            replyToken,
+            replyText,
+            savedDraft.draftId
+          );
+          continue;
+        }
+
+        await getFirestoreDb()
+          .collection('orderDrafts')
+          .doc(savedDraft.draftId)
+          .set({
+            status: 'waiting_bag',
+            updatedAt:
+              FieldValue.serverTimestamp(),
+          }, { merge: true });
+
+        await replyLineMessage(
+          replyToken,
+          replyText
         );
 
-        await replyOrderDraft(
+        await replyBagQuestion(
           replyToken,
-          replyText,
-          userMsg,
-          hasIssue
+          savedDraft.draftId
         );
       }
 
