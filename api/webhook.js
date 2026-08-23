@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.2.3 多訂單＋數量語意修正版
+// TEA TOP LINE 接單 V3.2.4 多訂單加杯目標修正版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -639,20 +639,41 @@ function normalizeStoredDrafts(storedDrafts) {
   }));
 }
 
-function mergeDrafts(existingDrafts, addedDrafts) {
-  const normalized = normalizeStoredDrafts(existingDrafts);
-  const additions = normalizeStoredDrafts(
-    serializeDraftsForFirestore(addedDrafts)
-  );
+function mergeDrafts(
+  existingDrafts,
+  addedDrafts,
+  targetDraftIndex = 0
+) {
+  const normalized =
+    normalizeStoredDrafts(existingDrafts);
 
-  // 優惠「再加1杯」沿用原訂單的取餐方式 / 時間 / 地址
-  // 新增的那一杯只併進第一張訂單。
+  const additions =
+    normalizeStoredDrafts(
+      serializeDraftsForFirestore(addedDrafts)
+    );
+
   if (normalized.length === 0) {
     return additions;
   }
 
-  const newItems = additions.flatMap(d => d.items || []);
-  normalized[0].items.push(...newItems);
+  const safeIndex =
+    Math.max(
+      0,
+      Math.min(
+        normalized.length - 1,
+        Number(targetDraftIndex || 0)
+      )
+    );
+
+  const newItems =
+    additions.flatMap(
+      d => d.items || []
+    );
+
+  normalized[safeIndex].items.push(
+    ...newItems
+  );
+
   return normalized;
 }
 
@@ -711,43 +732,77 @@ async function getDraftDocument(draftId) {
   };
 }
 
-async function replyPromoChoice(replyToken, text, draftId) {
+async function replyPromoChoice(
+  replyToken,
+  text,
+  draftId,
+  promotion
+) {
+  const reminderDrafts =
+    (promotion?.perDraft || [])
+      .filter(p => p.shouldRemindAddOne);
+
+  const items = [];
+
+  if (reminderDrafts.length === 0) {
+    items.push({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: '直接結帳',
+        data: `promo_checkout|${draftId}`,
+        displayText: '直接結帳'
+      }
+    });
+  } else {
+    for (const promo of reminderDrafts.slice(0, 8)) {
+      const label =
+        reminderDrafts.length === 1
+          ? '➕ 再加一杯'
+          : `➕ 訂單${promo.draftIndex + 1}加1杯`;
+
+      items.push({
+        type: 'action',
+        action: {
+          type: 'postback',
+          label,
+          data:
+            `promo_add|${draftId}|${promo.draftIndex}`,
+          displayText:
+            reminderDrafts.length === 1
+              ? '再加一杯'
+              : `訂單${promo.draftIndex + 1}再加一杯`
+        }
+      });
+    }
+
+    items.push({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: '直接結帳',
+        data: `promo_checkout|${draftId}`,
+        displayText: '直接結帳'
+      }
+    });
+  }
+
+  items.push({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: '❌ 取消',
+      data: `canceldraft|${draftId}`,
+      displayText: '取消訂單'
+    }
+  });
+
   return replyLineMessages(
     replyToken,
     [{
       type: 'text',
       text,
-      quickReply: {
-        items: [
-          {
-            type: 'action',
-            action: {
-              type: 'postback',
-              label: '➕ 再加一杯',
-              data: `promo_add|${draftId}`,
-              displayText: '再加一杯'
-            }
-          },
-          {
-            type: 'action',
-            action: {
-              type: 'postback',
-              label: '直接結帳',
-              data: `promo_checkout|${draftId}`,
-              displayText: '直接結帳'
-            }
-          },
-          {
-            type: 'action',
-            action: {
-              type: 'postback',
-              label: '❌ 取消',
-              data: `canceldraft|${draftId}`,
-              displayText: '取消訂單'
-            }
-          }
-        ]
-      }
+      quickReply: { items }
     }]
   );
 }
@@ -777,39 +832,74 @@ async function replyBagQuestion(replyToken, draftId) {
 }
 
 function buildFinalDraftText(draftDoc) {
-  const drafts = normalizeStoredDrafts(draftDoc.drafts || []);
-  const output = ['🧋 最終訂單確認', ''];
+  const drafts =
+    normalizeStoredDrafts(
+      draftDoc.drafts || []
+    );
 
-  for (const draft of drafts) {
+  const output = [
+    '🧋 最終訂單確認',
+    ''
+  ];
+
+  drafts.forEach((draft, draftIndex) => {
+    const isMulti = drafts.length > 1;
+
+    if (isMulti) {
+      output.push(`【訂單 ${draftIndex + 1}】`);
+    }
+
+    let draftOriginalTotal = 0;
+
     for (const item of draft.items || []) {
       const unitFinalPrice =
         Number(item.unitFinalPrice || 0);
+
       const subtotal =
-        unitFinalPrice * Number(item.qty || 0);
+        unitFinalPrice *
+        Number(item.qty || 0);
+
+      draftOriginalTotal += subtotal;
 
       output.push(
         `${item.name} ${item.size} ×${item.qty}　$${subtotal}`
       );
 
       const specs = [];
-      if (item.sugar) specs.push(item.sugar);
-      if (item.temp && item.temp !== '冷') {
+
+      if (item.sugar) {
+        specs.push(item.sugar);
+      }
+
+      if (
+        item.temp &&
+        item.temp !== '冷'
+      ) {
         specs.push(item.temp);
       } else if (item.ice) {
         specs.push(item.ice);
       }
+
       if (specs.length) {
-        output.push(`　${specs.join(' / ')}`);
+        output.push(
+          `　${specs.join(' / ')}`
+        );
       }
 
-      for (const topping of item.toppings || []) {
+      for (
+        const topping of item.toppings || []
+      ) {
         const toppingSubtotal =
           Number(topping.unitPrice || 0) *
           Number(topping.qty || 0);
 
         output.push(
           `　＋${topping.name}` +
-          `${Number(topping.qty || 0) > 1 ? ` ×${topping.qty}` : ''}` +
+          `${
+            Number(topping.qty || 0) > 1
+              ? ` ×${topping.qty}`
+              : ''
+          }` +
           `　+$${toppingSubtotal}`
         );
       }
@@ -817,36 +907,73 @@ function buildFinalDraftText(draftDoc) {
 
     output.push(
       draft.fulfillment === '外送'
-        ? `📍 外送${draft.address ? `｜${draft.address}` : ''}`
+        ? `📍 外送${
+            draft.address
+              ? `｜${draft.address}`
+              : ''
+          }`
         : '📍 自取'
     );
-    output.push(`⏱ ${draft.time || '未指定'}`);
-  }
+
+    output.push(
+      `⏱ ${draft.time || '未指定'}`
+    );
+
+    const promo =
+      calculatePromotionForItems(
+        draft.items || []
+      );
+
+    output.push(
+      `🥤 本單 ${promo.drinkCount} 杯`
+    );
+
+    output.push(
+      `原價：$${draftOriginalTotal}`
+    );
+
+    if (promo.freeDrinkCount > 0) {
+      output.push(
+        `🎁 買10送1 ×${promo.freeDrinkCount}：-$${promo.discountAmount}`
+      );
+    }
+
+    output.push(
+      `本單優惠後：$${
+        draftOriginalTotal -
+        promo.discountAmount
+      }`
+    );
+
+    if (draftIndex < drafts.length - 1) {
+      output.push('');
+    }
+  });
 
   output.push('');
-  output.push(`🥤 飲品共 ${Number(draftDoc.drinkCount || 0)} 杯`);
-  output.push(`原價：$${Number(draftDoc.originalTotal || 0)}`);
 
-  const freeCount =
-    Number(draftDoc.promotion?.freeDrinkCount || 0);
-  const discount =
-    Number(draftDoc.discountAmount || 0);
+  const bagQty =
+    Number(draftDoc.bags?.qty || 0);
 
-  if (freeCount > 0) {
-    output.push(`🎁 買10送1 ×${freeCount}：-$${discount}`);
-  }
-
-  const bagQty = Number(draftDoc.bags?.qty || 0);
   if (bagQty > 0) {
-    output.push(`🛍️ 塑膠袋 ×${bagQty}：+$${bagQty}`);
+    output.push(
+      `🛍️ 塑膠袋 ×${bagQty}：+$${bagQty}`
+    );
   }
 
   output.push('----------------');
-  output.push(`💰 應收：$${Number(draftDoc.finalTotal || 0)}`);
-  output.push('');
-  output.push('🧪 目前仍是測試模式，尚未建立正式 orders 訂單。');
+  output.push(
+    `💰 全部應收：$${Number(draftDoc.finalTotal || 0)}`
+  );
 
-  return output.join('\n').slice(0, 4800);
+  output.push('');
+  output.push(
+    '🧪 目前仍是測試模式，尚未建立正式 orders 訂單。'
+  );
+
+  return output
+    .join('\n')
+    .slice(0, 4800);
 }
 
 async function replyFinalConfirmation(replyToken, draftId) {
@@ -971,9 +1098,13 @@ export default async function handler(req, res) {
           const lineUserId = event.source?.userId || '';
 
           if (data.startsWith('promo_add|')) {
-            const draftId = data.slice('promo_add|'.length);
+            const parts = data.split('|');
+            const draftId = parts[1] || '';
+            const targetDraftIndex =
+              Math.max(0, Number(parts[2] || 0));
 
-            const draftDoc = await getDraftDocument(draftId);
+            const draftDoc =
+              await getDraftDocument(draftId);
 
             if (!draftDoc) {
               await replyLineMessage(
@@ -983,29 +1114,42 @@ export default async function handler(req, res) {
               continue;
             }
 
+            const targetDraft =
+              (draftDoc.drafts || [])[targetDraftIndex];
+
+            if (!targetDraft) {
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 找不到要加杯的那張訂單，請重新輸入訂單。'
+              );
+              continue;
+            }
+
             await getFirestoreDb()
               .collection('orderDrafts')
               .doc(draftId)
               .set({
                 status: 'waiting_add_one',
-                updatedAt: FieldValue.serverTimestamp(),
+                updatedAt:
+                  FieldValue.serverTimestamp(),
               }, { merge: true });
 
             await setLineSession(lineUserId, {
               mode: 'waiting_add_one',
               draftId,
+              targetDraftIndex,
             });
 
             await replyLineMessage(
               replyToken,
               [
-                '➕ 好的，請輸入要再加的「1杯飲料」。',
+                `➕ 好的，請替「訂單 ${targetDraftIndex + 1}」再加 1 杯飲料。`,
                 '',
                 '例如：',
                 '綠茶一分糖去冰',
                 '奶茶加珍珠微糖微冰',
                 '',
-                '這一階段只接受 1 杯，原本訂單會保留。'
+                '這一步只接受 1 杯，原本訂單資料會保留。'
               ].join('\n')
             );
             continue;
@@ -1222,10 +1366,19 @@ export default async function handler(req, res) {
             continue;
           }
 
+          const targetDraftIndex =
+            Math.max(
+              0,
+              Number(
+                activeSession.targetDraftIndex || 0
+              )
+            );
+
           const mergedDrafts =
             mergeDrafts(
               draftDoc.drafts || [],
-              addedDrafts
+              addedDrafts,
+              targetDraftIndex
             );
 
           const updated =
@@ -1246,19 +1399,55 @@ export default async function handler(req, res) {
             addedDrafts[0]?.items?.[0]?.name ||
             '飲料';
 
+          const targetPromo =
+            updated.summary.promotion.perDraft
+              ?.find(
+                p =>
+                  p.draftIndex ===
+                  targetDraftIndex
+              );
+
+          const remainingReminder =
+            (updated.summary.promotion.perDraft || [])
+              .some(p => p.shouldRemindAddOne);
+
+          const statusText = [
+            `✅ 已加入到訂單 ${targetDraftIndex + 1}：${addedName} ×1`,
+            targetPromo
+              ? `🥤 訂單 ${targetDraftIndex + 1} 現在共 ${targetPromo.drinkCount} 杯`
+              : '',
+            targetPromo?.freeDrinkCount > 0
+              ? `🎁 本單買10送1 ×${targetPromo.freeDrinkCount}，折抵 $${targetPromo.discountAmount}`
+              : '',
+            `💰 全部訂單優惠後合計：$${updated.summary.finalTotal}`
+          ].filter(Boolean).join('\n');
+
+          if (remainingReminder) {
+            await getFirestoreDb()
+              .collection('orderDrafts')
+              .doc(activeSession.draftId)
+              .set({
+                status: 'waiting_promo_choice',
+                updatedAt:
+                  FieldValue.serverTimestamp(),
+              }, { merge: true });
+
+            await replyPromoChoice(
+              replyToken,
+              statusText +
+                '\n\n仍有其他訂單只差 1 杯即可多享一次優惠。',
+              activeSession.draftId,
+              updated.summary.promotion
+            );
+            continue;
+          }
+
           await replyLineMessages(
             replyToken,
             [
               {
                 type: 'text',
-                text: [
-                  `✅ 已加入：${addedName} ×1`,
-                  `🥤 現在共 ${updated.summary.drinkCount} 杯`,
-                  updated.summary.promotion.freeDrinkCount > 0
-                    ? `🎁 買10送1 ×${updated.summary.promotion.freeDrinkCount}，折抵 $${updated.summary.promotion.discountAmount}`
-                    : '',
-                  `💰 飲品優惠後：$${updated.summary.finalTotal}`
-                ].filter(Boolean).join('\n')
+                text: statusText
               },
               {
                 type: 'text',
@@ -1268,8 +1457,12 @@ export default async function handler(req, res) {
                     type: 'action',
                     action: {
                       type: 'postback',
-                      label: qty === 0 ? '不用' : `${qty}個`,
-                      data: `bag|${activeSession.draftId}|${qty}`,
+                      label:
+                        qty === 0
+                          ? '不用'
+                          : `${qty}個`,
+                      data:
+                        `bag|${activeSession.draftId}|${qty}`,
                       displayText:
                         qty === 0
                           ? '不用塑膠袋'
@@ -1330,7 +1523,8 @@ export default async function handler(req, res) {
             await replyPromoChoice(
               replyToken,
               replacementText,
-              activeSession.draftId
+              activeSession.draftId,
+              replacementSummary.promotion
             );
           } else {
             await getFirestoreDb()
@@ -1472,7 +1666,8 @@ export default async function handler(req, res) {
           await replyPromoChoice(
             replyToken,
             replyText,
-            savedDraft.draftId
+            savedDraft.draftId,
+            currentSummary.promotion
           );
           continue;
         }
