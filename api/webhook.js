@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.2.4 多訂單加杯目標修正版
+// TEA TOP LINE 接單 V3.3 正式 orders 建立測試版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -732,6 +732,284 @@ async function getDraftDocument(draftId) {
   };
 }
 
+function buildFormalSubOrders(draftDoc) {
+  const runtimeDrafts =
+    normalizeStoredDrafts(
+      draftDoc.drafts || []
+    );
+
+  return runtimeDrafts.map(
+    (draft, draftIndex) => {
+      const serialized =
+        serializeDraftsForFirestore(
+          [draft]
+        )[0];
+
+      const promotion =
+        calculatePromotionForItems(
+          draft.items || []
+        );
+
+      const originalTotal =
+        (serialized.items || []).reduce(
+          (sum, item) =>
+            sum + Number(item.subtotal || 0),
+          0
+        );
+
+      const discountAmount =
+        Number(
+          promotion.discountAmount || 0
+        );
+
+      return {
+        subOrderIndex: draftIndex,
+        subOrderNo:
+          `${draftDoc.id}-${draftIndex + 1}`,
+
+        status: '待確認',
+
+        fulfillment:
+          serialized.fulfillment || '未指定',
+        time:
+          serialized.time || '未指定',
+        address:
+          serialized.address || '',
+
+        items:
+          serialized.items || [],
+
+        drinkCount:
+          Number(promotion.drinkCount || 0),
+
+        originalTotal,
+        promotion,
+        discountAmount,
+
+        finalTotal:
+          originalTotal -
+          discountAmount,
+      };
+    }
+  );
+}
+
+async function createFormalOrderFromDraft(
+  draftId,
+  lineUserId
+) {
+  const db = getFirestoreDb();
+
+  const draftRef =
+    db.collection('orderDrafts')
+      .doc(draftId);
+
+  // 正式訂單直接沿用草稿 ID：
+  // 可避免 LINE 重送 confirm postback 時建立重複訂單。
+  const orderRef =
+    db.collection('orders')
+      .doc(draftId);
+
+  return db.runTransaction(
+    async transaction => {
+      const [draftSnap, orderSnap] =
+        await Promise.all([
+          transaction.get(draftRef),
+          transaction.get(orderRef),
+        ]);
+
+      if (!draftSnap.exists) {
+        throw new Error(
+          `找不到草稿 ${draftId}`
+        );
+      }
+
+      // Idempotency：
+      // 已經建立過就直接回傳原訂單，不重複新增。
+      if (orderSnap.exists) {
+        const existing =
+          orderSnap.data() || {};
+
+        return {
+          orderId: orderRef.id,
+          duplicated: true,
+          status:
+            existing.status || '待確認',
+          subOrderCount:
+            Array.isArray(existing.subOrders)
+              ? existing.subOrders.length
+              : 0,
+          finalTotal:
+            Number(
+              existing.finalTotal || 0
+            ),
+        };
+      }
+
+      const draftDoc = {
+        id: draftSnap.id,
+        ...draftSnap.data(),
+      };
+
+      if (
+        draftDoc.status === 'cancelled'
+      ) {
+        throw new Error(
+          '這份草稿已取消，不能建立正式訂單。'
+        );
+      }
+
+      if (
+        draftDoc.hasIssue === true
+      ) {
+        throw new Error(
+          '這份草稿仍有未完成欄位，不能建立正式訂單。'
+        );
+      }
+
+      const subOrders =
+        buildFormalSubOrders(
+          draftDoc
+        );
+
+      if (subOrders.length === 0) {
+        throw new Error(
+          '草稿內沒有可建立的訂單。'
+        );
+      }
+
+      const originalTotal =
+        subOrders.reduce(
+          (sum, order) =>
+            sum +
+            Number(order.originalTotal || 0),
+          0
+        );
+
+      const discountAmount =
+        subOrders.reduce(
+          (sum, order) =>
+            sum +
+            Number(order.discountAmount || 0),
+          0
+        );
+
+      const drinkCount =
+        subOrders.reduce(
+          (sum, order) =>
+            sum +
+            Number(order.drinkCount || 0),
+          0
+        );
+
+      const bagQty =
+        Number(
+          draftDoc.bags?.qty || 0
+        );
+
+      const bagUnitPrice =
+        Number(
+          draftDoc.bags?.unitPrice || 1
+        );
+
+      const bagSubtotal =
+        bagQty * bagUnitPrice;
+
+      const finalTotal =
+        originalTotal -
+        discountAmount +
+        bagSubtotal;
+
+      const formalOrder = {
+        schemaVersion: 1,
+        source: 'LINE',
+
+        status: '待確認',
+
+        orderId: orderRef.id,
+        draftId,
+
+        lineUserId:
+          lineUserId ||
+          draftDoc.lineUserId ||
+          '',
+
+        rawMessage:
+          draftDoc.rawMessage || '',
+
+        subOrders,
+        subOrderCount:
+          subOrders.length,
+
+        drinkCount,
+        originalTotal,
+        discountAmount,
+
+        bags: {
+          qty: bagQty,
+          unitPrice: bagUnitPrice,
+          subtotal: bagSubtotal,
+        },
+
+        finalTotal,
+
+        // 這版只建立 orders，
+        // 尚未送店員通知。
+        staffNotificationStatus:
+          'not_sent',
+
+        createdAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      };
+
+      transaction.set(
+        orderRef,
+        formalOrder
+      );
+
+      transaction.set(
+        draftRef,
+        {
+          status: 'formalized',
+          orderId: orderRef.id,
+          formalizedAt:
+            FieldValue.serverTimestamp(),
+          updatedAt:
+            FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return {
+        orderId: orderRef.id,
+        duplicated: false,
+        status: '待確認',
+        subOrderCount:
+          subOrders.length,
+        finalTotal,
+      };
+    }
+  );
+}
+
+function buildFormalOrderCreatedText(result) {
+  return [
+    result.duplicated
+      ? '✅ 這筆正式訂單已經建立過，不會重複新增。'
+      : '✅ 訂單已正式建立！',
+    '',
+    `🧾 訂單編號：${result.orderId}`,
+    `📦 訂單數：${result.subOrderCount}`,
+    `💰 應收：$${result.finalTotal}`,
+    `📌 狀態：${result.status}`,
+    '',
+    '🧪 V3.3 目前只建立正式 orders 資料。',
+    '尚未通知店員，也不會自動進入製作流程。'
+  ].join('\n');
+}
+
 async function replyPromoChoice(
   replyToken,
   text,
@@ -968,7 +1246,10 @@ function buildFinalDraftText(draftDoc) {
 
   output.push('');
   output.push(
-    '🧪 目前仍是測試模式，尚未建立正式 orders 訂單。'
+    '✅ 按下「確認訂單」後，將建立正式 orders 訂單。'
+  );
+  output.push(
+    '🧪 V3.3 暫時不通知店員，也不會自動進入製作流程。'
   );
 
   return output
@@ -1217,29 +1498,40 @@ export default async function handler(req, res) {
             const draftId =
               data.slice('confirmdraft|'.length);
 
-            await getFirestoreDb()
-              .collection('orderDrafts')
-              .doc(draftId)
-              .set({
-                status: 'confirmed_test',
-                confirmedTestAt:
-                  FieldValue.serverTimestamp(),
-                updatedAt:
-                  FieldValue.serverTimestamp(),
-              }, { merge: true });
+            try {
+              const result =
+                await createFormalOrderFromDraft(
+                  draftId,
+                  lineUserId
+                );
 
-            await clearLineSession(lineUserId);
+              await clearLineSession(
+                lineUserId
+              );
 
-            await replyLineMessage(
-              replyToken,
-              [
-                '✅ 已收到「確認訂單」操作。',
-                '',
-                '目前仍是 V3.2 測試模式，',
-                '尚未建立正式 orders 訂單。',
-                '下一階段才會轉成正式訂單並通知店員後台。'
-              ].join('\n')
-            );
+              await replyLineMessage(
+                replyToken,
+                buildFormalOrderCreatedText(
+                  result
+                )
+              );
+            } catch (error) {
+              console.error(
+                '建立正式訂單失敗',
+                error
+              );
+
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 正式訂單建立失敗。',
+                  '草稿仍然保留，沒有遺失。',
+                  '',
+                  `原因：${error.message || '未知錯誤'}`
+                ].join('\n')
+              );
+            }
+
             continue;
           }
 
