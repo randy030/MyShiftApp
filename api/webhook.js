@@ -1,5 +1,5 @@
 // ==========================================
-// TEA TOP LINE 接單測試 V1
+// TEA TOP LINE 接單互動測試 V2
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -42,6 +42,69 @@ export default async function handler(req, res) {
     // B. LINE → Webhook
     if (Array.isArray(events) && events.length > 0) {
       for (const event of events) {
+        const replyToken = event.replyToken;
+
+        if (!replyToken) continue;
+
+        // ------------------------------------------
+        // B1. Quick Reply / Postback 按鈕
+        // ------------------------------------------
+        if (event.type === 'postback') {
+          const data = String(event.postback?.data || '');
+
+          if (data === 'cancel') {
+            await replyLineMessage(
+              replyToken,
+              '❌ 已取消這份訂單草稿。\n\n目前仍是測試模式，沒有建立任何正式訂單。'
+            );
+            continue;
+          }
+
+          if (data.startsWith('confirm|')) {
+            const originalMsg = data.slice('confirm|'.length);
+            const drafts = parseOrderMessage(originalMsg);
+            const hasIssue = drafts.some(d =>
+              d.fulfillment === '未指定' ||
+              (d.fulfillment === '外送' && !d.address) ||
+              d.items.some(item => item.issues.length > 0)
+            );
+
+            if (!drafts.length || hasIssue) {
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 這份草稿仍有缺漏或不符合商品規則，暫時不能確認。\n請重新輸入完整訂單內容。'
+              );
+              continue;
+            }
+
+            await replyLineMessage(
+              replyToken,
+              [
+                '✅ 已收到「確認訂單」操作。',
+                '',
+                '目前是互動測試模式，所以尚未寫入正式訂單資料庫。',
+                '下一階段才會把確認後的訂單寫入 Firestore，並通知店員後台。'
+              ].join('\n')
+            );
+            continue;
+          }
+
+          if (data.startsWith('modify|')) {
+            // 正常情況會由 inputOption=openKeyboard 直接開啟鍵盤並預填原訂單。
+            // 這裡保留後備回覆。
+            await replyLineMessage(
+              replyToken,
+              '✏️ 請直接修改輸入框中的訂單內容後重新送出。'
+            );
+            continue;
+          }
+
+          continue;
+        }
+
+        // ------------------------------------------
+        // B2. 一般文字訊息
+        // ------------------------------------------
         if (
           event.type !== 'message' ||
           event.message?.type !== 'text'
@@ -51,14 +114,19 @@ export default async function handler(req, res) {
 
         const userMsg = String(event.message.text || '').trim();
         const userId = event.source?.userId || '';
-        const replyToken = event.replyToken;
 
-        if (!userMsg || !replyToken) continue;
+        if (!userMsg) continue;
 
         // 原班表功能：查 LINE User ID
+        // 加入常見大小寫與誤輸入容錯
+        const normalizedIdCommand = userMsg
+          .replace(/[’'`]/g, '')
+          .replace(/\s+/g, '')
+          .toUpperCase();
+
         if (
-          userMsg === '查ID' ||
-          userMsg.toUpperCase() === 'MYID'
+          normalizedIdCommand === '查ID' ||
+          normalizedIdCommand === 'MYID'
         ) {
           await replyLineMessage(
             replyToken,
@@ -72,7 +140,7 @@ export default async function handler(req, res) {
           continue;
         }
 
-        // 新增：飲料接單測試
+        // 飲料接單
         const drafts = parseOrderMessage(userMsg);
 
         if (drafts.length === 0) {
@@ -93,7 +161,18 @@ export default async function handler(req, res) {
         }
 
         const replyText = buildDraftReply(drafts);
-        await replyLineMessage(replyToken, replyText);
+        const hasIssue = drafts.some(d =>
+          d.fulfillment === '未指定' ||
+          (d.fulfillment === '外送' && !d.address) ||
+          d.items.some(item => item.issues.length > 0)
+        );
+
+        await replyOrderDraft(
+          replyToken,
+          replyText,
+          userMsg,
+          hasIssue
+        );
       }
 
       return res.status(200).send('OK');
@@ -136,7 +215,7 @@ async function sendLinePush(to, messages) {
   }
 }
 
-async function replyLineMessage(replyToken, text) {
+async function replyLineMessages(replyToken, messages) {
   if (!CHANNEL_ACCESS_TOKEN) {
     throw new Error('缺少 LINE_CHANNEL_ACCESS_TOKEN');
   }
@@ -151,7 +230,7 @@ async function replyLineMessage(replyToken, text) {
       },
       body: JSON.stringify({
         replyToken,
-        messages: [{ type: 'text', text }],
+        messages,
       }),
     }
   );
@@ -162,6 +241,74 @@ async function replyLineMessage(replyToken, text) {
       `LINE Reply 發送失敗：${response.status} ${errorText}`
     );
   }
+}
+
+async function replyLineMessage(replyToken, text) {
+  return replyLineMessages(
+    replyToken,
+    [{ type: 'text', text }]
+  );
+}
+
+async function replyOrderDraft(replyToken, text, originalMsg, hasIssue) {
+  // LINE Postback data 與 fillInText 上限 300 字元。
+  // 留一點空間給 action prefix。
+  const canCarryOriginal = originalMsg.length <= 285;
+
+  const items = [];
+
+  if (!hasIssue && canCarryOriginal) {
+    items.push({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: '✅ 確認訂單',
+        data: `confirm|${originalMsg}`,
+        displayText: '確認訂單'
+      }
+    });
+  }
+
+  if (canCarryOriginal) {
+    items.push({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: '✏️ 修改訂單',
+        data: `modify|${originalMsg}`,
+        displayText: '修改訂單',
+        inputOption: 'openKeyboard',
+        fillInText: originalMsg
+      }
+    });
+  }
+
+  items.push({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: '❌ 取消',
+      data: 'cancel',
+      displayText: '取消訂單'
+    }
+  });
+
+  const suffix = !canCarryOriginal
+    ? '\n\n⚠️ 這筆訊息較長，測試版暫不提供確認／修改按鈕，請直接重新輸入。'
+    : hasIssue
+      ? '\n\n⚠️ 資料尚有缺漏，因此暫不顯示「確認訂單」。'
+      : '';
+
+  return replyLineMessages(
+    replyToken,
+    [{
+      type: 'text',
+      text: `${text}${suffix}`,
+      quickReply: {
+        items
+      }
+    }]
+  );
 }
 
 
@@ -185,6 +332,8 @@ const SUGAR_ALIASES = {
   '為糖': '微糖',
   '一分糖': '一分糖',
   '1分糖': '一分糖',
+  '一分': '一分糖',
+  '1分': '一分糖',
   '無糖': '無糖',
   '無堂': '無糖',
   '0糖': '無糖',
