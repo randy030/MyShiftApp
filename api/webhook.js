@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.0 Firestore 草稿測試版
+// TEA TOP LINE 接單 V3.1 加料＋買10送1計算測試版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -153,24 +153,143 @@ function serializeDraftsForFirestore(drafts) {
     fulfillment: draft.fulfillment || '未指定',
     time: draft.time || '未指定',
     address: draft.address || '',
-    items: (draft.items || []).map((item, itemIndex) => ({
-      itemIndex,
-      productId: item.productId || '',
-      name: item.name || '',
-      qty: Number(item.qty || 0),
-      size: item.size || '',
-      sugar: item.sugar || '',
-      ice: item.ice || '',
-      temp: item.temp || '',
-      price: Number(item.price || 0),
-      subtotal:
-        Number(item.price || 0) *
-        Number(item.qty || 0),
-      issues: Array.isArray(item.issues)
-        ? item.issues
-        : [],
-    })),
+    items: (draft.items || []).map((item, itemIndex) => {
+      const basePrice =
+        Number(item.basePrice ?? item.price ?? 0);
+
+      const toppings =
+        Array.isArray(item.toppings)
+          ? item.toppings.map(topping => ({
+              name: topping.name || '',
+              qty: Number(topping.qty || 0),
+              unitPrice:
+                Number(topping.unitPrice || 0),
+              subtotal:
+                Number(topping.unitPrice || 0) *
+                Number(topping.qty || 0),
+            }))
+          : [];
+
+      const toppingTotal =
+        toppings.reduce(
+          (sum, topping) =>
+            sum + topping.subtotal,
+          0
+        );
+
+      const unitFinalPrice =
+        basePrice + toppingTotal;
+
+      return {
+        itemIndex,
+        productId: item.productId || '',
+        name: item.name || '',
+        qty: Number(item.qty || 0),
+        size: item.size || '',
+        sugar: item.sugar || '',
+        ice: item.ice || '',
+        temp: item.temp || '',
+
+        basePrice,
+        price: basePrice,
+
+        toppings,
+        toppingsTotal: toppingTotal,
+        unitFinalPrice,
+
+        subtotal:
+          unitFinalPrice *
+          Number(item.qty || 0),
+
+        issues: Array.isArray(item.issues)
+          ? item.issues
+          : [],
+      };
+    }),
   }));
+}
+
+function calculatePromotion(drafts) {
+  const cups = [];
+
+  for (const draft of drafts) {
+    for (const item of draft.items || []) {
+      const qty = Number(item.qty || 0);
+      const basePrice =
+        Number(item.basePrice ?? item.price ?? 0);
+      const toppingTotal =
+        Number(
+          item.toppingsTotal ??
+          toppingsTotal(item.toppings)
+        );
+
+      const unitFinalPrice =
+        basePrice + toppingTotal;
+
+      for (let i = 0; i < qty; i++) {
+        cups.push({
+          productId: item.productId || '',
+          name: item.name || '',
+          size: item.size || '',
+          basePrice,
+          toppings:
+            Array.isArray(item.toppings)
+              ? item.toppings
+              : [],
+          toppingsTotal: toppingTotal,
+          unitFinalPrice,
+        });
+      }
+    }
+  }
+
+  const drinkCount = cups.length;
+  const freeDrinkCount =
+    Math.floor(drinkCount / 11);
+
+  const sorted =
+    [...cups].sort(
+      (a, b) =>
+        a.unitFinalPrice -
+        b.unitFinalPrice
+    );
+
+  const discountItems =
+    sorted
+      .slice(0, freeDrinkCount)
+      .map((cup, index) => ({
+        rewardIndex: index + 1,
+        productId: cup.productId,
+        name: cup.name,
+        size: cup.size,
+        basePrice: cup.basePrice,
+        toppings: cup.toppings,
+        toppingsTotal: cup.toppingsTotal,
+        unitFinalPrice: cup.unitFinalPrice,
+      }));
+
+  const discountAmount =
+    discountItems.reduce(
+      (sum, item) =>
+        sum + item.unitFinalPrice,
+      0
+    );
+
+  const shouldRemindAddOne =
+    drinkCount > 0 &&
+    drinkCount % 11 === 10;
+
+  return {
+    type: 'buy10get1',
+    freeDrinkCount,
+    discountAmount,
+    discountItems,
+    shouldRemindAddOne,
+    nextRewardAt:
+      shouldRemindAddOne
+        ? drinkCount + 1
+        : (Math.floor(drinkCount / 11) + 1) * 11,
+  };
 }
 
 function summarizeDrafts(drafts) {
@@ -188,10 +307,19 @@ function summarizeDrafts(drafts) {
 
     for (const item of draft.items || []) {
       const qty = Number(item.qty || 0);
-      const price = Number(item.price || 0);
+      const basePrice =
+        Number(item.basePrice ?? item.price ?? 0);
+      const toppingTotal =
+        Number(
+          item.toppingsTotal ??
+          toppingsTotal(item.toppings)
+        );
+      const unitFinalPrice =
+        basePrice + toppingTotal;
 
       drinkCount += qty;
-      originalTotal += qty * price;
+      originalTotal +=
+        qty * unitFinalPrice;
 
       if (
         Array.isArray(item.issues) &&
@@ -202,10 +330,19 @@ function summarizeDrafts(drafts) {
     }
   }
 
+  const promotion =
+    calculatePromotion(drafts);
+
   return {
     drinkCount,
     originalTotal,
     hasIssue,
+    promotion,
+    discountAmount:
+      promotion.discountAmount,
+    finalTotal:
+      originalTotal -
+      promotion.discountAmount,
   };
 }
 
@@ -256,12 +393,7 @@ async function saveOrderDraftToFirestore({
     originalTotal: summary.originalTotal,
     hasIssue: summary.hasIssue,
 
-    promotion: {
-      type: 'buy10get1',
-      freeDrinkCount: 0,
-      discountAmount: 0,
-      shouldRemindAddOne: false,
-    },
+    promotion: summary.promotion,
 
     bags: {
       qty: 0,
@@ -269,8 +401,10 @@ async function saveOrderDraftToFirestore({
       subtotal: 0,
     },
 
-    discountAmount: 0,
-    finalTotal: summary.originalTotal,
+    discountAmount:
+      summary.discountAmount,
+    finalTotal:
+      summary.finalTotal,
 
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
@@ -280,6 +414,80 @@ async function saveOrderDraftToFirestore({
     draftId: draftRef.id,
     duplicated: false,
   };
+}
+
+// ==========================================
+// V3.1 加料主檔
+// ==========================================
+const TOPPINGS = [
+  { name: '珍珠', price: 5, aliases: ['珍珠', '波霸'] },
+  { name: '仙草凍', price: 5, aliases: ['仙草凍', '仙草'] },
+  { name: '西米露', price: 5, aliases: ['西米露', '西米'] },
+  { name: '焙香粉角', price: 10, aliases: ['焙香粉角', '粉角'] },
+  { name: '茶凍', price: 10, aliases: ['茶凍'] },
+  { name: '紅豆', price: 10, aliases: ['紅豆'] },
+  { name: '芋圓', price: 10, aliases: ['芋圓'] },
+  { name: '粉粿', price: 10, aliases: ['粉粿'] },
+  { name: '寒天', price: 10, aliases: ['寒天'] },
+  { name: '椰果', price: 10, aliases: ['椰果'] },
+  { name: '桂花凍', price: 15, aliases: ['桂花凍'] },
+];
+
+function findToppingsInSegment(segment) {
+  const results = [];
+
+  for (const topping of TOPPINGS) {
+    let totalQty = 0;
+
+    for (const alias of topping.aliases) {
+      // 支援：
+      // 加珍珠
+      // 珍珠
+      // 珍珠*2 / 珍珠x2 / 珍珠×2
+      const escapedAlias =
+        alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      const regex = new RegExp(
+        `${escapedAlias}\\s*(?:[xX×*]\\s*)?(\\d+)?`,
+        'g'
+      );
+
+      let match;
+
+      while ((match = regex.exec(segment)) !== null) {
+        const qty = match[1]
+          ? Math.max(1, parseInt(match[1], 10))
+          : 1;
+
+        totalQty += qty;
+
+        if (match.index === regex.lastIndex) {
+          regex.lastIndex++;
+        }
+      }
+    }
+
+    if (totalQty > 0) {
+      results.push({
+        name: topping.name,
+        qty: totalQty,
+        unitPrice: topping.price,
+        subtotal: topping.price * totalQty,
+      });
+    }
+  }
+
+  return results;
+}
+
+function toppingsTotal(toppings) {
+  return (toppings || []).reduce(
+    (sum, topping) =>
+      sum +
+      Number(topping.unitPrice || 0) *
+      Number(topping.qty || 0),
+    0
+  );
 }
 
 // LINE OA 既有自動回覆關鍵字。
@@ -1104,6 +1312,9 @@ function parseOrderBlock(raw) {
 
     const size = sizeFrom(segment, product);
 
+    const toppings =
+      findToppingsInSegment(segment);
+
     const item = {
       productId: product.id,
       name: product.name,
@@ -1114,12 +1325,28 @@ function parseOrderBlock(raw) {
       temp,
       requestedIce: ice,
       requestedTemp: temp,
+
+      // 飲品本體價格
       price: Number(product.sizes?.[size] || 0),
+      basePrice: Number(product.sizes?.[size] || 0),
+
+      // V3.1 加料
+      toppings,
+      toppingsTotal: toppingsTotal(toppings),
+      unitFinalPrice: 0,
+
       issues: [],
     };
 
     item.issues = validateItem(item);
-    item.price = Number(product.sizes?.[item.size] || 0);
+
+    item.price =
+      Number(product.sizes?.[item.size] || 0);
+    item.basePrice = item.price;
+    item.toppingsTotal =
+      toppingsTotal(item.toppings);
+    item.unitFinalPrice =
+      item.basePrice + item.toppingsTotal;
 
     items.push(item);
   });
@@ -1190,8 +1417,20 @@ function buildDraftReply(drafts) {
     draft.items.forEach(item => {
       const subtotal = item.price * item.qty;
 
+      const basePrice =
+        Number(item.basePrice ?? item.price ?? 0);
+      const toppingTotal =
+        Number(
+          item.toppingsTotal ??
+          toppingsTotal(item.toppings)
+        );
+      const unitFinalPrice =
+        basePrice + toppingTotal;
+      const itemSubtotal =
+        unitFinalPrice * item.qty;
+
       output.push(
-        `${item.name} ${item.size} ×${item.qty}　$${subtotal}`
+        `${item.name} ${item.size} ×${item.qty}　$${itemSubtotal}`
       );
 
       const specs = [];
@@ -1205,6 +1444,27 @@ function buildDraftReply(drafts) {
 
       if (specs.length) {
         output.push(`　${specs.join(' / ')}`);
+      }
+
+      if (
+        Array.isArray(item.toppings) &&
+        item.toppings.length > 0
+      ) {
+        for (const topping of item.toppings) {
+          const toppingSubtotal =
+            Number(topping.unitPrice || 0) *
+            Number(topping.qty || 0);
+
+          output.push(
+            `　＋${topping.name}` +
+            `${topping.qty > 1 ? ` ×${topping.qty}` : ''}` +
+            `　+$${toppingSubtotal}`
+          );
+        }
+
+        output.push(
+          `　單杯成品價：$${unitFinalPrice}`
+        );
       }
 
       if (item.issues.length) {
@@ -1234,7 +1494,21 @@ function buildDraftReply(drafts) {
     }
 
     const total = draft.items.reduce(
-      (sum, item) => sum + item.price * item.qty,
+      (sum, item) => {
+        const basePrice =
+          Number(item.basePrice ?? item.price ?? 0);
+        const toppingTotal =
+          Number(
+            item.toppingsTotal ??
+            toppingsTotal(item.toppings)
+          );
+
+        return (
+          sum +
+          (basePrice + toppingTotal) *
+          Number(item.qty || 0)
+        );
+      },
       0
     );
 
@@ -1244,6 +1518,35 @@ function buildDraftReply(drafts) {
       output.push('');
     }
   });
+
+  const allDraftSummary =
+    summarizeDrafts(drafts);
+
+  if (allDraftSummary.drinkCount > 0) {
+    output.push(
+      `🥤 飲品共 ${allDraftSummary.drinkCount} 杯`
+    );
+
+    if (
+      allDraftSummary.promotion.freeDrinkCount > 0
+    ) {
+      output.push(
+        `🎁 買10送1 ×${allDraftSummary.promotion.freeDrinkCount}` +
+        `　-$${allDraftSummary.promotion.discountAmount}`
+      );
+      output.push(
+        `💰 優惠後金額：$${allDraftSummary.finalTotal}`
+      );
+    }
+
+    if (
+      allDraftSummary.promotion.shouldRemindAddOne
+    ) {
+      output.push(
+        '🎁 再加 1 杯即可多享一次買10送1優惠！'
+      );
+    }
+  }
 
   output.push('');
 
