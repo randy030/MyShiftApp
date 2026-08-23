@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.4.1 當日上班人員接單通知版
+// TEA TOP LINE 接單 V3.5.1 百香雙Q＋常客塑膠袋偏好版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -1109,6 +1109,20 @@ async function createFormalOrderFromDraft(
         staffNotificationStatus:
           'not_sent',
 
+        // V3.5：訂單狀態歷程。
+        // 使用固定毫秒時間，方便直接放入陣列內保存。
+        statusHistory: [
+          {
+            fromStatus: '',
+            toStatus: '待確認',
+            changedByUid: '',
+            changedByName: '客人',
+            changedByRole: 'customer',
+            source: 'LINE',
+            changedAtMs: Date.now(),
+          }
+        ],
+
         createdAt:
           FieldValue.serverTimestamp(),
         updatedAt:
@@ -1674,6 +1688,41 @@ async function acceptFormalOrder(
               status: '已接受',
             }));
 
+        const nextHistory = [
+          ...(Array.isArray(orderDoc.statusHistory)
+            ? orderDoc.statusHistory
+            : []),
+          {
+            fromStatus:
+              orderDoc.status || '待確認',
+            toStatus: '已接受',
+            changedByUid:
+              staff.uid,
+            changedByName:
+              staff.name,
+            changedByRole:
+              staff.role || '',
+            source: 'LINE',
+            changedAtMs:
+              Date.now(),
+          }
+        ];
+
+        const acceptedBy = {
+          uid: staff.uid,
+          name: staff.name,
+          role: staff.role || '',
+          isAdmin:
+            staff.isAdmin === true,
+          isManager:
+            staff.isManager === true,
+          lineUserId:
+            staff.lineUserId,
+          source: 'LINE',
+          workDate:
+            staff.workDate || '',
+        };
+
         transaction.set(
           orderRef,
           {
@@ -1690,21 +1739,10 @@ async function acceptFormalOrder(
             acceptedAt:
               FieldValue.serverTimestamp(),
 
-            // V3.4.1：完整接單人資料。
-            acceptedBy: {
-              uid: staff.uid,
-              name: staff.name,
-              role: staff.role || '',
-              isAdmin:
-                staff.isAdmin === true,
-              isManager:
-                staff.isManager === true,
-              lineUserId:
-                staff.lineUserId,
-              source: 'LINE',
-              workDate:
-                staff.workDate || '',
-            },
+            acceptedBy,
+
+            statusHistory:
+              nextHistory,
 
             customerNotificationStatus:
               'pending',
@@ -1721,6 +1759,13 @@ async function acceptFormalOrder(
             ...orderDoc,
             status: '已接受',
             subOrders: nextSubOrders,
+            acceptedBy,
+            acceptedByUid: staff.uid,
+            acceptedByName: staff.name,
+            acceptedByLineUserId:
+              staff.lineUserId,
+            statusHistory:
+              nextHistory,
           },
           acceptedByName:
             staff.name,
@@ -1846,6 +1891,349 @@ async function notifyCustomerOrderAccepted(
   }
 }
 
+function makeStaffNextActionMessage(
+  text,
+  orderId,
+  action,
+  label,
+  displayText
+) {
+  return {
+    type: 'text',
+    text,
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label,
+            data: `${action}|${orderId}`,
+            displayText,
+          }
+        }
+      ]
+    }
+  };
+}
+
+function getOrderDisplayNo(orderDoc) {
+  const displayNos =
+    Array.isArray(orderDoc.displayOrderNos)
+      ? orderDoc.displayOrderNos.filter(Boolean)
+      : [];
+
+  if (displayNos.length > 0) {
+    return displayNos.join('、');
+  }
+
+  return (
+    orderDoc.displayOrderNo ||
+    orderDoc.orderId ||
+    ''
+  );
+}
+
+async function transitionFormalOrderStatus(
+  orderId,
+  staffLineUserId,
+  expectedStatus,
+  nextStatus
+) {
+  const staff =
+    await findActiveStaffByLineUserId(
+      staffLineUserId
+    );
+
+  if (!staff) {
+    throw new Error(
+      '此 LINE 帳號不是今天上班且可操作訂單的員工。'
+    );
+  }
+
+  const db = getFirestoreDb();
+
+  const orderRef =
+    db.collection('orders')
+      .doc(orderId);
+
+  return db.runTransaction(
+    async transaction => {
+      const snap =
+        await transaction.get(orderRef);
+
+      if (!snap.exists) {
+        throw new Error(
+          '找不到這筆正式訂單。'
+        );
+      }
+
+      const orderDoc = {
+        id: snap.id,
+        ...snap.data(),
+      };
+
+      if (
+        orderDoc.status === nextStatus
+      ) {
+        return {
+          duplicated: true,
+          orderDoc,
+          staff,
+        };
+      }
+
+      if (
+        orderDoc.status !== expectedStatus
+      ) {
+        throw new Error(
+          `目前訂單狀態為「${orderDoc.status || '未知'}」，不能從「${expectedStatus}」切換成「${nextStatus}」。`
+        );
+      }
+
+      const nextSubOrders =
+        (orderDoc.subOrders || [])
+          .map(subOrder => ({
+            ...subOrder,
+            status: nextStatus,
+          }));
+
+      const nextHistory = [
+        ...(Array.isArray(orderDoc.statusHistory)
+          ? orderDoc.statusHistory
+          : []),
+        {
+          fromStatus:
+            expectedStatus,
+          toStatus:
+            nextStatus,
+          changedByUid:
+            staff.uid,
+          changedByName:
+            staff.name,
+          changedByRole:
+            staff.role || '',
+          source: 'LINE',
+          changedAtMs:
+            Date.now(),
+        }
+      ];
+
+      const updateData = {
+        status:
+          nextStatus,
+        subOrders:
+          nextSubOrders,
+        statusHistory:
+          nextHistory,
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      };
+
+      if (
+        nextStatus === '製作中'
+      ) {
+        updateData.preparingBy = {
+          uid: staff.uid,
+          name: staff.name,
+          role: staff.role || '',
+          lineUserId:
+            staff.lineUserId,
+          source: 'LINE',
+          workDate:
+            staff.workDate || '',
+        };
+        updateData.preparingAt =
+          FieldValue.serverTimestamp();
+        updateData.preparingByUid =
+          staff.uid;
+        updateData.preparingByName =
+          staff.name;
+      }
+
+      if (
+        nextStatus === '已完成'
+      ) {
+        updateData.completedBy = {
+          uid: staff.uid,
+          name: staff.name,
+          role: staff.role || '',
+          lineUserId:
+            staff.lineUserId,
+          source: 'LINE',
+          workDate:
+            staff.workDate || '',
+        };
+        updateData.completedAt =
+          FieldValue.serverTimestamp();
+        updateData.completedByUid =
+          staff.uid;
+        updateData.completedByName =
+          staff.name;
+      }
+
+      transaction.set(
+        orderRef,
+        updateData,
+        { merge: true }
+      );
+
+      return {
+        duplicated: false,
+        orderDoc: {
+          ...orderDoc,
+          ...updateData,
+          subOrders:
+            nextSubOrders,
+          statusHistory:
+            nextHistory,
+        },
+        staff,
+      };
+    }
+  );
+}
+
+function buildCustomerPreparingMessage(
+  orderDoc
+) {
+  return [
+    '🧋 您的訂單開始製作了！',
+    '',
+    `🧾 訂單編號：${getOrderDisplayNo(orderDoc)}`,
+    `💰 應收：$${Number(orderDoc.finalTotal || 0)}`,
+    '📌 狀態：製作中',
+    '',
+    '店家正在準備您的飲品。'
+  ].join('\n');
+}
+
+function buildCustomerCompletedMessage(
+  orderDoc
+) {
+  const subOrders =
+    Array.isArray(orderDoc.subOrders)
+      ? orderDoc.subOrders
+      : [];
+
+  const hasDelivery =
+    subOrders.some(
+      subOrder =>
+        subOrder.fulfillment === '外送'
+    );
+
+  const hasPickup =
+    subOrders.some(
+      subOrder =>
+        subOrder.fulfillment === '自取'
+    );
+
+  let finalLine =
+    '您的訂單已完成。';
+
+  if (
+    hasPickup &&
+    !hasDelivery
+  ) {
+    finalLine =
+      '您的飲品已完成，可以前往取餐。';
+  } else if (
+    hasDelivery &&
+    !hasPickup
+  ) {
+    finalLine =
+      '您的飲品已完成，準備配送。';
+  } else if (
+    hasPickup &&
+    hasDelivery
+  ) {
+    finalLine =
+      '您的訂單已完成；自取品項可前往取餐，外送品項準備配送。';
+  }
+
+  return [
+    '🎉 訂單已完成！',
+    '',
+    `🧾 訂單編號：${getOrderDisplayNo(orderDoc)}`,
+    `💰 應收：$${Number(orderDoc.finalTotal || 0)}`,
+    '📌 狀態：已完成',
+    '',
+    finalLine
+  ].join('\n');
+}
+
+async function pushCustomerStatusMessage(
+  orderId,
+  orderDoc,
+  messageText,
+  statusKey
+) {
+  const customerLineUserId =
+    String(
+      orderDoc.lineUserId || ''
+    ).trim();
+
+  const orderRef =
+    getFirestoreDb()
+      .collection('orders')
+      .doc(orderId);
+
+  if (!customerLineUserId) {
+    await orderRef.set(
+      {
+        [`${statusKey}CustomerNotificationStatus`]:
+          'no_customer_line_id',
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return false;
+  }
+
+  try {
+    await sendLinePush(
+      [customerLineUserId],
+      [{
+        type: 'text',
+        text: messageText,
+      }]
+    );
+
+    await orderRef.set(
+      {
+        [`${statusKey}CustomerNotificationStatus`]:
+          'sent',
+        [`${statusKey}CustomerNotifiedAt`]:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return true;
+  } catch (error) {
+    await orderRef.set(
+      {
+        [`${statusKey}CustomerNotificationStatus`]:
+          'failed',
+        [`${statusKey}CustomerNotificationError`]:
+          String(
+            error?.message ||
+            'unknown error'
+          ).slice(0, 500),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    throw error;
+  }
+}
+
+
 async function replyPromoChoice(
   replyToken,
   text,
@@ -1921,27 +2309,217 @@ async function replyPromoChoice(
   );
 }
 
-async function replyBagQuestion(replyToken, draftId) {
-  return replyLineMessages(
-    replyToken,
-    [{
-      type: 'text',
-      text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
-      quickReply: {
-        items: [0, 1, 2, 3].map(qty => ({
-          type: 'action',
-          action: {
-            type: 'postback',
-            label: qty === 0 ? '不用' : `${qty}個`,
-            data: `bag|${draftId}|${qty}`,
-            displayText:
-              qty === 0
-                ? '不用塑膠袋'
-                : `塑膠袋${qty}個`
-          }
-        }))
+function customerPreferenceRef(lineUserId) {
+  return getFirestoreDb()
+    .collection('customerPreferences')
+    .doc(lineUserId);
+}
+
+async function getCustomerBagPreference(lineUserId) {
+  if (!lineUserId) return null;
+
+  const snap =
+    await customerPreferenceRef(
+      lineUserId
+    ).get();
+
+  if (!snap.exists) return null;
+
+  return snap.data() || null;
+}
+
+async function setCustomerNoBagPreference(
+  lineUserId,
+  enabled
+) {
+  if (!lineUserId) {
+    throw new Error(
+      '缺少 LINE User ID，無法儲存常客偏好。'
+    );
+  }
+
+  const ref =
+    customerPreferenceRef(
+      lineUserId
+    );
+
+  if (enabled) {
+    await ref.set(
+      {
+        lineUserId,
+        bagPreference: 'no_bag',
+        skipBagQuestion: true,
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } else {
+    await ref.set(
+      {
+        lineUserId,
+        bagPreference:
+          FieldValue.delete(),
+        skipBagQuestion: false,
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+}
+
+function makeBagQuestionMessage(draftId) {
+  const items =
+    [0, 1, 2, 3].map(qty => ({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label:
+          qty === 0
+            ? '不用'
+            : `${qty}個`,
+        data:
+          `bag|${draftId}|${qty}`,
+        displayText:
+          qty === 0
+            ? '不用塑膠袋'
+            : `塑膠袋${qty}個`
       }
-    }]
+    }));
+
+  items.push({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: '以後都不用',
+      data:
+        `bagpref_no|${draftId}`,
+      displayText:
+        '以後都不用塑膠袋'
+    }
+  });
+
+  return {
+    type: 'text',
+    text:
+      '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個\n\n常客可選「以後都不用」，之後會自動略過此步驟。',
+    quickReply: {
+      items
+    }
+  };
+}
+
+async function proceedToBagStage(
+  replyToken,
+  draftId,
+  leadingText = ''
+) {
+  const draftDoc =
+    await getDraftDocument(
+      draftId
+    );
+
+  if (!draftDoc) {
+    await replyLineMessage(
+      replyToken,
+      '⚠️ 找不到這份草稿，請重新輸入訂單。'
+    );
+    return;
+  }
+
+  const lineUserId =
+    String(
+      draftDoc.lineUserId || ''
+    ).trim();
+
+  const preference =
+    await getCustomerBagPreference(
+      lineUserId
+    );
+
+  if (
+    preference?.bagPreference ===
+      'no_bag' &&
+    preference?.skipBagQuestion ===
+      true
+  ) {
+    const runtimeDrafts =
+      normalizeStoredDrafts(
+        draftDoc.drafts || []
+      );
+
+    await updateDraftDocument(
+      draftId,
+      runtimeDrafts,
+      {
+        bagQty: 0,
+        fields: {
+          status:
+            'waiting_confirm',
+          bagPreferenceApplied:
+            'no_bag',
+        },
+      }
+    );
+
+    const updated =
+      await getDraftDocument(
+        draftId
+      );
+
+    const messages = [];
+
+    if (leadingText) {
+      messages.push({
+        type: 'text',
+        text: leadingText
+      });
+    }
+
+    messages.push({
+      type: 'text',
+      text:
+        buildFinalDraftText(
+          updated
+        )
+    });
+
+    await replyLineMessages(
+      replyToken,
+      messages
+    );
+    return;
+  }
+
+  const messages = [];
+
+  if (leadingText) {
+    messages.push({
+      type: 'text',
+      text: leadingText
+    });
+  }
+
+  messages.push(
+    makeBagQuestionMessage(
+      draftId
+    )
+  );
+
+  await replyLineMessages(
+    replyToken,
+    messages
+  );
+}
+
+async function replyBagQuestion(
+  replyToken,
+  draftId
+) {
+  return proceedToBagStage(
+    replyToken,
+    draftId
   );
 }
 
@@ -2069,6 +2647,15 @@ function buildFinalDraftText(draftDoc) {
   const bagQty =
     Number(draftDoc.bags?.qty || 0);
 
+  if (
+    draftDoc.bagPreferenceApplied ===
+    'no_bag'
+  ) {
+    output.push(
+      '♻️ 已套用常客偏好：不用塑膠袋'
+    );
+  }
+
   if (bagQty > 0) {
     output.push(
       `🛍️ 塑膠袋 ×${bagQty}：+$${bagQty}`
@@ -2085,7 +2672,7 @@ function buildFinalDraftText(draftDoc) {
     '✅ 按下「確認訂單」後，將建立正式 orders 訂單。'
   );
   output.push(
-    '✅ 確認後會通知店員接單；店員接受後會再通知您。'
+    '✅ 確認後會通知今日上班人員接單；接受、製作中、完成時都會更新訂單狀態。'
   );
 
   return output
@@ -2149,7 +2736,7 @@ async function replyFinalConfirmation(replyToken, draftId) {
 const PASSTHROUGH_KEYWORDS = new Set(['評論']);
 
 // 商品資料：由 TEA TOP V1.7 規則版商品主檔內嵌。
-const PRODUCTS = [{"id":"P001","category":"找好茶","name":"招牌高山青","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["高山青","青茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P002","category":"找好茶","name":"青茶3Q","sizes":{"L":55.0},"defaultSize":"L","aliases":["青茶3Q","3Q青茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P003","category":"找好茶","name":"烏龍綠茶","sizes":{"M":25.0,"L":30.0,"瓶":50.0},"defaultSize":"L","aliases":["烏龍綠","烏綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P004","category":"找好茶","name":"茉香綠茶","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["綠茶","茉綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P005","category":"找好茶","name":"大吉嶺紅茶","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["紅茶","大吉嶺"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P006","category":"找好茶","name":"日月潭紅茶","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["日月紅","日月潭"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P007","category":"找好茶","name":"冷泡冬片","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["冬片","冷泡冬片"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P008","category":"找好茶","name":"奶香金萱","sizes":{"L":40.0,"瓶":60.0},"defaultSize":"L","aliases":["奶金","金萱"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P009","category":"找好茶","name":"108茶王","sizes":{"L":45.0,"瓶":65.0},"defaultSize":"L","aliases":["108","茶王"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P010","category":"找好茶","name":"白毫烏龍","sizes":{"M":60.0,"L":65.0},"defaultSize":"L","aliases":["白毫","白毫烏龍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P011","category":"找好茶","name":"珍珠紅/綠/青","sizes":{"L":45.0},"defaultSize":"L","aliases":["珍珠紅","珍珠綠","珍珠青"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P012","category":"找好茶","name":"焙香粉角金萱","sizes":{"L":50.0},"defaultSize":"L","aliases":["粉角金萱","焙香粉角金萱"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P013","category":"芝士奶蓋","name":"奶蓋綠/青/烏/金","sizes":{"L":60.0},"defaultSize":"L","aliases":["奶蓋綠","奶蓋青","奶蓋烏","奶蓋金"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P014","category":"芝士奶蓋","name":"奶蓋紅茶/日月紅","sizes":{"L":60.0},"defaultSize":"L","aliases":["奶蓋紅茶","奶蓋日月紅"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P015","category":"芝士奶蓋","name":"奶蓋蕎麥","sizes":{"L":60.0},"defaultSize":"L","aliases":["奶蓋蕎麥"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P016","category":"芝士奶蓋","name":"炳叔奶蓋金萱","sizes":{"M":65.0,"L":75.0},"defaultSize":"L","aliases":["炳叔奶蓋","奶蓋金萱"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P017","category":"找鮮奶","name":"紅茶鮮奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["紅茶鮮奶","鮮奶紅茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P018","category":"找鮮奶","name":"珍珠鮮奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["珍珠鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P019","category":"找鮮奶","name":"108焙烏龍鮮奶茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["108鮮奶","焙烏龍鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P020","category":"找鮮奶","name":"蕎麥鮮奶茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["蕎麥鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P021","category":"找鮮奶","name":"雙Q鮮奶茶","sizes":{"L":75.0},"defaultSize":"L","aliases":["雙Q鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P022","category":"找鮮奶","name":"黑糖珍珠鮮奶","sizes":{"L":80.0},"defaultSize":"L","aliases":["黑糖珍珠鮮奶"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P023","category":"找鮮奶","name":"紅豆粉粿鮮奶","sizes":{"M":65.0,"L":90.0},"defaultSize":"L","aliases":["紅豆粉粿鮮奶"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P024","category":"找果茶","name":"甘蔗青","sizes":{"L":65.0,"瓶":85.0},"defaultSize":"L","aliases":["甘蔗青","蔗青"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P025","category":"找果茶","name":"芒果綠茶","sizes":{"L":50.0,"瓶":75.0},"defaultSize":"L","aliases":["芒果綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P026","category":"找果茶","name":"日月蘋安","sizes":{"L":55.0,"瓶":80.0},"defaultSize":"L","aliases":["蘋安","日月蘋安"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P027","category":"找果茶","name":"檸檬綠茶","sizes":{"L":55.0},"defaultSize":"L","aliases":["檸檬綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"固定","fixedIce":"依標準配方","iceOptions":[],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P028","category":"找果茶","name":"百香綠","sizes":{"L":60.0},"defaultSize":"L","aliases":["百香綠茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P029","category":"找果茶","name":"甘檸冷泡","sizes":{"L":65.0,"瓶":85.0},"defaultSize":"L","aliases":["甘檸","甘蔗檸檬冷泡"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P030","category":"找果茶","name":"橙香白毫烏龍","sizes":{"L":69.0},"defaultSize":"L","aliases":["橙香白毫","白毫橙香"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P031","category":"找果茶","name":"柳橙綠","sizes":{"L":70.0},"defaultSize":"L","aliases":["柳橙綠茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P032","category":"找果茶","name":"百香QQ","sizes":{"L":70.0},"defaultSize":"L","aliases":["百香QQ"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P033","category":"找果茶","name":"芒果鳳梨果粒茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["芒果鳳梨"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P034","category":"找果茶","name":"葡萄柚果粒茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["葡萄柚果粒"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P035","category":"無咖啡因","name":"古早味冬瓜茶","sizes":{"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["冬瓜茶","古早味冬瓜"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P036","category":"無咖啡因","name":"蕎麥茶","sizes":{"L":40.0,"瓶":60.0},"defaultSize":"L","aliases":["蕎麥"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P037","category":"無咖啡因","name":"冬瓜仙草","sizes":{"L":45.0},"defaultSize":"L","aliases":["冬瓜仙草"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P038","category":"無咖啡因","name":"蘋果冰醋","sizes":{"L":45.0,"瓶":75.0},"defaultSize":"L","aliases":["蘋果醋","冰醋"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P039","category":"無咖啡因","name":"冬瓜檸檬","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["冬檸"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P040","category":"無咖啡因","name":"冬梅粉粿","sizes":{"L":60.0},"defaultSize":"L","aliases":["冬梅粉粿"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P041","category":"無咖啡因","name":"蕎麥粉粿","sizes":{"L":60.0},"defaultSize":"L","aliases":["蕎麥粉粿"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P042","category":"無咖啡因","name":"轟蜜蕎麥粉粿","sizes":{"L":60.0,"瓶":85.0},"defaultSize":"L","aliases":["轟蜜蕎麥","蜜蕎麥粉粿"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P043","category":"無咖啡因","name":"桂花凍蜜檸","sizes":{"L":65.0},"defaultSize":"L","aliases":["桂花凍蜜檸"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"固定","fixedIce":"依標準配方","iceOptions":[],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P044","category":"無咖啡因","name":"芒果冰沙","sizes":{"L":50.0},"defaultSize":"L","aliases":["芒果冰沙"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"冰沙固定","fixedIce":"冰沙","iceOptions":[],"temp":{"冷":true,"常溫":false,"溫":false,"熱":false},"slush":true,"note":""},{"id":"P045","category":"無咖啡因","name":"綠豆星沙","sizes":{"L":50.0},"defaultSize":"L","aliases":["綠豆沙","綠豆星沙"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"冰沙固定","fixedIce":"冰沙","iceOptions":[],"temp":{"冷":true,"常溫":false,"溫":false,"熱":false},"slush":true,"note":""},{"id":"P046","category":"無咖啡因","name":"綠豆星沙牛奶","sizes":{"L":60.0},"defaultSize":"L","aliases":["綠豆沙牛奶","綠豆星沙牛奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"冰沙固定","fixedIce":"冰沙","iceOptions":[],"temp":{"冷":true,"常溫":false,"溫":false,"熱":false},"slush":true,"note":""},{"id":"P047","category":"找特調","name":"冬瓜青茶","sizes":{"L":50.0,"瓶":70.0},"defaultSize":"L","aliases":["冬瓜青"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P048","category":"找特調","name":"青梅青/綠","sizes":{"L":55.0},"defaultSize":"L","aliases":["青梅青","青梅綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P049","category":"找特調","name":"多多綠茶","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["多多綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P050","category":"找特調","name":"8冰綠","sizes":{"L":50.0,"瓶":75.0},"defaultSize":"L","aliases":["八冰綠","8冰綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P051","category":"找特調","name":"仙楂108","sizes":{"L":50.0,"瓶":75.0},"defaultSize":"L","aliases":["仙楂108","山楂108"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P052","category":"找特調","name":"桂花凍108","sizes":{"L":60.0},"defaultSize":"L","aliases":["桂花108","桂花凍108"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"固定","fixedIce":"依標準配方","iceOptions":[],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P053","category":"找特調","name":"轟蜜茶","sizes":{"L":60.0,"瓶":85.0},"defaultSize":"L","aliases":["轟蜜茶","蜂蜜茶"],"active":true,"sugarMode":"限制調整","fixedSugar":"","minSugar":"微糖","sugarOptions":["正常糖","少糖","半糖","微糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P054","category":"找特調","name":"冬瓜檸檬粉角","sizes":{"L":65.0},"defaultSize":"L","aliases":["冬檸粉角","冬瓜檸檬粉角"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P055","category":"找奶茶","name":"靚奶茶","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["靚奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P056","category":"找奶茶","name":"靚奶凍","sizes":{"L":65.0},"defaultSize":"L","aliases":["靚奶凍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P057","category":"找奶茶","name":"奶茶/奶綠","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["奶茶","奶綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P058","category":"找奶茶","name":"烏龍奶茶","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["烏龍奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P059","category":"找奶茶","name":"108焙烏龍奶茶","sizes":{"L":60.0},"defaultSize":"L","aliases":["108奶茶","焙烏龍奶茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P060","category":"找奶茶","name":"珍珠奶茶","sizes":{"L":55.0},"defaultSize":"L","aliases":["珍奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P061","category":"找奶茶","name":"粉角奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["粉角奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P062","category":"找奶茶","name":"仙草凍奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["仙草奶茶","仙草凍奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P063","category":"找奶茶","name":"粉粿奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["粉粿奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P064","category":"找奶茶","name":"當代雙Q","sizes":{"L":65.0,"瓶":85.0},"defaultSize":"L","aliases":["雙Q","當代雙Q"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P065","category":"找奶茶","name":"珍珠紅豆奶","sizes":{"L":65.0},"defaultSize":"L","aliases":["紅豆珍奶","珍珠紅豆奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P066","category":"找奶茶","name":"紫芋西米露","sizes":{"L":70.0},"defaultSize":"L","aliases":["紫芋西米露","芋頭西米露"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P067","category":"找奶茶","name":"白毫烏龍輕乳茶","sizes":{"L":75.0},"defaultSize":"L","aliases":["白毫輕乳","烏龍輕乳"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P068","category":"找果茶","name":"西瓜綠","sizes":{"L":65.0},"defaultSize":"L","aliases":["西瓜綠","西瓜綠茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":"新增：使用者補充"},{"id":"P069","category":"找果茶","name":"西瓜烏龍","sizes":{"L":70.0},"defaultSize":"L","aliases":["西瓜烏龍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":"新增：使用者補充"},{"id":"P070","category":"芝士奶蓋","name":"奶蓋西瓜綠","sizes":{"L":70.0},"defaultSize":"L","aliases":["奶蓋西瓜綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":"新增：使用者補充"},{"id":"P071","category":"芝士奶蓋","name":"奶蓋西瓜烏龍","sizes":{"L":75.0},"defaultSize":"L","aliases":["奶蓋西瓜烏龍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":"新增：使用者補充"}];
+const PRODUCTS = [{"id":"P001","category":"找好茶","name":"招牌高山青","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["高山青","青茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P002","category":"找好茶","name":"青茶3Q","sizes":{"L":55.0},"defaultSize":"L","aliases":["青茶3Q","3Q青茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P003","category":"找好茶","name":"烏龍綠茶","sizes":{"M":25.0,"L":30.0,"瓶":50.0},"defaultSize":"L","aliases":["烏龍綠","烏綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P004","category":"找好茶","name":"茉香綠茶","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["綠茶","茉綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P005","category":"找好茶","name":"大吉嶺紅茶","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["紅茶","大吉嶺"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P006","category":"找好茶","name":"日月潭紅茶","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["日月紅","日月潭"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P007","category":"找好茶","name":"冷泡冬片","sizes":{"M":30.0,"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["冬片","冷泡冬片"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P008","category":"找好茶","name":"奶香金萱","sizes":{"L":40.0,"瓶":60.0},"defaultSize":"L","aliases":["奶金","金萱"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P009","category":"找好茶","name":"108茶王","sizes":{"L":45.0,"瓶":65.0},"defaultSize":"L","aliases":["108","茶王"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P010","category":"找好茶","name":"白毫烏龍","sizes":{"M":60.0,"L":65.0},"defaultSize":"L","aliases":["白毫","白毫烏龍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P011","category":"找好茶","name":"珍珠紅/綠/青","sizes":{"L":45.0},"defaultSize":"L","aliases":["珍珠紅","珍珠綠","珍珠青"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P012","category":"找好茶","name":"焙香粉角金萱","sizes":{"L":50.0},"defaultSize":"L","aliases":["粉角金萱","焙香粉角金萱"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P013","category":"芝士奶蓋","name":"奶蓋綠/青/烏/金","sizes":{"L":60.0},"defaultSize":"L","aliases":["奶蓋綠","奶蓋青","奶蓋烏","奶蓋金"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P014","category":"芝士奶蓋","name":"奶蓋紅茶/日月紅","sizes":{"L":60.0},"defaultSize":"L","aliases":["奶蓋紅茶","奶蓋日月紅"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P015","category":"芝士奶蓋","name":"奶蓋蕎麥","sizes":{"L":60.0},"defaultSize":"L","aliases":["奶蓋蕎麥"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P016","category":"芝士奶蓋","name":"炳叔奶蓋金萱","sizes":{"M":65.0,"L":75.0},"defaultSize":"L","aliases":["炳叔奶蓋","奶蓋金萱"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P017","category":"找鮮奶","name":"紅茶鮮奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["紅茶鮮奶","鮮奶紅茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P018","category":"找鮮奶","name":"珍珠鮮奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["珍珠鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P019","category":"找鮮奶","name":"108焙烏龍鮮奶茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["108鮮奶","焙烏龍鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P020","category":"找鮮奶","name":"蕎麥鮮奶茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["蕎麥鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P021","category":"找鮮奶","name":"雙Q鮮奶茶","sizes":{"L":75.0},"defaultSize":"L","aliases":["雙Q鮮奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P022","category":"找鮮奶","name":"黑糖珍珠鮮奶","sizes":{"L":80.0},"defaultSize":"L","aliases":["黑糖珍珠鮮奶"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P023","category":"找鮮奶","name":"紅豆粉粿鮮奶","sizes":{"M":65.0,"L":90.0},"defaultSize":"L","aliases":["紅豆粉粿鮮奶"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P024","category":"找果茶","name":"甘蔗青","sizes":{"L":65.0,"瓶":85.0},"defaultSize":"L","aliases":["甘蔗青","蔗青"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P025","category":"找果茶","name":"芒果綠茶","sizes":{"L":50.0,"瓶":75.0},"defaultSize":"L","aliases":["芒果綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P026","category":"找果茶","name":"日月蘋安","sizes":{"L":55.0,"瓶":80.0},"defaultSize":"L","aliases":["蘋安","日月蘋安"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P027","category":"找果茶","name":"檸檬綠茶","sizes":{"L":55.0},"defaultSize":"L","aliases":["檸檬綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"固定","fixedIce":"依標準配方","iceOptions":[],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P028","category":"找果茶","name":"百香綠","sizes":{"L":60.0},"defaultSize":"L","aliases":["百香綠茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P029","category":"找果茶","name":"甘檸冷泡","sizes":{"L":65.0,"瓶":85.0},"defaultSize":"L","aliases":["甘檸","甘蔗檸檬冷泡"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P030","category":"找果茶","name":"橙香白毫烏龍","sizes":{"L":69.0},"defaultSize":"L","aliases":["橙香白毫","白毫橙香"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P031","category":"找果茶","name":"柳橙綠","sizes":{"L":70.0},"defaultSize":"L","aliases":["柳橙綠茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P032","category":"找果茶","name":"百香QQ","sizes":{"L":70.0},"defaultSize":"L","aliases":["百香QQ","百香雙Q","百香雙q","百香Q Q","百香ＱＱ","百香雙Q茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P033","category":"找果茶","name":"芒果鳳梨果粒茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["芒果鳳梨"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P034","category":"找果茶","name":"葡萄柚果粒茶","sizes":{"L":70.0},"defaultSize":"L","aliases":["葡萄柚果粒"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P035","category":"無咖啡因","name":"古早味冬瓜茶","sizes":{"L":35.0,"瓶":55.0},"defaultSize":"L","aliases":["冬瓜茶","古早味冬瓜"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P036","category":"無咖啡因","name":"蕎麥茶","sizes":{"L":40.0,"瓶":60.0},"defaultSize":"L","aliases":["蕎麥"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P037","category":"無咖啡因","name":"冬瓜仙草","sizes":{"L":45.0},"defaultSize":"L","aliases":["冬瓜仙草"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P038","category":"無咖啡因","name":"蘋果冰醋","sizes":{"L":45.0,"瓶":75.0},"defaultSize":"L","aliases":["蘋果醋","冰醋"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P039","category":"無咖啡因","name":"冬瓜檸檬","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["冬檸"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P040","category":"無咖啡因","name":"冬梅粉粿","sizes":{"L":60.0},"defaultSize":"L","aliases":["冬梅粉粿"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P041","category":"無咖啡因","name":"蕎麥粉粿","sizes":{"L":60.0},"defaultSize":"L","aliases":["蕎麥粉粿"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P042","category":"無咖啡因","name":"轟蜜蕎麥粉粿","sizes":{"L":60.0,"瓶":85.0},"defaultSize":"L","aliases":["轟蜜蕎麥","蜜蕎麥粉粿"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P043","category":"無咖啡因","name":"桂花凍蜜檸","sizes":{"L":65.0},"defaultSize":"L","aliases":["桂花凍蜜檸"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"固定","fixedIce":"依標準配方","iceOptions":[],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P044","category":"無咖啡因","name":"芒果冰沙","sizes":{"L":50.0},"defaultSize":"L","aliases":["芒果冰沙"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"冰沙固定","fixedIce":"冰沙","iceOptions":[],"temp":{"冷":true,"常溫":false,"溫":false,"熱":false},"slush":true,"note":""},{"id":"P045","category":"無咖啡因","name":"綠豆星沙","sizes":{"L":50.0},"defaultSize":"L","aliases":["綠豆沙","綠豆星沙"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"冰沙固定","fixedIce":"冰沙","iceOptions":[],"temp":{"冷":true,"常溫":false,"溫":false,"熱":false},"slush":true,"note":""},{"id":"P046","category":"無咖啡因","name":"綠豆星沙牛奶","sizes":{"L":60.0},"defaultSize":"L","aliases":["綠豆沙牛奶","綠豆星沙牛奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"冰沙固定","fixedIce":"冰沙","iceOptions":[],"temp":{"冷":true,"常溫":false,"溫":false,"熱":false},"slush":true,"note":""},{"id":"P047","category":"找特調","name":"冬瓜青茶","sizes":{"L":50.0,"瓶":70.0},"defaultSize":"L","aliases":["冬瓜青"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P048","category":"找特調","name":"青梅青/綠","sizes":{"L":55.0},"defaultSize":"L","aliases":["青梅青","青梅綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P049","category":"找特調","name":"多多綠茶","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["多多綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P050","category":"找特調","name":"8冰綠","sizes":{"L":50.0,"瓶":75.0},"defaultSize":"L","aliases":["八冰綠","8冰綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P051","category":"找特調","name":"仙楂108","sizes":{"L":50.0,"瓶":75.0},"defaultSize":"L","aliases":["仙楂108","山楂108"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P052","category":"找特調","name":"桂花凍108","sizes":{"L":60.0},"defaultSize":"L","aliases":["桂花108","桂花凍108"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"固定","fixedIce":"依標準配方","iceOptions":[],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P053","category":"找特調","name":"轟蜜茶","sizes":{"L":60.0,"瓶":85.0},"defaultSize":"L","aliases":["轟蜜茶","蜂蜜茶"],"active":true,"sugarMode":"限制調整","fixedSugar":"","minSugar":"微糖","sugarOptions":["正常糖","少糖","半糖","微糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P054","category":"找特調","name":"冬瓜檸檬粉角","sizes":{"L":65.0},"defaultSize":"L","aliases":["冬檸粉角","冬瓜檸檬粉角"],"active":true,"sugarMode":"固定","fixedSugar":"依標準配方","minSugar":"","sugarOptions":[],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P055","category":"找奶茶","name":"靚奶茶","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["靚奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P056","category":"找奶茶","name":"靚奶凍","sizes":{"L":65.0},"defaultSize":"L","aliases":["靚奶凍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P057","category":"找奶茶","name":"奶茶/奶綠","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["奶茶","奶綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P058","category":"找奶茶","name":"烏龍奶茶","sizes":{"L":55.0,"瓶":75.0},"defaultSize":"L","aliases":["烏龍奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P059","category":"找奶茶","name":"108焙烏龍奶茶","sizes":{"L":60.0},"defaultSize":"L","aliases":["108奶茶","焙烏龍奶茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P060","category":"找奶茶","name":"珍珠奶茶","sizes":{"L":55.0},"defaultSize":"L","aliases":["珍奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P061","category":"找奶茶","name":"粉角奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["粉角奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P062","category":"找奶茶","name":"仙草凍奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["仙草奶茶","仙草凍奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P063","category":"找奶茶","name":"粉粿奶茶","sizes":{"L":65.0},"defaultSize":"L","aliases":["粉粿奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P064","category":"找奶茶","name":"當代雙Q","sizes":{"L":65.0,"瓶":85.0},"defaultSize":"L","aliases":["雙Q","當代雙Q"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P065","category":"找奶茶","name":"珍珠紅豆奶","sizes":{"L":65.0},"defaultSize":"L","aliases":["紅豆珍奶","珍珠紅豆奶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P066","category":"找奶茶","name":"紫芋西米露","sizes":{"L":70.0},"defaultSize":"L","aliases":["紫芋西米露","芋頭西米露"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":""},{"id":"P067","category":"找奶茶","name":"白毫烏龍輕乳茶","sizes":{"L":75.0},"defaultSize":"L","aliases":["白毫輕乳","烏龍輕乳"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":""},{"id":"P068","category":"找果茶","name":"西瓜綠","sizes":{"L":65.0},"defaultSize":"L","aliases":["西瓜綠","西瓜綠茶"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":"新增：使用者補充"},{"id":"P069","category":"找果茶","name":"西瓜烏龍","sizes":{"L":70.0},"defaultSize":"L","aliases":["西瓜烏龍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":"新增：使用者補充"},{"id":"P070","category":"芝士奶蓋","name":"奶蓋西瓜綠","sizes":{"L":70.0},"defaultSize":"L","aliases":["奶蓋西瓜綠"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":true},"slush":false,"note":"新增：使用者補充"},{"id":"P071","category":"芝士奶蓋","name":"奶蓋西瓜烏龍","sizes":{"L":75.0},"defaultSize":"L","aliases":["奶蓋西瓜烏龍"],"active":true,"sugarMode":"自由調整","fixedSugar":"","minSugar":"","sugarOptions":["正常糖","少糖","半糖","微糖","一分糖","無糖"],"iceMode":"自由調整","fixedIce":"","iceOptions":["多冰","正常冰","少冰","微冰","去冰","完全去冰"],"temp":{"冷":true,"常溫":true,"溫":true,"熱":false},"slush":false,"note":"新增：使用者補充"}];
 
 // ==========================================
 // Webhook 主入口
@@ -2289,6 +2876,88 @@ export default async function handler(req, res) {
             continue;
           }
 
+          if (data.startsWith('bagpref_no|')) {
+            const draftId =
+              data.slice(
+                'bagpref_no|'.length
+              );
+
+            const draftDoc =
+              await getDraftDocument(
+                draftId
+              );
+
+            if (!draftDoc) {
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 找不到這份草稿，請重新輸入訂單。'
+              );
+              continue;
+            }
+
+            try {
+              await setCustomerNoBagPreference(
+                lineUserId,
+                true
+              );
+
+              const runtimeDrafts =
+                normalizeStoredDrafts(
+                  draftDoc.drafts || []
+                );
+
+              await updateDraftDocument(
+                draftId,
+                runtimeDrafts,
+                {
+                  bagQty: 0,
+                  fields: {
+                    status:
+                      'waiting_confirm',
+                    bagPreferenceApplied:
+                      'no_bag',
+                  },
+                }
+              );
+
+              await clearLineSession(
+                lineUserId
+              );
+
+              await replyLineMessages(
+                replyToken,
+                [
+                  {
+                    type: 'text',
+                    text:
+                      '♻️ 已記住：之後這個 LINE 帳號預設都不需要塑膠袋。\n如要取消，可輸入「恢復詢問塑膠袋」。'
+                  },
+                  {
+                    type: 'text',
+                    text:
+                      buildFinalDraftText(
+                        await getDraftDocument(
+                          draftId
+                        )
+                      )
+                  }
+                ]
+              );
+            } catch (error) {
+              console.error(
+                '儲存塑膠袋偏好失敗',
+                error
+              );
+
+              await replyLineMessage(
+                replyToken,
+                '⚠️ 常客偏好儲存失敗，請再試一次。'
+              );
+            }
+
+            continue;
+          }
+
           if (data.startsWith('bag|')) {
             const parts = data.split('|');
             const draftId = parts[1];
@@ -2318,6 +2987,8 @@ export default async function handler(req, res) {
                 bagQty,
                 fields: {
                   status: 'waiting_confirm',
+                  bagPreferenceApplied:
+                    FieldValue.delete(),
                 },
               }
             );
@@ -2327,6 +2998,163 @@ export default async function handler(req, res) {
               replyToken,
               draftId
             );
+            continue;
+          }
+
+          if (data.startsWith('staff_prepare|')) {
+            const orderId =
+              data.slice(
+                'staff_prepare|'.length
+              );
+
+            try {
+              const result =
+                await transitionFormalOrderStatus(
+                  orderId,
+                  lineUserId,
+                  '已接受',
+                  '製作中'
+                );
+
+              const displayOrderNo =
+                getOrderDisplayNo(
+                  result.orderDoc
+                );
+
+              if (!result.duplicated) {
+                try {
+                  await pushCustomerStatusMessage(
+                    orderId,
+                    result.orderDoc,
+                    buildCustomerPreparingMessage(
+                      result.orderDoc
+                    ),
+                    'preparing'
+                  );
+                } catch (notifyError) {
+                  console.error(
+                    '已進入製作中，但通知客人失敗',
+                    notifyError
+                  );
+                }
+              }
+
+              if (result.duplicated) {
+                await replyLineMessage(
+                  replyToken,
+                  [
+                    'ℹ️ 這筆訂單已經是製作中。',
+                    `🧾 ${displayOrderNo}`
+                  ].join('\n')
+                );
+              } else {
+                await replyLineMessages(
+                  replyToken,
+                  [
+                    makeStaffNextActionMessage(
+                      [
+                        '🧋 已開始製作！',
+                        `🧾 ${displayOrderNo}`,
+                        '📌 狀態：製作中',
+                        `👤 操作人：${result.staff.name}`,
+                        '',
+                        '已通知客人。'
+                      ].join('\n'),
+                      orderId,
+                      'staff_complete',
+                      '🎉 完成訂單',
+                      `完成訂單 ${displayOrderNo}`
+                    )
+                  ]
+                );
+              }
+            } catch (error) {
+              console.error(
+                '切換製作中失敗',
+                error
+              );
+
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 無法開始製作。',
+                  `原因：${error.message || '未知錯誤'}`
+                ].join('\n')
+              );
+            }
+
+            continue;
+          }
+
+          if (data.startsWith('staff_complete|')) {
+            const orderId =
+              data.slice(
+                'staff_complete|'.length
+              );
+
+            try {
+              const result =
+                await transitionFormalOrderStatus(
+                  orderId,
+                  lineUserId,
+                  '製作中',
+                  '已完成'
+                );
+
+              const displayOrderNo =
+                getOrderDisplayNo(
+                  result.orderDoc
+                );
+
+              if (!result.duplicated) {
+                try {
+                  await pushCustomerStatusMessage(
+                    orderId,
+                    result.orderDoc,
+                    buildCustomerCompletedMessage(
+                      result.orderDoc
+                    ),
+                    'completed'
+                  );
+                } catch (notifyError) {
+                  console.error(
+                    '訂單已完成，但通知客人失敗',
+                    notifyError
+                  );
+                }
+              }
+
+              await replyLineMessage(
+                replyToken,
+                result.duplicated
+                  ? [
+                      'ℹ️ 這筆訂單已經完成。',
+                      `🧾 ${displayOrderNo}`
+                    ].join('\n')
+                  : [
+                      '🎉 訂單完成！',
+                      `🧾 ${displayOrderNo}`,
+                      '📌 狀態：已完成',
+                      `👤 操作人：${result.staff.name}`,
+                      '',
+                      '已通知客人。'
+                    ].join('\n')
+              );
+            } catch (error) {
+              console.error(
+                '完成訂單失敗',
+                error
+              );
+
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 無法完成這筆訂單。',
+                  `原因：${error.message || '未知錯誤'}`
+                ].join('\n')
+              );
+            }
+
             continue;
           }
 
@@ -2367,24 +3195,37 @@ export default async function handler(req, res) {
                   .orderId ||
                 orderId;
 
-              await replyLineMessage(
-                replyToken,
-                accepted.duplicated
-                  ? [
-                      'ℹ️ 這筆訂單已經被接受。',
-                      `🧾 ${displayOrderNo}`,
-                      `目前狀態：已接受`,
-                      `接單人：${accepted.acceptedByName}`
-                    ].join('\n')
-                  : [
-                      '✅ 接單成功！',
-                      `🧾 ${displayOrderNo}`,
-                      `📌 狀態：已接受`,
-                      `👤 接單人：${accepted.acceptedByName}`,
-                      '',
-                      '已同步通知客人。'
-                    ].join('\n')
-              );
+              if (accepted.duplicated) {
+                await replyLineMessage(
+                  replyToken,
+                  [
+                    'ℹ️ 這筆訂單已經被接受。',
+                    `🧾 ${displayOrderNo}`,
+                    `目前狀態：已接受`,
+                    `接單人：${accepted.acceptedByName}`
+                  ].join('\n')
+                );
+              } else {
+                await replyLineMessages(
+                  replyToken,
+                  [
+                    makeStaffNextActionMessage(
+                      [
+                        '✅ 接單成功！',
+                        `🧾 ${displayOrderNo}`,
+                        `📌 狀態：已接受`,
+                        `👤 接單人：${accepted.acceptedByName}`,
+                        '',
+                        '已同步通知客人。'
+                      ].join('\n'),
+                      orderId,
+                      'staff_prepare',
+                      '🧋 開始製作',
+                      `開始製作 ${displayOrderNo}`
+                    )
+                  ]
+                );
+              }
             } catch (error) {
               console.error(
                 '接受訂單失敗',
@@ -2526,6 +3367,46 @@ export default async function handler(req, res) {
         const userMsg = String(event.message.text || '').trim();
         const userId = event.source?.userId || '';
 
+        if (
+          [
+            '以後都不用塑膠袋',
+            '以後不用塑膠袋',
+            '固定不用塑膠袋',
+            '預設不用塑膠袋'
+          ].includes(userMsg)
+        ) {
+          await setCustomerNoBagPreference(
+            userId,
+            true
+          );
+
+          await replyLineMessage(
+            replyToken,
+            '♻️ 已設定常客偏好：之後預設不需要塑膠袋。\n需要恢復時，輸入「恢復詢問塑膠袋」即可。'
+          );
+          continue;
+        }
+
+        if (
+          [
+            '恢復詢問塑膠袋',
+            '取消不用塑膠袋',
+            '取消塑膠袋偏好',
+            '每次詢問塑膠袋'
+          ].includes(userMsg)
+        ) {
+          await setCustomerNoBagPreference(
+            userId,
+            false
+          );
+
+          await replyLineMessage(
+            replyToken,
+            '✅ 已取消常客塑膠袋預設，之後點餐會恢復每次詢問。'
+          );
+          continue;
+        }
+
         if (!userMsg) continue;
 
         // V3.2：如果使用者正在「再加1杯」或「重新輸入完整訂單」
@@ -2658,36 +3539,10 @@ export default async function handler(req, res) {
             continue;
           }
 
-          await replyLineMessages(
+          await proceedToBagStage(
             replyToken,
-            [
-              {
-                type: 'text',
-                text: statusText
-              },
-              {
-                type: 'text',
-                text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
-                quickReply: {
-                  items: [0, 1, 2, 3].map(qty => ({
-                    type: 'action',
-                    action: {
-                      type: 'postback',
-                      label:
-                        qty === 0
-                          ? '不用'
-                          : `${qty}個`,
-                      data:
-                        `bag|${activeSession.draftId}|${qty}`,
-                      displayText:
-                        qty === 0
-                          ? '不用塑膠袋'
-                          : `塑膠袋${qty}個`
-                    }
-                  }))
-                }
-              }
-            ]
+            activeSession.draftId,
+            statusText
           );
           continue;
         }
@@ -2752,32 +3607,10 @@ export default async function handler(req, res) {
                   FieldValue.serverTimestamp(),
               }, { merge: true });
 
-            await replyLineMessages(
+            await proceedToBagStage(
               replyToken,
-              [
-                {
-                  type: 'text',
-                  text: replacementText
-                },
-                {
-                  type: 'text',
-                  text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
-                  quickReply: {
-                    items: [0, 1, 2, 3].map(qty => ({
-                      type: 'action',
-                      action: {
-                        type: 'postback',
-                        label: qty === 0 ? '不用' : `${qty}個`,
-                        data: `bag|${activeSession.draftId}|${qty}`,
-                        displayText:
-                          qty === 0
-                            ? '不用塑膠袋'
-                            : `塑膠袋${qty}個`
-                      }
-                    }))
-                  }
-                }
-              ]
+              activeSession.draftId,
+              replacementText
             );
           }
           continue;
@@ -2897,32 +3730,10 @@ export default async function handler(req, res) {
               FieldValue.serverTimestamp(),
           }, { merge: true });
 
-        await replyLineMessages(
+        await proceedToBagStage(
           replyToken,
-          [
-            {
-              type: 'text',
-              text: replyText
-            },
-            {
-              type: 'text',
-              text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
-              quickReply: {
-                items: [0, 1, 2, 3].map(qty => ({
-                  type: 'action',
-                  action: {
-                    type: 'postback',
-                    label: qty === 0 ? '不用' : `${qty}個`,
-                    data: `bag|${savedDraft.draftId}|${qty}`,
-                    displayText:
-                      qty === 0
-                        ? '不用塑膠袋'
-                        : `塑膠袋${qty}個`
-                  }
-                }))
-              }
-            }
-          ]
+          savedDraft.draftId,
+          replyText
         );
       }
 
