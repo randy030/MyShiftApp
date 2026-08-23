@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.2 優惠互動＋塑膠袋測試版
+// TEA TOP LINE 接單 V3.2.1 再加一杯修正版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -1090,10 +1090,16 @@ export default async function handler(req, res) {
           const addedSummary =
             summarizeDrafts(addedDrafts);
 
-          if (
+          const addedItemHasIssue =
             addedDrafts.length === 0 ||
-            addedSummary.hasIssue
-          ) {
+            addedDrafts.some(draft =>
+              (draft.items || []).some(item =>
+                Array.isArray(item.issues) &&
+                item.issues.length > 0
+              )
+            );
+
+          if (addedItemHasIssue) {
             await replyLineMessage(
               replyToken,
               '⚠️ 新增的飲料資料不完整，請重新輸入「1杯」完整飲料內容。'
