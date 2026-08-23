@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.2.1 再加一杯修正版
+// TEA TOP LINE 接單 V3.2.2 LINE Reply 修正版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -1153,21 +1153,39 @@ export default async function handler(req, res) {
             addedDrafts[0]?.items?.[0]?.name ||
             '飲料';
 
-          await replyLineMessage(
+          await replyLineMessages(
             replyToken,
             [
-              `✅ 已加入：${addedName} ×1`,
-              `🥤 現在共 ${updated.summary.drinkCount} 杯`,
-              updated.summary.promotion.freeDrinkCount > 0
-                ? `🎁 買10送1 ×${updated.summary.promotion.freeDrinkCount}，折抵 $${updated.summary.promotion.discountAmount}`
-                : '',
-              `💰 飲品優惠後：$${updated.summary.finalTotal}`
-            ].filter(Boolean).join('\n')
-          );
-
-          await replyBagQuestion(
-            replyToken,
-            activeSession.draftId
+              {
+                type: 'text',
+                text: [
+                  `✅ 已加入：${addedName} ×1`,
+                  `🥤 現在共 ${updated.summary.drinkCount} 杯`,
+                  updated.summary.promotion.freeDrinkCount > 0
+                    ? `🎁 買10送1 ×${updated.summary.promotion.freeDrinkCount}，折抵 $${updated.summary.promotion.discountAmount}`
+                    : '',
+                  `💰 飲品優惠後：$${updated.summary.finalTotal}`
+                ].filter(Boolean).join('\n')
+              },
+              {
+                type: 'text',
+                text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
+                quickReply: {
+                  items: [0, 1, 2, 3].map(qty => ({
+                    type: 'action',
+                    action: {
+                      type: 'postback',
+                      label: qty === 0 ? '不用' : `${qty}個`,
+                      data: `bag|${activeSession.draftId}|${qty}`,
+                      displayText:
+                        qty === 0
+                          ? '不用塑膠袋'
+                          : `塑膠袋${qty}個`
+                    }
+                  }))
+                }
+              }
+            ]
           );
           continue;
         }
@@ -1222,13 +1240,32 @@ export default async function handler(req, res) {
               activeSession.draftId
             );
           } else {
-            await replyLineMessage(
+            await replyLineMessages(
               replyToken,
-              replacementText
-            );
-            await replyBagQuestion(
-              replyToken,
-              activeSession.draftId
+              [
+                {
+                  type: 'text',
+                  text: replacementText
+                },
+                {
+                  type: 'text',
+                  text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
+                  quickReply: {
+                    items: [0, 1, 2, 3].map(qty => ({
+                      type: 'action',
+                      action: {
+                        type: 'postback',
+                        label: qty === 0 ? '不用' : `${qty}個`,
+                        data: `bag|${activeSession.draftId}|${qty}`,
+                        displayText:
+                          qty === 0
+                            ? '不用塑膠袋'
+                            : `塑膠袋${qty}個`
+                      }
+                    }))
+                  }
+                }
+              ]
             );
           }
           continue;
@@ -1347,14 +1384,32 @@ export default async function handler(req, res) {
               FieldValue.serverTimestamp(),
           }, { merge: true });
 
-        await replyLineMessage(
+        await replyLineMessages(
           replyToken,
-          replyText
-        );
-
-        await replyBagQuestion(
-          replyToken,
-          savedDraft.draftId
+          [
+            {
+              type: 'text',
+              text: replyText
+            },
+            {
+              type: 'text',
+              text: '🛍️ 需要加購塑膠袋嗎？\n塑膠袋 $1／個',
+              quickReply: {
+                items: [0, 1, 2, 3].map(qty => ({
+                  type: 'action',
+                  action: {
+                    type: 'postback',
+                    label: qty === 0 ? '不用' : `${qty}個`,
+                    data: `bag|${savedDraft.draftId}|${qty}`,
+                    displayText:
+                      qty === 0
+                        ? '不用塑膠袋'
+                        : `塑膠袋${qty}個`
+                  }
+                }))
+              }
+            }
+          ]
         );
       }
 
