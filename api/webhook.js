@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 
 // ==========================================
-// TEA TOP LINE 接單互動測試 V2.1 安全版
+// TEA TOP LINE 接單互動測試 V2.2 Firebase Auth 安全版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -13,6 +15,111 @@ import crypto from 'node:crypto';
 
 const CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
+
+let firebaseAdminAuth = null;
+
+function getFirebaseAdminAuth() {
+  if (firebaseAdminAuth) return firebaseAdminAuth;
+
+  const rawServiceAccount =
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+  if (!rawServiceAccount) {
+    throw new Error(
+      '缺少 FIREBASE_SERVICE_ACCOUNT_JSON'
+    );
+  }
+
+  let serviceAccount;
+
+  try {
+    serviceAccount = JSON.parse(rawServiceAccount);
+  } catch (error) {
+    console.error(
+      'FIREBASE_SERVICE_ACCOUNT_JSON 解析失敗',
+      error
+    );
+    throw new Error(
+      'FIREBASE_SERVICE_ACCOUNT_JSON 格式錯誤'
+    );
+  }
+
+  const app =
+    getApps().length > 0
+      ? getApps()[0]
+      : initializeApp({
+          credential: cert(serviceAccount),
+        });
+
+  firebaseAdminAuth = getAdminAuth(app);
+  return firebaseAdminAuth;
+}
+
+async function verifyFirebaseRequest(req) {
+  const authorization =
+    String(req.headers.authorization || '');
+
+  if (!authorization.startsWith('Bearer ')) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Missing Firebase ID Token',
+    };
+  }
+
+  const idToken =
+    authorization.slice('Bearer '.length).trim();
+
+  if (!idToken) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Missing Firebase ID Token',
+    };
+  }
+
+  try {
+    const adminAuth = getFirebaseAdminAuth();
+    const decodedToken =
+      await adminAuth.verifyIdToken(idToken);
+
+    if (!decodedToken.uid) {
+      return {
+        ok: false,
+        status: 401,
+        error: 'Invalid Firebase User',
+      };
+    }
+
+    if (
+      decodedToken.email &&
+      decodedToken.email_verified === false
+    ) {
+      return {
+        ok: false,
+        status: 403,
+        error: 'Email Not Verified',
+      };
+    }
+
+    return {
+      ok: true,
+      user: decodedToken,
+    };
+
+  } catch (error) {
+    console.error(
+      'Firebase ID Token 驗證失敗:',
+      error?.message || error
+    );
+
+    return {
+      ok: false,
+      status: 401,
+      error: 'Invalid Firebase ID Token',
+    };
+  }
+}
 
 // LINE OA 既有自動回覆關鍵字。
 // 這些文字交給 LINE Official Account Manager 原本的自動回覆處理，
@@ -196,6 +303,19 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
+    // --------------------------------------------------
+    // B. 班表 APP → LINE 員工通知
+    // 必須帶 Firebase Authentication ID Token
+    // --------------------------------------------------
+    const firebaseAuthResult =
+      await verifyFirebaseRequest(req);
+
+    if (!firebaseAuthResult.ok) {
+      return res
+        .status(firebaseAuthResult.status)
+        .send(firebaseAuthResult.error);
+    }
+
     let body;
 
     try {
@@ -208,6 +328,12 @@ export default async function handler(req, res) {
 
     if (to && messages) {
       await sendLinePush(to, messages);
+
+      console.log(
+        'LINE Push authorized by Firebase user:',
+        firebaseAuthResult.user.uid
+      );
+
       return res.status(200).send('Sent');
     }
 

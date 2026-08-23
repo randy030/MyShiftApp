@@ -155,33 +155,45 @@ const exportToCSV = (filename, rows) => {
 };
 
 const sendLineNotification = async (targetLineIds, messageText) => {
-
     if (!targetLineIds || targetLineIds.length === 0) return false;
 
     try {
+        const currentUser = auth.currentUser;
 
-        const response = await fetch(LINE_API_URL, { 
+        if (!currentUser) {
+            console.error("LINE 通知失敗：目前沒有 Firebase 登入使用者");
+            return false;
+        }
 
-            method: 'POST', 
+        const idToken = await currentUser.getIdToken();
 
-            headers: { 'Content-Type': 'application/json' }, 
-
-            body: JSON.stringify({ to: targetLineIds, messages: [{ type: 'text', text: messageText }] }) 
-
+        const response = await fetch(LINE_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${idToken}`
+            },
+            body: JSON.stringify({
+                to: targetLineIds,
+                messages: [
+                    {
+                        type: 'text',
+                        text: messageText
+                    }
+                ]
+            })
         });
 
-        if (!response.ok) throw new Error(`LINE API ${response.status}`);
+        if (!response.ok) {
+            throw new Error(`LINE API ${response.status}`);
+        }
 
         return true;
 
     } catch (e) {
-
         console.error("LINE 通知失敗", e);
-
         return false;
-
     }
-
 };
 
 const getApproverLineIds = (users = {}) => [...new Set(
