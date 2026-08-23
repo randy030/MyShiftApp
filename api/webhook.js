@@ -1,25 +1,33 @@
 import crypto from 'node:crypto';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單互動測試 V2.2 Firebase Auth 安全版
+// TEA TOP LINE 接單 V3.0 Firestore 草稿測試版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
 // 1. 保留班表 APP 主動 LINE Push
 // 2. 保留「查ID / MYID」
 // 3. 一般文字嘗試解析成飲料訂單草稿
-// 4. 只回覆草稿，不寫 Firestore、不成立正式訂單
+// 4. 解析成功後寫入 Firestore orderDrafts；仍不成立正式訂單
 // ==========================================
 
 const CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
 
+let firebaseAdminApp = null;
 let firebaseAdminAuth = null;
+let firestoreDb = null;
 
-function getFirebaseAdminAuth() {
-  if (firebaseAdminAuth) return firebaseAdminAuth;
+function getFirebaseAdminApp() {
+  if (firebaseAdminApp) return firebaseAdminApp;
+
+  if (getApps().length > 0) {
+    firebaseAdminApp = getApps()[0];
+    return firebaseAdminApp;
+  }
 
   const rawServiceAccount =
     process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -44,15 +52,29 @@ function getFirebaseAdminAuth() {
     );
   }
 
-  const app =
-    getApps().length > 0
-      ? getApps()[0]
-      : initializeApp({
-          credential: cert(serviceAccount),
-        });
+  firebaseAdminApp = initializeApp({
+    credential: cert(serviceAccount),
+  });
 
-  firebaseAdminAuth = getAdminAuth(app);
+  return firebaseAdminApp;
+}
+
+function getFirebaseAdminAuth() {
+  if (firebaseAdminAuth) return firebaseAdminAuth;
+
+  firebaseAdminAuth =
+    getAdminAuth(getFirebaseAdminApp());
+
   return firebaseAdminAuth;
+}
+
+function getFirestoreDb() {
+  if (firestoreDb) return firestoreDb;
+
+  firestoreDb =
+    getFirestore(getFirebaseAdminApp());
+
+  return firestoreDb;
 }
 
 async function verifyFirebaseRequest(req) {
@@ -119,6 +141,145 @@ async function verifyFirebaseRequest(req) {
       error: 'Invalid Firebase ID Token',
     };
   }
+}
+
+// ==========================================
+// V3.0 Firestore 訂單草稿
+// ==========================================
+
+function serializeDraftsForFirestore(drafts) {
+  return drafts.map((draft, draftIndex) => ({
+    draftIndex,
+    fulfillment: draft.fulfillment || '未指定',
+    time: draft.time || '未指定',
+    address: draft.address || '',
+    items: (draft.items || []).map((item, itemIndex) => ({
+      itemIndex,
+      productId: item.productId || '',
+      name: item.name || '',
+      qty: Number(item.qty || 0),
+      size: item.size || '',
+      sugar: item.sugar || '',
+      ice: item.ice || '',
+      temp: item.temp || '',
+      price: Number(item.price || 0),
+      subtotal:
+        Number(item.price || 0) *
+        Number(item.qty || 0),
+      issues: Array.isArray(item.issues)
+        ? item.issues
+        : [],
+    })),
+  }));
+}
+
+function summarizeDrafts(drafts) {
+  let drinkCount = 0;
+  let originalTotal = 0;
+  let hasIssue = false;
+
+  for (const draft of drafts) {
+    if (
+      draft.fulfillment === '未指定' ||
+      (draft.fulfillment === '外送' && !draft.address)
+    ) {
+      hasIssue = true;
+    }
+
+    for (const item of draft.items || []) {
+      const qty = Number(item.qty || 0);
+      const price = Number(item.price || 0);
+
+      drinkCount += qty;
+      originalTotal += qty * price;
+
+      if (
+        Array.isArray(item.issues) &&
+        item.issues.length > 0
+      ) {
+        hasIssue = true;
+      }
+    }
+  }
+
+  return {
+    drinkCount,
+    originalTotal,
+    hasIssue,
+  };
+}
+
+async function saveOrderDraftToFirestore({
+  event,
+  lineUserId,
+  rawMessage,
+  drafts,
+}) {
+  const db = getFirestoreDb();
+
+  const webhookEventId =
+    String(event?.webhookEventId || '');
+
+  const draftRef = webhookEventId
+    ? db.collection('orderDrafts')
+        .doc(`line_${webhookEventId}`)
+    : db.collection('orderDrafts').doc();
+
+  const existing = await draftRef.get();
+
+  if (existing.exists) {
+    return {
+      draftId: draftRef.id,
+      duplicated: true,
+    };
+  }
+
+  const summary = summarizeDrafts(drafts);
+
+  await draftRef.set({
+    schemaVersion: 1,
+    source: 'LINE',
+    status: 'draft',
+
+    lineUserId,
+    webhookEventId:
+      webhookEventId || null,
+    isRedelivery:
+      Boolean(event?.deliveryContext?.isRedelivery),
+
+    rawMessage,
+
+    drafts:
+      serializeDraftsForFirestore(drafts),
+
+    drinkCount: summary.drinkCount,
+    originalTotal: summary.originalTotal,
+    hasIssue: summary.hasIssue,
+
+    promotion: {
+      type: 'buy10get1',
+      freeDrinkCount: 0,
+      discountAmount: 0,
+      shouldRemindAddOne: false,
+    },
+
+    bags: {
+      qty: 0,
+      unitPrice: 1,
+      subtotal: 0,
+    },
+
+    discountAmount: 0,
+    finalTotal: summary.originalTotal,
+
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    draftId: draftRef.id,
+    duplicated: false,
+  };
 }
 
 // LINE OA 既有自動回覆關鍵字。
@@ -290,14 +451,50 @@ export default async function handler(req, res) {
           continue;
         }
 
-        const replyText = buildDraftReply(drafts);
+        let savedDraft;
+
+        try {
+          savedDraft =
+            await saveOrderDraftToFirestore({
+              event,
+              lineUserId: userId,
+              rawMessage: userMsg,
+              drafts,
+            });
+        } catch (error) {
+          console.error(
+            'Firestore 訂單草稿寫入失敗:',
+            error
+          );
+
+          await replyLineMessage(
+            replyToken,
+            [
+              '⚠️ 訂單內容已辨識，但測試草稿寫入 Firestore 失敗。',
+              '目前不會成立正式訂單。',
+              '',
+              '請通知店家檢查系統。'
+            ].join('\n')
+          );
+          continue;
+        }
+
+        const replyText =
+          buildDraftReply(drafts) +
+          `\n\n🗃️ V3.0 測試草稿：${savedDraft.draftId}`;
+
         const hasIssue = drafts.some(d =>
           d.fulfillment === '未指定' ||
           (d.fulfillment === '外送' && !d.address) ||
           d.items.some(item => item.issues.length > 0)
         );
 
-        await replyOrderDraft(replyToken, replyText, userMsg, hasIssue);
+        await replyOrderDraft(
+          replyToken,
+          replyText,
+          userMsg,
+          hasIssue
+        );
       }
 
       return res.status(200).send('OK');
