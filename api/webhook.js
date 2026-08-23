@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.4 店員接單＋客人通知版
+// TEA TOP LINE 接單 V3.4.1 當日上班人員接單通知版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -1212,31 +1212,123 @@ function getShiftUsersCollection() {
     .collection('users');
 }
 
+function getTaipeiDateString() {
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }
+    ).formatToParts(new Date());
+
+  const values = {};
+
+  for (const part of parts) {
+    if (
+      part.type === 'year' ||
+      part.type === 'month' ||
+      part.type === 'day'
+    ) {
+      values[part.type] = part.value;
+    }
+  }
+
+  return (
+    `${values.year}-${values.month}-${values.day}`
+  );
+}
+
 async function getActiveStaffWithLineIds() {
-  const snap =
+  const db = getFirestoreDb();
+
+  const todayStr =
+    getTaipeiDateString();
+
+  const usersSnap =
     await getShiftUsersCollection().get();
+
+  const shiftRef =
+    db.collection('artifacts')
+      .doc('team-shift-pc-v1')
+      .collection('public')
+      .doc('data')
+      .collection('shifts')
+      .doc(todayStr);
+
+  const shiftSnap =
+    await shiftRef.get();
+
+  const shiftData =
+    shiftSnap.exists
+      ? shiftSnap.data() || {}
+      : {};
+
+  // 今日若設定店休，不發接單通知。
+  if (shiftData.isClosed === true) {
+    return [];
+  }
+
+  const assignments =
+    Array.isArray(shiftData.assignments)
+      ? shiftData.assignments
+      : [];
+
+  const leaveUidSet =
+    new Set(
+      assignments
+        .filter(
+          assignment =>
+            assignment?.type === 'LEAVE'
+        )
+        .map(
+          assignment =>
+            assignment?.uid
+        )
+        .filter(Boolean)
+    );
 
   const staff = [];
 
-  snap.forEach(docSnap => {
+  usersSnap.forEach(docSnap => {
     const data = docSnap.data() || {};
 
+    const uid =
+      data.uid || docSnap.id;
+
+    // 方案 B：
+    // 1. 在職
+    // 2. 非唯讀帳號
+    // 3. 有 LINE User ID
+    // 4. 今天沒有標示 LEAVE
+    //
+    // 依目前班表邏輯：
+    // 未標休假者預設為上班。
     if (
       data.isResigned === true ||
-      !data.lineUserId
+      data.isViewer === true ||
+      !data.lineUserId ||
+      leaveUidSet.has(uid)
     ) {
       return;
     }
 
     staff.push({
-      uid: docSnap.id,
+      uid,
       name:
         data.name ||
         data.displayName ||
         '店員',
       role: data.role || '',
+      isAdmin:
+        data.isAdmin === true,
+      isManager:
+        data.isManager === true,
       lineUserId:
         String(data.lineUserId).trim(),
+      workDate: todayStr,
     });
   });
 
@@ -1438,6 +1530,10 @@ async function notifyStaffForOrder(orderId) {
       {
         staffNotificationStatus:
           'no_recipients',
+        staffNotificationAudience:
+          'today_working_staff',
+        staffNotificationWorkDate:
+          getTaipeiDateString(),
         staffNotificationTargetCount: 0,
         staffNotificationUpdatedAt:
           FieldValue.serverTimestamp(),
@@ -1467,6 +1563,10 @@ async function notifyStaffForOrder(orderId) {
     await orderRef.set(
       {
         staffNotificationStatus: 'sent',
+        staffNotificationAudience:
+          'today_working_staff',
+        staffNotificationWorkDate:
+          getTaipeiDateString(),
         staffNotificationTargetCount:
           targetLineIds.length,
         staffNotificationLineUserIds:
@@ -1580,6 +1680,7 @@ async function acceptFormalOrder(
             status: '已接受',
             subOrders: nextSubOrders,
 
+            // 舊欄位保留，避免後續舊程式讀不到。
             acceptedByUid:
               staff.uid,
             acceptedByName:
@@ -1588,6 +1689,22 @@ async function acceptFormalOrder(
               staff.lineUserId,
             acceptedAt:
               FieldValue.serverTimestamp(),
+
+            // V3.4.1：完整接單人資料。
+            acceptedBy: {
+              uid: staff.uid,
+              name: staff.name,
+              role: staff.role || '',
+              isAdmin:
+                staff.isAdmin === true,
+              isManager:
+                staff.isManager === true,
+              lineUserId:
+                staff.lineUserId,
+              source: 'LINE',
+              workDate:
+                staff.workDate || '',
+            },
 
             customerNotificationStatus:
               'pending',
