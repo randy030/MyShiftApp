@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.3 正式 orders 建立測試版
+// TEA TOP LINE 接單 V3.4 店員接單＋客人通知版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -732,6 +732,49 @@ async function getDraftDocument(draftId) {
   };
 }
 
+function getTaipeiDateKey() {
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }
+    ).formatToParts(new Date());
+
+  const values = {};
+
+  for (const part of parts) {
+    if (
+      part.type === 'year' ||
+      part.type === 'month' ||
+      part.type === 'day'
+    ) {
+      values[part.type] = part.value;
+    }
+  }
+
+  return (
+    `${values.year}${values.month}${values.day}`
+  );
+}
+
+function formatDailyOrderNo(
+  fulfillment,
+  sequence
+) {
+  const prefix =
+    fulfillment === '外送'
+      ? '外送'
+      : '自取';
+
+  return (
+    `${prefix}${String(sequence).padStart(2, '0')}`
+  );
+}
+
 function buildFormalSubOrders(draftDoc) {
   const runtimeDrafts =
     normalizeStoredDrafts(
@@ -764,8 +807,13 @@ function buildFormalSubOrders(draftDoc) {
 
       return {
         subOrderIndex: draftIndex,
+
+        // 內部子訂單識別仍保留，
+        // 對客／店員顯示則改用 displayOrderNo。
         subOrderNo:
           `${draftDoc.id}-${draftIndex + 1}`,
+
+        displayOrderNo: '',
 
         status: '待確認',
 
@@ -794,6 +842,53 @@ function buildFormalSubOrders(draftDoc) {
   );
 }
 
+function assignDisplayOrderNos(
+  subOrders,
+  currentPickupNo,
+  currentDeliveryNo
+) {
+  let pickupNo =
+    Number(currentPickupNo || 0);
+
+  let deliveryNo =
+    Number(currentDeliveryNo || 0);
+
+  const numbered =
+    subOrders.map(subOrder => {
+      if (
+        subOrder.fulfillment === '外送'
+      ) {
+        deliveryNo += 1;
+
+        return {
+          ...subOrder,
+          displayOrderNo:
+            formatDailyOrderNo(
+              '外送',
+              deliveryNo
+            ),
+        };
+      }
+
+      pickupNo += 1;
+
+      return {
+        ...subOrder,
+        displayOrderNo:
+          formatDailyOrderNo(
+            '自取',
+            pickupNo
+          ),
+      };
+    });
+
+  return {
+    subOrders: numbered,
+    pickupNo,
+    deliveryNo,
+  };
+}
+
 async function createFormalOrderFromDraft(
   draftId,
   lineUserId
@@ -804,19 +899,29 @@ async function createFormalOrderFromDraft(
     db.collection('orderDrafts')
       .doc(draftId);
 
-  // 正式訂單直接沿用草稿 ID：
-  // 可避免 LINE 重送 confirm postback 時建立重複訂單。
+  // Firestore 內部正式訂單 ID 繼續沿用 draftId，
+  // 避免 LINE 重送 confirm 時重複建立。
   const orderRef =
     db.collection('orders')
       .doc(draftId);
 
+  const dateKey =
+    getTaipeiDateKey();
+
+  // 每天一份計數器：
+  // orderCounters/20260823
+  // pickupNo、deliveryNo 各自獨立累加。
+  const counterRef =
+    db.collection('orderCounters')
+      .doc(dateKey);
+
   return db.runTransaction(
     async transaction => {
-      const [draftSnap, orderSnap] =
-        await Promise.all([
-          transaction.get(draftRef),
-          transaction.get(orderRef),
-        ]);
+      const draftSnap =
+        await transaction.get(draftRef);
+
+      const orderSnap =
+        await transaction.get(orderRef);
 
       if (!draftSnap.exists) {
         throw new Error(
@@ -825,10 +930,15 @@ async function createFormalOrderFromDraft(
       }
 
       // Idempotency：
-      // 已經建立過就直接回傳原訂單，不重複新增。
+      // 已經建立過的正式訂單不再取新流水號。
       if (orderSnap.exists) {
         const existing =
           orderSnap.data() || {};
+
+        const existingSubOrders =
+          Array.isArray(existing.subOrders)
+            ? existing.subOrders
+            : [];
 
         return {
           orderId: orderRef.id,
@@ -836,13 +946,18 @@ async function createFormalOrderFromDraft(
           status:
             existing.status || '待確認',
           subOrderCount:
-            Array.isArray(existing.subOrders)
-              ? existing.subOrders.length
-              : 0,
+            existingSubOrders.length,
           finalTotal:
             Number(
               existing.finalTotal || 0
             ),
+          displayOrderNos:
+            existingSubOrders
+              .map(
+                sub =>
+                  sub.displayOrderNo || ''
+              )
+              .filter(Boolean),
         };
       }
 
@@ -867,16 +982,36 @@ async function createFormalOrderFromDraft(
         );
       }
 
-      const subOrders =
+      const baseSubOrders =
         buildFormalSubOrders(
           draftDoc
         );
 
-      if (subOrders.length === 0) {
+      if (baseSubOrders.length === 0) {
         throw new Error(
           '草稿內沒有可建立的訂單。'
         );
       }
+
+      // 讀取今天的自取／外送流水號。
+      // transaction 可避免同時間兩位客人拿到同一編號。
+      const counterSnap =
+        await transaction.get(counterRef);
+
+      const counterData =
+        counterSnap.exists
+          ? counterSnap.data() || {}
+          : {};
+
+      const numbered =
+        assignDisplayOrderNos(
+          baseSubOrders,
+          counterData.pickupNo || 0,
+          counterData.deliveryNo || 0
+        );
+
+      const subOrders =
+        numbered.subOrders;
 
       const originalTotal =
         subOrders.reduce(
@@ -920,14 +1055,32 @@ async function createFormalOrderFromDraft(
         discountAmount +
         bagSubtotal;
 
+      const displayOrderNos =
+        subOrders
+          .map(
+            subOrder =>
+              subOrder.displayOrderNo
+          )
+          .filter(Boolean);
+
       const formalOrder = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         source: 'LINE',
 
         status: '待確認',
 
+        // 內部 ID
         orderId: orderRef.id,
         draftId,
+
+        // 對客／店員顯示編號
+        displayOrderNo:
+          displayOrderNos.length === 1
+            ? displayOrderNos[0]
+            : displayOrderNos.join('、'),
+
+        displayOrderNos,
+        orderDateKey: dateKey,
 
         lineUserId:
           lineUserId ||
@@ -953,8 +1106,6 @@ async function createFormalOrderFromDraft(
 
         finalTotal,
 
-        // 這版只建立 orders，
-        // 尚未送店員通知。
         staffNotificationStatus:
           'not_sent',
 
@@ -963,6 +1114,22 @@ async function createFormalOrderFromDraft(
         updatedAt:
           FieldValue.serverTimestamp(),
       };
+
+      // 同一 transaction 更新計數器，
+      // 確保流水號不重複。
+      transaction.set(
+        counterRef,
+        {
+          dateKey,
+          pickupNo:
+            numbered.pickupNo,
+          deliveryNo:
+            numbered.deliveryNo,
+          updatedAt:
+            FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
 
       transaction.set(
         orderRef,
@@ -974,6 +1141,10 @@ async function createFormalOrderFromDraft(
         {
           status: 'formalized',
           orderId: orderRef.id,
+          displayOrderNo:
+            formalOrder.displayOrderNo,
+          displayOrderNos,
+          orderDateKey: dateKey,
           formalizedAt:
             FieldValue.serverTimestamp(),
           updatedAt:
@@ -989,25 +1160,573 @@ async function createFormalOrderFromDraft(
         subOrderCount:
           subOrders.length,
         finalTotal,
+        displayOrderNos,
       };
     }
   );
 }
 
 function buildFormalOrderCreatedText(result) {
+  const displayNos =
+    Array.isArray(result.displayOrderNos)
+      ? result.displayOrderNos
+      : [];
+
+  const numberLines =
+    displayNos.length <= 1
+      ? [
+          `🧾 訂單編號：${
+            displayNos[0] ||
+            result.orderId
+          }`
+        ]
+      : [
+          '🧾 訂單編號：',
+          ...displayNos.map(
+            no => `・${no}`
+          )
+        ];
+
   return [
     result.duplicated
       ? '✅ 這筆正式訂單已經建立過，不會重複新增。'
-      : '✅ 訂單已正式建立！',
+      : '✅ 訂單已正式送出！',
     '',
-    `🧾 訂單編號：${result.orderId}`,
+    ...numberLines,
     `📦 訂單數：${result.subOrderCount}`,
     `💰 應收：$${result.finalTotal}`,
     `📌 狀態：${result.status}`,
     '',
-    '🧪 V3.3 目前只建立正式 orders 資料。',
-    '尚未通知店員，也不會自動進入製作流程。'
+    result.duplicated
+      ? '店家端已保留原本的正式訂單，不會重複建立。'
+      : '已通知店員確認接單，接受後會再通知您。'
   ].join('\n');
+}
+
+function getShiftUsersCollection() {
+  return getFirestoreDb()
+    .collection('artifacts')
+    .doc('team-shift-pc-v1')
+    .collection('public')
+    .doc('data')
+    .collection('users');
+}
+
+async function getActiveStaffWithLineIds() {
+  const snap =
+    await getShiftUsersCollection().get();
+
+  const staff = [];
+
+  snap.forEach(docSnap => {
+    const data = docSnap.data() || {};
+
+    if (
+      data.isResigned === true ||
+      !data.lineUserId
+    ) {
+      return;
+    }
+
+    staff.push({
+      uid: docSnap.id,
+      name:
+        data.name ||
+        data.displayName ||
+        '店員',
+      role: data.role || '',
+      lineUserId:
+        String(data.lineUserId).trim(),
+    });
+  });
+
+  const unique = new Map();
+
+  for (const member of staff) {
+    if (!member.lineUserId) continue;
+
+    if (!unique.has(member.lineUserId)) {
+      unique.set(
+        member.lineUserId,
+        member
+      );
+    }
+  }
+
+  return [...unique.values()];
+}
+
+async function findActiveStaffByLineUserId(
+  lineUserId
+) {
+  if (!lineUserId) return null;
+
+  const staff =
+    await getActiveStaffWithLineIds();
+
+  return (
+    staff.find(
+      member =>
+        member.lineUserId === lineUserId
+    ) || null
+  );
+}
+
+function buildStaffOrderSummary(orderDoc) {
+  const lines = [
+    '🔔 【新 LINE 訂單】',
+    ''
+  ];
+
+  const subOrders =
+    Array.isArray(orderDoc.subOrders)
+      ? orderDoc.subOrders
+      : [];
+
+  for (const subOrder of subOrders) {
+    lines.push(
+      `【${
+        subOrder.displayOrderNo ||
+        subOrder.subOrderNo ||
+        '新訂單'
+      }】`
+    );
+
+    for (
+      const item of subOrder.items || []
+    ) {
+      lines.push(
+        `${item.name} ${item.size || ''} ×${item.qty}`
+      );
+
+      const specs = [];
+
+      if (item.sugar) {
+        specs.push(item.sugar);
+      }
+
+      if (
+        item.temp &&
+        item.temp !== '冷'
+      ) {
+        specs.push(item.temp);
+      } else if (item.ice) {
+        specs.push(item.ice);
+      }
+
+      if (specs.length) {
+        lines.push(
+          `　${specs.join(' / ')}`
+        );
+      }
+
+      for (
+        const topping of item.toppings || []
+      ) {
+        lines.push(
+          `　＋${topping.name}${
+            Number(topping.qty || 0) > 1
+              ? ` ×${topping.qty}`
+              : ''
+          }`
+        );
+      }
+    }
+
+    if (
+      subOrder.fulfillment === '外送'
+    ) {
+      lines.push(
+        `📍 外送${
+          subOrder.address
+            ? `｜${subOrder.address}`
+            : ''
+        }`
+      );
+    } else {
+      lines.push('📍 自取');
+    }
+
+    lines.push(
+      `⏱ ${subOrder.time || '未指定'}`
+    );
+
+    lines.push(
+      `💰 本單 $${Number(subOrder.finalTotal || 0)}`
+    );
+
+    lines.push('');
+  }
+
+  const bagQty =
+    Number(orderDoc.bags?.qty || 0);
+
+  if (bagQty > 0) {
+    lines.push(
+      `🛍️ 塑膠袋 ×${bagQty}`
+    );
+  }
+
+  lines.push(
+    `💰 全部應收：$${Number(orderDoc.finalTotal || 0)}`
+  );
+
+  lines.push(
+    '📌 狀態：待確認'
+  );
+
+  return lines
+    .join('\n')
+    .slice(0, 4200);
+}
+
+function buildStaffOrderMessage(orderDoc) {
+  return {
+    type: 'text',
+    text: buildStaffOrderSummary(orderDoc),
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '✅ 接受訂單',
+            data:
+              `staff_accept|${orderDoc.orderId}`,
+            displayText:
+              `接受訂單 ${
+                orderDoc.displayOrderNo || ''
+              }`.trim()
+          }
+        }
+      ]
+    }
+  };
+}
+
+async function notifyStaffForOrder(orderId) {
+  const db = getFirestoreDb();
+
+  const orderRef =
+    db.collection('orders')
+      .doc(orderId);
+
+  const orderSnap =
+    await orderRef.get();
+
+  if (!orderSnap.exists) {
+    throw new Error(
+      `找不到正式訂單 ${orderId}`
+    );
+  }
+
+  const orderDoc = {
+    id: orderSnap.id,
+    ...orderSnap.data(),
+  };
+
+  const staff =
+    await getActiveStaffWithLineIds();
+
+  const targetLineIds =
+    staff
+      .map(member => member.lineUserId)
+      .filter(Boolean);
+
+  if (targetLineIds.length === 0) {
+    await orderRef.set(
+      {
+        staffNotificationStatus:
+          'no_recipients',
+        staffNotificationTargetCount: 0,
+        staffNotificationUpdatedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return {
+      sent: false,
+      reason: 'no_recipients',
+      targetCount: 0,
+    };
+  }
+
+  try {
+    await sendLinePush(
+      targetLineIds,
+      [
+        buildStaffOrderMessage(
+          orderDoc
+        )
+      ]
+    );
+
+    await orderRef.set(
+      {
+        staffNotificationStatus: 'sent',
+        staffNotificationTargetCount:
+          targetLineIds.length,
+        staffNotificationLineUserIds:
+          targetLineIds,
+        staffNotifiedAt:
+          FieldValue.serverTimestamp(),
+        staffNotificationUpdatedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return {
+      sent: true,
+      targetCount:
+        targetLineIds.length,
+    };
+  } catch (error) {
+    await orderRef.set(
+      {
+        staffNotificationStatus: 'failed',
+        staffNotificationError:
+          String(
+            error?.message ||
+            'unknown error'
+          ).slice(0, 500),
+        staffNotificationUpdatedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    throw error;
+  }
+}
+
+async function acceptFormalOrder(
+  orderId,
+  staffLineUserId
+) {
+  const staff =
+    await findActiveStaffByLineUserId(
+      staffLineUserId
+    );
+
+  if (!staff) {
+    throw new Error(
+      '此 LINE 帳號不是目前班表系統中的在職員工，無法接單。'
+    );
+  }
+
+  const db = getFirestoreDb();
+
+  const orderRef =
+    db.collection('orders')
+      .doc(orderId);
+
+  const result =
+    await db.runTransaction(
+      async transaction => {
+        const snap =
+          await transaction.get(
+            orderRef
+          );
+
+        if (!snap.exists) {
+          throw new Error(
+            '找不到這筆正式訂單。'
+          );
+        }
+
+        const orderDoc = {
+          id: snap.id,
+          ...snap.data(),
+        };
+
+        if (
+          orderDoc.status === '已接受'
+        ) {
+          return {
+            duplicated: true,
+            orderDoc,
+            acceptedByName:
+              orderDoc.acceptedByName ||
+              '店員',
+          };
+        }
+
+        if (
+          orderDoc.status !== '待確認'
+        ) {
+          throw new Error(
+            `目前訂單狀態為「${orderDoc.status || '未知'}」，不能執行接受。`
+          );
+        }
+
+        const nextSubOrders =
+          (orderDoc.subOrders || [])
+            .map(subOrder => ({
+              ...subOrder,
+              status: '已接受',
+            }));
+
+        transaction.set(
+          orderRef,
+          {
+            status: '已接受',
+            subOrders: nextSubOrders,
+
+            acceptedByUid:
+              staff.uid,
+            acceptedByName:
+              staff.name,
+            acceptedByLineUserId:
+              staff.lineUserId,
+            acceptedAt:
+              FieldValue.serverTimestamp(),
+
+            customerNotificationStatus:
+              'pending',
+
+            updatedAt:
+              FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        return {
+          duplicated: false,
+          orderDoc: {
+            ...orderDoc,
+            status: '已接受',
+            subOrders: nextSubOrders,
+          },
+          acceptedByName:
+            staff.name,
+        };
+      }
+    );
+
+  return {
+    ...result,
+    staff,
+  };
+}
+
+function buildCustomerAcceptedMessage(
+  orderDoc,
+  acceptedByName
+) {
+  const displayNos =
+    Array.isArray(
+      orderDoc.displayOrderNos
+    )
+      ? orderDoc.displayOrderNos
+      : [];
+
+  const numberText =
+    displayNos.length > 0
+      ? displayNos.join('、')
+      : (
+          orderDoc.displayOrderNo ||
+          orderDoc.orderId ||
+          ''
+        );
+
+  return [
+    '✅ 店家已接受您的訂單！',
+    '',
+    `🧾 訂單編號：${numberText}`,
+    `💰 應收：$${Number(orderDoc.finalTotal || 0)}`,
+    '📌 狀態：已接受',
+    '',
+    '店家已收到訂單，將依訂單內容準備。'
+  ].join('\n');
+}
+
+async function notifyCustomerOrderAccepted(
+  orderId,
+  orderDoc,
+  acceptedByName
+) {
+  const customerLineUserId =
+    String(
+      orderDoc.lineUserId || ''
+    ).trim();
+
+  const orderRef =
+    getFirestoreDb()
+      .collection('orders')
+      .doc(orderId);
+
+  if (!customerLineUserId) {
+    await orderRef.set(
+      {
+        customerNotificationStatus:
+          'no_customer_line_id',
+        customerNotificationUpdatedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return false;
+  }
+
+  try {
+    await sendLinePush(
+      [customerLineUserId],
+      [{
+        type: 'text',
+        text:
+          buildCustomerAcceptedMessage(
+            orderDoc,
+            acceptedByName
+          ),
+      }]
+    );
+
+    await orderRef.set(
+      {
+        customerNotificationStatus:
+          'sent',
+        customerAcceptedNotifiedAt:
+          FieldValue.serverTimestamp(),
+        customerNotificationUpdatedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return true;
+  } catch (error) {
+    await orderRef.set(
+      {
+        customerNotificationStatus:
+          'failed',
+        customerNotificationError:
+          String(
+            error?.message ||
+            'unknown error'
+          ).slice(0, 500),
+        customerNotificationUpdatedAt:
+          FieldValue.serverTimestamp(),
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    throw error;
+  }
 }
 
 async function replyPromoChoice(
@@ -1249,7 +1968,7 @@ function buildFinalDraftText(draftDoc) {
     '✅ 按下「確認訂單」後，將建立正式 orders 訂單。'
   );
   output.push(
-    '🧪 V3.3 暫時不通知店員，也不會自動進入製作流程。'
+    '✅ 確認後會通知店員接單；店員接受後會再通知您。'
   );
 
   return output
@@ -1494,6 +2213,79 @@ export default async function handler(req, res) {
             continue;
           }
 
+          if (data.startsWith('staff_accept|')) {
+            const orderId =
+              data.slice(
+                'staff_accept|'.length
+              );
+
+            try {
+              const accepted =
+                await acceptFormalOrder(
+                  orderId,
+                  lineUserId
+                );
+
+              if (!accepted.duplicated) {
+                try {
+                  await notifyCustomerOrderAccepted(
+                    orderId,
+                    accepted.orderDoc,
+                    accepted.acceptedByName
+                  );
+                } catch (
+                  customerNotifyError
+                ) {
+                  console.error(
+                    '訂單已接受，但通知客人失敗',
+                    customerNotifyError
+                  );
+                }
+              }
+
+              const displayOrderNo =
+                accepted.orderDoc
+                  .displayOrderNo ||
+                accepted.orderDoc
+                  .orderId ||
+                orderId;
+
+              await replyLineMessage(
+                replyToken,
+                accepted.duplicated
+                  ? [
+                      'ℹ️ 這筆訂單已經被接受。',
+                      `🧾 ${displayOrderNo}`,
+                      `目前狀態：已接受`,
+                      `接單人：${accepted.acceptedByName}`
+                    ].join('\n')
+                  : [
+                      '✅ 接單成功！',
+                      `🧾 ${displayOrderNo}`,
+                      `📌 狀態：已接受`,
+                      `👤 接單人：${accepted.acceptedByName}`,
+                      '',
+                      '已同步通知客人。'
+                    ].join('\n')
+              );
+            } catch (error) {
+              console.error(
+                '接受訂單失敗',
+                error
+              );
+
+              await replyLineMessage(
+                replyToken,
+                [
+                  '⚠️ 無法接受這筆訂單。',
+                  `原因：${error.message || '未知錯誤'}`
+                ].join('\n')
+              );
+            }
+
+            continue;
+          }
+
           if (data.startsWith('confirmdraft|')) {
             const draftId =
               data.slice('confirmdraft|'.length);
@@ -1508,6 +2300,21 @@ export default async function handler(req, res) {
               await clearLineSession(
                 lineUserId
               );
+
+              // 只有第一次建立正式訂單時才通知店員。
+              // LINE 重送 confirm 不會重複通知。
+              if (!result.duplicated) {
+                try {
+                  await notifyStaffForOrder(
+                    result.orderId
+                  );
+                } catch (notifyError) {
+                  console.error(
+                    '正式訂單已建立，但通知店員失敗',
+                    notifyError
+                  );
+                }
+              }
 
               await replyLineMessage(
                 replyToken,
