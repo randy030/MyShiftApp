@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
+
 // ==========================================
-// TEA TOP LINE 接單互動測試 V2
+// TEA TOP LINE 接單互動測試 V2.1 安全版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -10,6 +12,7 @@
 // ==========================================
 
 const CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
 
 // LINE OA 既有自動回覆關鍵字。
 // 這些文字交給 LINE Official Account Manager 原本的自動回覆處理，
@@ -22,33 +25,62 @@ const PRODUCTS = [{"id":"P001","category":"找好茶","name":"招牌高山青","
 // ==========================================
 // Webhook 主入口
 // ==========================================
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export default async function handler(req, res) {
-  if (
-    req.method === 'GET' ||
-    (req.body && Object.keys(req.body).length === 0)
-  ) {
+  if (req.method === 'GET') {
     return res.status(200).send('OK');
   }
 
-  try {
-    const { to, messages, events } = req.body || {};
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
+  }
 
-    // A. 班表 APP → LINE 員工通知
-    if (to && messages) {
-      await sendLinePush(to, messages);
-      return res.status(200).send('Sent');
+  try {
+    const rawBody = await readRawBody(req);
+
+    if (!rawBody) {
+      return res.status(200).send('OK');
     }
 
-    // B. LINE → Webhook
-    if (Array.isArray(events) && events.length > 0) {
+    const signature = String(req.headers['x-line-signature'] || '');
+
+    if (signature) {
+      if (!CHANNEL_SECRET) {
+        console.error('缺少 LINE_CHANNEL_SECRET');
+        return res.status(500).send('Missing LINE_CHANNEL_SECRET');
+      }
+
+      const isValid = verifyLineSignature(rawBody, signature, CHANNEL_SECRET);
+
+      if (!isValid) {
+        console.warn('LINE Webhook signature 驗證失敗');
+        return res.status(401).send('Invalid signature');
+      }
+
+      let body;
+
+      try {
+        body = JSON.parse(rawBody);
+      } catch (error) {
+        console.error('LINE Webhook JSON 解析失敗:', error);
+        return res.status(400).send('Invalid JSON');
+      }
+
+      const { events } = body || {};
+
+      if (!Array.isArray(events) || events.length === 0) {
+        return res.status(200).send('OK');
+      }
+
       for (const event of events) {
         const replyToken = event.replyToken;
-
         if (!replyToken) continue;
 
-        // ------------------------------------------
-        // B1. Quick Reply / Postback 按鈕
-        // ------------------------------------------
         if (event.type === 'postback') {
           const data = String(event.postback?.data || '');
 
@@ -90,8 +122,6 @@ export default async function handler(req, res) {
           }
 
           if (data.startsWith('modify|')) {
-            // 正常情況會由 inputOption=openKeyboard 直接開啟鍵盤並預填原訂單。
-            // 這裡保留後備回覆。
             await replyLineMessage(
               replyToken,
               '✏️ 請直接修改輸入框中的訂單內容後重新送出。'
@@ -102,9 +132,6 @@ export default async function handler(req, res) {
           continue;
         }
 
-        // ------------------------------------------
-        // B2. 一般文字訊息
-        // ------------------------------------------
         if (
           event.type !== 'message' ||
           event.message?.type !== 'text'
@@ -117,8 +144,6 @@ export default async function handler(req, res) {
 
         if (!userMsg) continue;
 
-        // 原班表功能：查 LINE User ID
-        // 加入常見大小寫與誤輸入容錯
         const normalizedIdCommand = userMsg
           .replace(/[’'`]/g, '')
           .replace(/\s+/g, '')
@@ -135,12 +160,10 @@ export default async function handler(req, res) {
           continue;
         }
 
-        // 保留 LINE OA 原本的關鍵字自動回覆
         if (PASSTHROUGH_KEYWORDS.has(userMsg)) {
           continue;
         }
 
-        // 飲料接單
         const drafts = parseOrderMessage(userMsg);
 
         if (drafts.length === 0) {
@@ -167,15 +190,25 @@ export default async function handler(req, res) {
           d.items.some(item => item.issues.length > 0)
         );
 
-        await replyOrderDraft(
-          replyToken,
-          replyText,
-          userMsg,
-          hasIssue
-        );
+        await replyOrderDraft(replyToken, replyText, userMsg, hasIssue);
       }
 
       return res.status(200).send('OK');
+    }
+
+    let body;
+
+    try {
+      body = JSON.parse(rawBody);
+    } catch (error) {
+      return res.status(400).send('Invalid JSON');
+    }
+
+    const { to, messages } = body || {};
+
+    if (to && messages) {
+      await sendLinePush(to, messages);
+      return res.status(200).send('Sent');
     }
 
     return res.status(200).send('No Action');
@@ -184,6 +217,36 @@ export default async function handler(req, res) {
     console.error('LINE Webhook Error:', error);
     return res.status(500).send('Internal Server Error');
   }
+}
+
+function verifyLineSignature(rawBody, signature, channelSecret) {
+  const expectedSignature = crypto
+    .createHmac('sha256', channelSecret)
+    .update(rawBody, 'utf8')
+    .digest('base64');
+
+  const expectedBuffer = Buffer.from(expectedSignature);
+  const actualBuffer = Buffer.from(signature);
+
+  if (expectedBuffer.length !== actualBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
+async function readRawBody(req) {
+  const chunks = [];
+
+  for await (const chunk of req) {
+    chunks.push(
+      Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk)
+    );
+  }
+
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 
