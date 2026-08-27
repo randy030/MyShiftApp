@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.6.2 雙倍奶蓋定價＋發票金額聲明版
+// TEA TOP LINE 接單 V3.6.3 點餐意圖分流＋客服訊息放行版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -3387,6 +3387,135 @@ async function replyFinalConfirmation(replyToken, draftId) {
 // LINE OA 既有自動回覆關鍵字。
 // 這些文字交給 LINE Official Account Manager 原本的自動回覆處理，
 // 避免 Webhook 再多回一則。
+
+const FEEDBACK_INTENT_PATTERNS = [
+  /反映/,
+  /反饋/,
+  /客訴/,
+  /建議/,
+  /抱怨/,
+  /服務態度/,
+  /服務不好/,
+  /態度不好/,
+  /不好喝/,
+  /太甜/,
+  /太淡/,
+  /太苦/,
+  /有異物/,
+  /異物/,
+  /喝到/,
+  /做錯/,
+  /做成/,
+  /送錯/,
+  /漏做/,
+  /漏給/,
+  /少給/,
+  /沒給/,
+  /少了/,
+  /品質問題/,
+  /想詢問/,
+  /請問/,
+];
+
+function getOrderIntentSignals(message) {
+  const text = String(message || '').trim();
+
+  const productHits =
+    findProductHits(
+      normalizePunctuation(
+        normalizeFulfillment(text)
+      )
+    );
+
+  const hasProduct =
+    productHits.length > 0;
+
+  const hasQty =
+    /(?:\d+|[一二兩三四五六七八九十]+)\s*(?:杯|瓶)|[xX×*]\s*\d+|\d+\s*[xX×*]/.test(text);
+
+  const hasSugarIce =
+    /(正常糖|少糖|半糖|微糖|一分糖|無糖|正常冰|少冰|微冰|去冰|常溫|熱)/.test(text);
+
+  const hasFulfillment =
+    /(自取|外送|幫我送|送到|我過去拿|我去拿|過去拿|到店取|取餐)/.test(text);
+
+  const hasAddress =
+    /(?:地址\s*[:：]|(?:路|街|巷|弄)\s*\d+.*號)/.test(text);
+
+  const hasOrderVerb =
+    /(我要|要一杯|要兩杯|來一杯|來兩杯|幫我做|幫我準備|麻煩外送|麻煩送|點餐|訂飲料|訂餐)/.test(text);
+
+  const hasMultipleProductLines =
+    text
+      .split(/\r?\n/)
+      .filter(line =>
+        findProductHits(
+          normalizePunctuation(
+            normalizeFulfillment(line)
+          )
+        ).length > 0
+      )
+      .length >= 2;
+
+  const hasFeedbackSignal =
+    FEEDBACK_INTENT_PATTERNS.some(
+      pattern => pattern.test(text)
+    );
+
+  return {
+    hasProduct,
+    hasQty,
+    hasSugarIce,
+    hasFulfillment,
+    hasAddress,
+    hasOrderVerb,
+    hasMultipleProductLines,
+    hasFeedbackSignal,
+  };
+}
+
+function isLikelyOrderMessage(message) {
+  const signals =
+    getOrderIntentSignals(message);
+
+  if (!signals.hasProduct) {
+    return false;
+  }
+
+  // 明確訂單：商品 + 杯數，是最可靠的訊號。
+  if (signals.hasQty) {
+    return true;
+  }
+
+  // 常見簡短點餐：「綠茶無糖去冰」、「綠茶我過去拿」。
+  if (
+    signals.hasSugarIce ||
+    signals.hasFulfillment ||
+    signals.hasAddress ||
+    signals.hasOrderVerb ||
+    signals.hasMultipleProductLines
+  ) {
+    // 若同時是客訴語句，至少需要兩個點餐訊號才啟動，
+    // 避免「綠茶太甜了」之類的反饋被誤判。
+    if (signals.hasFeedbackSignal) {
+      const strongSignalCount = [
+        signals.hasQty,
+        signals.hasSugarIce,
+        signals.hasFulfillment,
+        signals.hasAddress,
+        signals.hasOrderVerb,
+        signals.hasMultipleProductLines,
+      ].filter(Boolean).length;
+
+      return strongSignalCount >= 2;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 const PASSTHROUGH_KEYWORDS = new Set(['評論']);
 
 // 商品資料：由 TEA TOP V1.7 規則版商品主檔內嵌。
@@ -4494,6 +4623,26 @@ export default async function handler(req, res) {
           continue;
         }
 
+        // V3.6.3：先判斷「是否真的在點餐」。
+        // 一般聊天、詢問、意見反饋、客訴，不由點餐 Bot 回覆，
+        // 保留給 LINE@ 原有關鍵字/人工客服流程。
+        if (!isLikelyOrderMessage(userMsg)) {
+          console.log(
+            'LINE text passthrough: non-order intent',
+            {
+              lineUserId: userId,
+              textPreview:
+                userMsg.slice(0, 120),
+              signals:
+                getOrderIntentSignals(
+                  userMsg
+                ),
+            }
+          );
+          continue;
+        }
+
+        // 只有確定是點餐訊息，才檢查門市目前是否暫停接單。
         const acceptanceState =
           await getOrderAcceptanceState();
 
@@ -4511,18 +4660,19 @@ export default async function handler(req, res) {
 
         const drafts = parseOrderMessage(userMsg);
 
+        // 已判定有點餐意圖，但解析不到品項，才提示正確點餐格式。
         if (drafts.length === 0) {
           await replyLineMessage(
             replyToken,
             [
-              '🧋 目前沒有辨識到飲料商品。',
+              '🧋 有收到您的點餐需求，但目前沒有成功辨識商品。',
               '',
               '可以像這樣輸入：',
               '綠茶*2無糖去冰，我過去拿',
               '奶香金萱2杯微糖微冰',
               '西瓜烏龍*3微糖微冰，幫我送 東山路一段189-19號',
               '',
-              '目前為 LINE 接單測試版，不會直接成立訂單。'
+              '若您是在反映問題或提供意見，可直接輸入內容，系統不會建立訂單。'
             ].join('\n')
           );
           continue;
