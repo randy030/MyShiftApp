@@ -4,7 +4,7 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 // ==========================================
-// TEA TOP LINE 接單 V3.7.2 內建料防重複＋精簡回覆版
+// TEA TOP LINE 接單 V3.8.1 真人接手15分鐘閒置自動恢復版
 // 班表 LINE 通知 + 查ID + 飲料訂單解析
 //
 // 目前功能：
@@ -679,6 +679,334 @@ async function clearLineSession(lineUserId) {
 async function getLineSession(lineUserId) {
   const snap = await getLineSessionRef(lineUserId).get();
   return snap.exists ? snap.data() : null;
+}
+
+
+async function incrementOrderCorrectionAttempt(
+  lineUserId,
+  draftId
+) {
+  const ref =
+    getLineSessionRef(lineUserId);
+
+  return getFirestoreDb()
+    .runTransaction(
+      async transaction => {
+        const snap =
+          await transaction.get(ref);
+
+        const current =
+          snap.exists
+            ? snap.data() || {}
+            : {};
+
+        const sameDraft =
+          current.draftId === draftId;
+
+        const nextCount =
+          sameDraft
+            ? Number(
+                current.correctionAttemptCount ||
+                0
+              ) + 1
+            : 1;
+
+        transaction.set(
+          ref,
+          {
+            mode:
+              'order_correction',
+            draftId,
+            correctionAttemptCount:
+              nextCount,
+            updatedAt:
+              FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        return nextCount;
+      }
+    );
+}
+
+const HUMAN_HANDOFF_IDLE_MINUTES = 15;
+const HUMAN_HANDOFF_IDLE_MS =
+  HUMAN_HANDOFF_IDLE_MINUTES *
+  60 *
+  1000;
+
+async function setHumanHandoffSession(
+  lineUserId,
+  orderId,
+  draftId
+) {
+  await setLineSession(
+    lineUserId,
+    {
+      mode:
+        'human_handoff',
+      orderId,
+      draftId,
+      handoffStartedAt:
+        FieldValue.serverTimestamp(),
+      handoffStartedAtMs:
+        Date.now(),
+      lastCustomerMessageAt:
+        FieldValue.serverTimestamp(),
+      lastCustomerMessageAtMs:
+        Date.now(),
+    }
+  );
+}
+
+function isHumanHandoffStillActive(
+  session
+) {
+  if (
+    session?.mode !==
+    'human_handoff'
+  ) {
+    return false;
+  }
+
+  const lastMessageAtMs =
+    Number(
+      session.lastCustomerMessageAtMs ||
+      session.handoffStartedAtMs ||
+      0
+    );
+
+  if (!lastMessageAtMs) {
+    return false;
+  }
+
+  return (
+    Date.now() - lastMessageAtMs
+  ) < HUMAN_HANDOFF_IDLE_MS;
+}
+
+async function touchHumanHandoffSession(
+  lineUserId
+) {
+  await setLineSession(
+    lineUserId,
+    {
+      lastCustomerMessageAt:
+        FieldValue.serverTimestamp(),
+      lastCustomerMessageAtMs:
+        Date.now(),
+    }
+  );
+}
+
+function buildHumanHandoffCustomerText() {
+  return [
+    '🙋 已轉真人協助',
+    '',
+    '這筆訂單先幫您送到店家，',
+    '店員會依照您剛才的訊息人工確認。',
+    '',
+    '後續可直接繼續留言，不用再重打整張訂單。',
+    '若 15 分鐘沒有新訊息，之後會自動恢復點餐服務。'
+  ].join('\n');
+}
+
+async function createHumanReviewOrderFromDraft(
+  draftId,
+  lineUserId
+) {
+  const db =
+    getFirestoreDb();
+
+  const draftRef =
+    db.collection('orderDrafts')
+      .doc(draftId);
+
+  const draftSnap =
+    await draftRef.get();
+
+  if (!draftSnap.exists) {
+    throw new Error(
+      '找不到訂單草稿。'
+    );
+  }
+
+  await draftRef.set(
+    {
+      hasIssue: false,
+      status:
+        'ready_for_human_review',
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  let result;
+
+  try {
+    result =
+      await createFormalOrderFromDraft(
+        draftId,
+        lineUserId
+      );
+  } catch (error) {
+    await draftRef.set(
+      {
+        hasIssue: true,
+        status: 'draft',
+        updatedAt:
+          FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    throw error;
+  }
+
+  const orderRef =
+    db.collection('orders')
+      .doc(result.orderId);
+
+  const orderSnap =
+    await orderRef.get();
+
+  const orderDoc =
+    orderSnap.exists
+      ? orderSnap.data() || {}
+      : {};
+
+  const nextSubOrders =
+    (orderDoc.subOrders || [])
+      .map(subOrder => ({
+        ...subOrder,
+        status:
+          '待人工確認',
+      }));
+
+  await orderRef.set(
+    {
+      status:
+        '待人工確認',
+      requiresHumanReview:
+        true,
+      humanReviewReason:
+        'bot_unresolved_after_two_attempts',
+      humanReviewStartedAt:
+        FieldValue.serverTimestamp(),
+      subOrders:
+        nextSubOrders,
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await draftRef.set(
+    {
+      status:
+        'human_review',
+      orderId:
+        result.orderId,
+      hasIssue:
+        true,
+      humanReviewStartedAt:
+        FieldValue.serverTimestamp(),
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    ...result,
+    status:
+      '待人工確認',
+  };
+}
+
+async function notifyStaffForHumanReview(
+  orderId
+) {
+  const db =
+    getFirestoreDb();
+
+  const orderRef =
+    db.collection('orders')
+      .doc(orderId);
+
+  const snap =
+    await orderRef.get();
+
+  if (!snap.exists) {
+    throw new Error(
+      `找不到正式訂單 ${orderId}`
+    );
+  }
+
+  const orderDoc = {
+    id: snap.id,
+    ...snap.data()
+  };
+
+  const staff =
+    await getActiveStaffWithLineIds();
+
+  const targetLineIds =
+    [...new Set(
+      staff
+        .map(member =>
+          member.lineUserId
+        )
+        .filter(Boolean)
+    )];
+
+  if (
+    targetLineIds.length === 0
+  ) {
+    return;
+  }
+
+  const text = [
+    '⚠️【待人工確認訂單】',
+    '',
+    buildStaffOrderSummary(
+      orderDoc
+    ).replace(
+      '🔔 【新 LINE 訂單】\n',
+      ''
+    ),
+    '',
+    '📌 請查看客人原始訊息並人工確認後再處理。'
+  ].join('\n').slice(0, 4200);
+
+  await sendLinePush(
+    targetLineIds,
+    [
+      {
+        type: 'text',
+        text
+      }
+    ]
+  );
+
+  await orderRef.set(
+    {
+      staffNotificationStatus:
+        'sent_human_review',
+      staffNotificationAudience:
+        'today_working_staff',
+      staffNotificationTargetCount:
+        targetLineIds.length,
+      staffNotificationLineUserIds:
+        targetLineIds,
+      staffNotifiedAt:
+        FieldValue.serverTimestamp(),
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 function normalizeStoredDrafts(storedDrafts) {
@@ -4434,6 +4762,51 @@ export default async function handler(req, res) {
           await getLineSession(userId);
 
         if (
+          activeSession?.mode ===
+          'human_handoff'
+        ) {
+          if (
+            isHumanHandoffStillActive(
+              activeSession
+            )
+          ) {
+            await touchHumanHandoffSession(
+              userId
+            );
+
+            console.log(
+              'LINE text passthrough: human handoff active',
+              {
+                lineUserId: userId,
+                orderId:
+                  activeSession.orderId || '',
+                idleTimeoutMinutes:
+                  HUMAN_HANDOFF_IDLE_MINUTES,
+              }
+            );
+
+            continue;
+          }
+
+          // V3.8.1：
+          // 真人接手超過 15 分鐘無客人新訊息，
+          // 下一則訊息自動恢復 Bot，並正常往下判斷是否為點餐。
+          await clearLineSession(
+            userId
+          );
+
+          console.log(
+            'LINE human handoff auto resumed after idle timeout',
+            {
+              lineUserId: userId,
+              idleTimeoutMinutes:
+                HUMAN_HANDOFF_IDLE_MINUTES,
+            }
+          );
+        }
+
+
+        if (
           activeSession?.mode === 'waiting_add_one' &&
           activeSession?.draftId
         ) {
@@ -4745,12 +5118,83 @@ export default async function handler(req, res) {
           summarizeDrafts(drafts);
 
         if (currentSummary.hasIssue) {
-          await replyOrderDraft(
-            replyToken,
-            replyText,
-            userMsg,
-            true
-          );
+          const attemptCount =
+            await incrementOrderCorrectionAttempt(
+              userId,
+              savedDraft.draftId
+            );
+
+          if (attemptCount < 2) {
+            await replyLineMessage(
+              replyToken,
+              [
+                replyText,
+                '',
+                '⚠️ 有資料需要補充，請再修正一次即可。'
+              ].join('\n')
+            );
+            continue;
+          }
+
+          try {
+            const handoffResult =
+              await createHumanReviewOrderFromDraft(
+                savedDraft.draftId,
+                userId
+              );
+
+            await setHumanHandoffSession(
+              userId,
+              handoffResult.orderId,
+              savedDraft.draftId
+            );
+
+            try {
+              await notifyStaffForHumanReview(
+                handoffResult.orderId
+              );
+            } catch (notifyError) {
+              console.error(
+                '待人工確認訂單已建立，但通知店員失敗',
+                notifyError
+              );
+            }
+
+            await replyLineMessage(
+              replyToken,
+              [
+                buildHumanHandoffCustomerText(),
+                '',
+                `🧾 訂單編號：${
+                  (handoffResult.displayOrderNos || [])
+                    .join('、') ||
+                  handoffResult.orderId
+                }`
+              ].join('\n')
+            );
+          } catch (error) {
+            console.error(
+              '建立待人工確認訂單失敗',
+              error
+            );
+
+            await setHumanHandoffSession(
+              userId,
+              '',
+              savedDraft.draftId
+            );
+
+            await replyLineMessage(
+              replyToken,
+              [
+                '🙋 已轉真人協助',
+                '',
+                '這筆訂單系統沒有成功辨識完整，',
+                '請直接繼續留言，店員會人工協助。'
+              ].join('\n')
+            );
+          }
+
           continue;
         }
 
@@ -4799,6 +5243,11 @@ export default async function handler(req, res) {
           await replyLineMessage(
             replyToken,
             submittedText
+          );
+
+
+          await clearLineSession(
+            userId
           );
         } catch (error) {
           console.error(
