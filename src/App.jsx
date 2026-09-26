@@ -1,3 +1,6 @@
+// V14.0.0-alpha11.15
+// 修正部署版：移除 Word 文件標題文字
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import { initializeApp } from 'firebase/app';
