@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.2";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.2.1";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '11.16.2.1：修正 2026／2027 國定假日陣列結尾缺少 ]; 導致 Vercel 建置失敗。',
 
  '11.16.2：內建 2027（民國116年）國定假日／補假，並補正 2026 小年夜（2/15）；年度假日管理可直接切換 2026／2027 查看。',
 
@@ -829,6 +831,8 @@ const TAIWAN_PUBLIC_HOLIDAYS = [
     { date: '2027-12-25', name: '行憲紀念日', type: 'national' },
 
     { date: '2027-12-31', name: '2028 元旦補假', type: 'makeup' }
+
+];
 
 const normalizePublicHoliday = (item = {}) => ({
 
