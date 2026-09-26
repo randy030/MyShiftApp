@@ -22,9 +22,15 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.1";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '11.16.1：補充協議第一、三、五條文字調整；既有改善機會已完成，未來事件仍保留查證與員工陳述。',
+
+ '11.16.1：薪資調整改為管理員啟動協商後，必須由員工再次確認，完成雙方確認後才建立 Salary History，並自下一完整薪資月份生效。',
+
+ '11.16.1：補休新增時序限制；只能使用請假發生日以前已取得的可用補休，禁止用後來加班產生的補休回溯抵扣較早事假／病假。',
 
  '11.16：補充協議加入雙方簽署／生效狀態、事件查證與最終確認、薪資歷程及下一完整薪資月生效。',
 
@@ -575,6 +581,50 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
         balance: yearStats.otEarned - yearStats.compHoursUsed
 
     };
+
+};
+
+ 
+
+// 11.16.1：補休時序限制。請假只能使用「請假發生日以前」已取得且尚未使用的補休。
+
+const getCompBalanceBeforeDate = ({ shifts = {}, uid, leaveDate, shiftTypes = DEFAULT_SHIFT_TYPES }) => {
+
+    let earned = 0;
+
+    let used = 0;
+
+    Object.keys(shifts || {}).sort().forEach(date => {
+
+        if (!leaveDate || !String(date).startsWith(String(leaveDate).slice(0,4)) || String(date) >= String(leaveDate)) return;
+
+        const data = shifts?.[date];
+
+        if (data?.isClosed) return;
+
+        const assign = Array.isArray(data?.assignments) ? data.assignments.find(a => a.uid === uid) : null;
+
+        if (!assign) return;
+
+        if (assign.otHours && assign.otConfirmed) {
+
+            const hrs = Number(assign.otHours);
+
+            if (hrs > 0) earned += hrs;
+
+            if (hrs < 0) used += Math.abs(hrs);
+
+        }
+
+        if (assign.type === 'LEAVE' && assign.useComp && !['annual','menstrual'].includes(assign.leaveType)) {
+
+            used += resolveLeaveHours(assign, shiftTypes);
+
+        }
+
+    });
+
+    return { earned, used, balance: Math.max(0, Math.round((earned - used) * 100) / 100) };
 
 };
 
@@ -1256,7 +1306,7 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                 meetingDate,
 
-                agreementVersion: '11.16-1',
+                agreementVersion: '11.16.1-1',
 
                 status: 'signed_effective',
 
@@ -1324,15 +1374,15 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                         <p>本補充協議係原勞動契約之補充文件。除本協議另有約定外，原勞動契約其他約定均維持不變；本文件不回溯修改或覆蓋雙方先前已完成簽署之勞動契約。</p>
 
-                        <p><strong>第一條｜服務品質及客訴處理</strong><br/>乙方執行門市服務工作時，應以合理、禮貌及符合門市服務規範之方式應對顧客。客戶提出抱怨本身不當然構成「客訴成立」。</p>
+                        <p><strong>第一條｜服務品質及客訴處理</strong><br/>乙方執行門市服務工作時，應以合理、禮貌及符合門市服務規範之方式應對顧客。客戶提出抱怨或反映時，甲方應就事件內容進行合理查證；客戶提出抱怨或反映本身，不直接視為客訴成立。經查證確認與乙方服務態度有關，且可歸責於乙方者，始列為成立之服務態度事件。</p>
 
                         <p><strong>第二條｜客訴成立認定程序</strong><br/>客訴須確實涉及乙方之服務態度、應對方式、言語或其他可歸責行為；甲方應進行基本查證，包括詢問當事員工及在場人員、檢視監視器、訂單紀錄、LINE 對話或其他可佐證資料，並排除產品本身、系統、外送平台、合理等待時間及其他非乙方可控制因素。乙方應有說明及陳述意見之機會，甲方始得依客觀資料作成是否成立之紀錄。</p>
 
-                        <p><strong>第三條｜改善及警告紀錄</strong><br/>服務態度事件原則採「提醒或書面紀錄 → 正式面談及改善紀錄 → 改善後再次發生同性質且經查證成立之事件」之漸進管理方式。各階段應留下事件、查證、員工陳述及改善要求紀錄。</p>
+                        <p><strong>第三條｜既有改善及警告紀錄</strong><br/>甲乙雙方確認，於本協議簽署前，乙方就服務態度相關事項已曾接受甲方多次口頭提醒、溝通、面談及改善要求，甲方亦已給予合理改善機會。前述既有事件僅作為本協議之背景及改善歷程紀錄，不溯及適用本協議之薪資調整條款。本協議生效後，如再次發生同性質之服務態度事件，不再以重新給予相同改善期間作為啟動後續處理程序之前提；惟甲方仍應就新發生之具體事件進行查證，並給予乙方陳述及說明機會。經確認事件成立、與先前改善事項同性質且可歸責於乙方後，始得依本協議約定進入後續處理程序。</p>
 
                         <p><strong>第四條｜既有事件處理</strong><br/>雙方確認目前月薪維持新臺幣 <strong>37,500 元</strong>。本次及先前已發生之服務態度客訴僅作為改善與管理紀錄，不追溯扣減已提供勞務期間之既有工資。</p>
 
-                        <p><strong>第五條｜未來薪資調整程序</strong><br/>本次改善後，如乙方再次發生「同性質、可歸責且經查證成立」之服務態度客訴，甲方得依本協議啟動勞動條件及薪資調整協商程序。經雙方就具體事件、查證結果及調整內容再次確認後，未來固定薪資得由 <strong>34,500 元</strong> 調整為 <strong>29,500 元</strong>；每月 <strong>3,000 元全勤獎金制度維持不變</strong>，因此正常符合全勤條件之月薪由 <strong>37,500 元</strong> 調整為 <strong>32,500 元</strong>。32,500 元已包含 3,000 元全勤獎金，不得再重複加計。</p>
+                        <p><strong>第五條｜未來薪資調整程序</strong><br/>本協議生效後，如乙方再次發生「同性質、可歸責且經查證成立」之服務態度事件，甲方得依本協議啟動勞動條件及薪資調整協商程序。雙方確認，乙方目前正常符合全勤條件時之每月薪資為 <strong>37,500 元</strong>，其中包含固定薪資 <strong>34,500 元</strong>及全勤獎金 <strong>3,000 元</strong>；3,000 元全勤獎金並非另於 37,500 元之外加發。經雙方就具體事件、查證結果及薪資調整內容再次確認後，固定薪資得由 <strong>34,500 元</strong> 調整為 <strong>29,500 元</strong>，原每月 <strong>3,000 元全勤獎金制度維持不變</strong>。正常符合全勤條件時之每月薪資因此為 <strong>32,500 元</strong>，其中已包含 3,000 元全勤獎金，並非另於 32,500 元之外加發。未完成雙方再次確認前，不建立新薪資歷程亦不變更薪資。</p>
 
                         <p><strong>第六條｜生效時間及不追溯</strong><br/>如雙方確認適用前條薪資調整，應自下一個完整薪資月份起生效，不得以「罰款」、「每次客訴扣款」或其他方式回溯扣除事件發生月份以前已取得之工資。</p>
 
@@ -1660,7 +1710,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
                                 <p className="pl-4 mt-1">2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</p>
 
-                                <p className="pl-4 mt-1">3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
+                                <p className="pl-4 mt-1">3. 病假 / 事假：申請時可選擇使用補休時數扣抵，但僅限請假發生日以前已取得且尚未使用之補休；請假日後才產生之加班／補休不得回溯抵扣。主管核准時由系統依時序及可用餘額檢核。</p>
 
                             </>
 
@@ -1758,7 +1808,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 
                                 <p><strong>改善紀錄：</strong>採提醒／書面紀錄、正式面談改善、改善後再次發生之漸進管理方式，並分別留下事件、查證、陳述及改善要求。</p>
 
-                                <p><strong>薪資：</strong>簽署時月薪維持 <strong>$37,500</strong>；既有事件不追溯扣薪。改善後如再次發生同性質、可歸責且經查證成立之服務態度客訴，得啟動薪資調整協商；經雙方就具體事件及調整內容再次確認後，未來月薪得調整為 <strong>$32,500</strong>，自下一個完整薪資月份起適用。</p>
+                                <p><strong>薪資：</strong>簽署時正常符合全勤條件之月薪維持 <strong>$37,500</strong>（固定薪資 $34,500＋全勤獎金 $3,000，$3,000 已包含於月薪內）。既有事件不追溯扣薪。協議生效後如再次發生同性質、可歸責且經查證成立之服務態度事件，僅啟動薪資調整協商；必須由店方與員工就具體事件及調整內容再次確認後，未來正常符合全勤條件之月薪始得調整為 <strong>$32,500</strong>（固定薪資 $29,500＋全勤獎金 $3,000），並自下一個完整薪資月份起適用。</p>
 
                                 <p><strong>禁止回溯扣款：</strong>不得以罰款、每次客訴扣款或其他方式回溯扣除已提供勞務期間之工資。</p>
 
@@ -1800,7 +1850,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 
                                 <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
 
-                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每月最多 1 日；全年前 3 日不併入病假，第 4 日起併入病假計算。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
+                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每月最多 1 日；全年前 3 日不併入病假，第 4 日起併入病假計算；薪資依半薪規則處理。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇使用補休時數扣抵，但僅限請假發生日以前已取得且尚未使用之補休；請假日後才產生之加班／補休不得回溯抵扣。主管核准時由系統依時序及可用餘額檢核。</p>
 
                             </>
 
@@ -1888,33 +1938,55 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     const getNextMonthStart = (dateStr) => { const d = new Date(`${dateStr}T00:00:00`); return `${d.getFullYear() + (d.getMonth()===11?1:0)}-${String((d.getMonth()+1)%12+1).padStart(2,'0')}-01`; };
 
-    const finalizeServiceSalaryAdjustment = async (record) => {
+    const startServiceSalaryAdjustment = async (record) => {
 
         const agreement = signatures.filter(s=>s.uid===record.uid && s.formType==='serviceSupplement' && s.customData?.status==='signed_effective').sort((a,b)=>Number(b.agreedAt||0)-Number(a.agreedAt||0))[0];
 
-        if (!agreement) return alert('⚠️ 此員工沒有已由雙方簽署並生效的補充協議，不得啟動薪資調整。');
+        if (!agreement) return alert('⚠️ 此員工沒有已由雙方簽署並生效的補充協議，不得啟動薪資調整協商。');
 
         if (record.eventDate < (agreement.customData?.effectiveDate || '9999-12-31')) return alert('🔒 本事件發生於補充協議生效前，只能作為歷史改善紀錄。');
 
-        if (!(record.result==='established' && record.serviceAttitudeRelated && record.sameNature && record.attributable)) return alert('⚠️ 必須同時符合：查證成立、服務態度相關、同性質、可歸責，才能進入最終確認。');
+        if (!(record.result==='established' && record.serviceAttitudeRelated && record.sameNature && record.attributable)) return alert('⚠️ 必須同時符合：查證成立、服務態度相關、同性質、可歸責，才能啟動薪資調整協商。');
 
-        if (record.salaryAdjustmentId || record.finalConfirmed) return alert('此事件已完成薪資調整確認。');
+        if (record.salaryAdjustmentId || record.finalConfirmed) return alert('此事件已完成薪資調整。');
 
-        if (!window.confirm('最終確認：此動作不追溯扣薪，固定薪資將自下一個完整薪資月份由 34,500 調整為 29,500；3,000 全勤獎金制度維持不變。是否繼續？')) return;
+        if (record.salaryAdjustmentPendingId) return alert('此事件已有待員工確認的薪資調整協商，請等待員工確認。');
 
-        const effectiveFrom = getNextMonthStart(record.eventDate);
+        if (!window.confirm('確認啟動薪資調整協商？\n\n此動作不會立即改薪資。員工仍須再次確認「固定薪資 34,500 → 29,500；3,000 全勤獎金制度不變」，完成雙方確認後才會建立 Salary History，並自下一個完整薪資月份生效。')) return;
 
-        const adjustmentRef = await addDoc(collection(db,'artifacts',appId,'public','data','salaryAdjustments'), { uid:record.uid, employeeName:record.employeeName, serviceRecordId:record.id, agreementId:agreement.id, confirmedAt:Date.now(), confirmedByUid:currentUserInfo?.uid||'', confirmedByName:currentUserInfo?.name||'管理員', effectiveFrom, oldBaseSalary:34500, newBaseSalary:29500, attendanceBonus:3000, oldNormalMonthlySalary:37500, newNormalMonthlySalary:32500, noRetroactiveDeduction:true });
+        const adjustmentRef = await addDoc(collection(db,'artifacts',appId,'public','data','salaryAdjustments'), { uid:record.uid, employeeName:record.employeeName, serviceRecordId:record.id, agreementId:agreement.id, status:'pending_employee_confirmation', employerConfirmedAt:Date.now(), employerConfirmedByUid:currentUserInfo?.uid||'', employerConfirmedByName:currentUserInfo?.name||'管理員', oldBaseSalary:34500, newBaseSalary:29500, attendanceBonus:3000, oldNormalMonthlySalary:37500, newNormalMonthlySalary:32500, noRetroactiveDeduction:true });
 
-        const historyItem = { id: adjustmentRef.id, effectiveFrom, baseSalary:29500, attendanceBonus:3000, fixedAllowance:0, normalMonthlySalary:32500, reason:'服務態度補充協議薪資調整', agreementId:agreement.id, serviceRecordId:record.id, createdAt:Date.now() };
+        await updateDoc(doc(db,'artifacts',appId,'public','data','serviceRecords',record.id), { salaryAdjustmentPendingId:adjustmentRef.id, salaryAdjustmentAgreementId:agreement.id, salaryAdjustmentStatus:'pending_employee_confirmation', employerSalaryConfirmedAt:Date.now() });
 
-        await updateDoc(doc(db,'artifacts',appId,'public','data','users',record.uid), { salaryHistory:arrayUnion(historyItem), salaryAdjustmentPending:{ effectiveFrom, baseSalary:29500, attendanceBonus:3000, normalMonthlySalary:32500, adjustmentId:adjustmentRef.id } });
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'START_SERVICE_SALARY_ADJUSTMENT_NEGOTIATION',targetType:'employee',targetId:record.uid,detail:{serviceRecordId:record.id,agreementId:agreement.id,adjustmentId:adjustmentRef.id}});
 
-        await updateDoc(doc(db,'artifacts',appId,'public','data','serviceRecords',record.id), { finalConfirmed:true, finalConfirmedAt:Date.now(), finalConfirmedByUid:currentUserInfo?.uid||'', salaryAdjustmentId:adjustmentRef.id, salaryEffectiveFrom:effectiveFrom });
+        alert('✅ 已啟動薪資調整協商，尚未變更薪資。請由員工登入後再次確認調整內容。');
 
-        await writeAuditLog({db,appId,actor:currentUserInfo,action:'FINALIZE_SERVICE_SALARY_ADJUSTMENT',targetType:'employee',targetId:record.uid,detail:{serviceRecordId:record.id,agreementId:agreement.id,effectiveFrom,oldBaseSalary:34500,newBaseSalary:29500}});
+    };
 
-        alert(`✅ 已完成最終確認。新固定薪資自 ${effectiveFrom} 起適用；事件月份不追溯扣薪。`);
+    const confirmServiceSalaryAdjustmentByEmployee = async (record) => {
+
+        if (record.uid !== currentUserInfo.uid) return alert('只能確認自己的薪資調整協商。');
+
+        if (!record.salaryAdjustmentPendingId || record.salaryAdjustmentStatus !== 'pending_employee_confirmation') return alert('目前沒有待您確認的薪資調整協商。');
+
+        if (!window.confirm('請確認薪資調整內容：\n\n目前正常符合全勤條件月薪 37,500 元（固定薪資 34,500＋全勤獎金 3,000）。\n調整後正常符合全勤條件月薪 32,500 元（固定薪資 29,500＋全勤獎金 3,000）。\n3,000 元全勤獎金均已包含於上述月薪，不另外加發。\n\n完成確認後，將自下一個完整薪資月份生效，且不追溯扣除既有工資。\n\n是否確認同意？')) return;
+
+        const effectiveFrom = getNextMonthStart(new Date().toISOString().split('T')[0]);
+
+        const adjustmentRef = doc(db,'artifacts',appId,'public','data','salaryAdjustments',record.salaryAdjustmentPendingId);
+
+        await updateDoc(adjustmentRef, { status:'signed_effective', employeeConfirmedAt:Date.now(), employeeConfirmedByUid:currentUserInfo.uid, employeeConfirmedByName:currentUserInfo.name||'', effectiveFrom, confirmedAt:Date.now() });
+
+        const historyItem = { id: record.salaryAdjustmentPendingId, effectiveFrom, baseSalary:29500, attendanceBonus:3000, fixedAllowance:0, normalMonthlySalary:32500, reason:'服務態度補充協議薪資調整（雙方再次確認）', agreementId:record.salaryAdjustmentAgreementId||'', serviceRecordId:record.id, createdAt:Date.now() };
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','users',record.uid), { salaryHistory:arrayUnion(historyItem), salaryAdjustmentPending:{ effectiveFrom, baseSalary:29500, attendanceBonus:3000, normalMonthlySalary:32500, adjustmentId:record.salaryAdjustmentPendingId } });
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','serviceRecords',record.id), { finalConfirmed:true, finalConfirmedAt:Date.now(), finalConfirmedByUid:currentUserInfo.uid, salaryAdjustmentId:record.salaryAdjustmentPendingId, salaryAdjustmentStatus:'signed_effective', salaryEffectiveFrom:effectiveFrom });
+
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'EMPLOYEE_CONFIRM_SERVICE_SALARY_ADJUSTMENT',targetType:'employee',targetId:record.uid,detail:{serviceRecordId:record.id,adjustmentId:record.salaryAdjustmentPendingId,effectiveFrom,oldBaseSalary:34500,newBaseSalary:29500}});
+
+        alert(`✅ 已完成雙方再次確認。新固定薪資自 ${effectiveFrom} 起適用；不追溯扣除既有工資。`);
 
     };
 
@@ -2104,13 +2176,13 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     <div className="mt-2 text-[11px] text-gray-500">服務態度相關：{record.serviceAttitudeRelated?'是':'否'}｜同性質：{record.sameNature?'是':'否'}｜可歸責：{record.attributable?'是':'否'}</div>
 
-                    {record.finalConfirmed ? <div className="mt-2 text-xs font-black text-emerald-700">✅ 已完成最終確認｜新薪資生效：{record.salaryEffectiveFrom}</div> : <button onClick={()=>finalizeServiceSalaryAdjustment(record)} className="mt-3 px-3 py-2 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-black">最終確認並建立下一完整薪資月調整</button>}
+                    {record.finalConfirmed ? <div className="mt-2 text-xs font-black text-emerald-700">✅ 雙方已再次確認｜新薪資生效：{record.salaryEffectiveFrom}</div> : record.salaryAdjustmentStatus === 'pending_employee_confirmation' ? <div className="mt-2 text-xs font-black text-amber-700">⏳ 店方已確認，等待員工再次確認薪資調整</div> : <button onClick={()=>startServiceSalaryAdjustment(record)} className="mt-3 px-3 py-2 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-black">啟動薪資調整協商（不立即改薪資）</button>}
 
                 </div>)}</div>
 
             </div>}
 
-            {!isPrivileged && serviceRecords.length > 0 && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4"><div className="p-4 bg-slate-50 border-b font-bold text-slate-700">我的服務態度／改善紀錄</div><div className="divide-y">{serviceRecords.map(record=><div key={record.id} className="p-4 text-sm"><div className="font-bold">{record.eventDate}｜{record.result==='established'?'查證成立':record.result==='not_established'?'查證不成立':'查證中／無法確認'}</div><div className="mt-2 text-gray-600">{record.complaint}</div>{record.employeeStatement&&<div className="mt-1 text-xs text-gray-500">我的說明：{record.employeeStatement}</div>}{record.improvement&&<div className="mt-1 text-xs text-indigo-700">改善要求：{record.improvement}</div>}</div>)}</div></div>}
+            {!isPrivileged && serviceRecords.length > 0 && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4"><div className="p-4 bg-slate-50 border-b font-bold text-slate-700">我的服務態度／改善紀錄</div><div className="divide-y">{serviceRecords.map(record=><div key={record.id} className="p-4 text-sm"><div className="font-bold">{record.eventDate}｜{record.result==='established'?'查證成立':record.result==='not_established'?'查證不成立':'查證中／無法確認'}</div><div className="mt-2 text-gray-600">{record.complaint}</div>{record.employeeStatement&&<div className="mt-1 text-xs text-gray-500">我的說明：{record.employeeStatement}</div>}{record.improvement&&<div className="mt-1 text-xs text-indigo-700">改善要求：{record.improvement}</div>}{record.salaryAdjustmentStatus==='pending_employee_confirmation' && <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3"><div className="text-xs font-black text-amber-800">⚠️ 勞動條件／薪資調整待您再次確認</div><div className="text-[11px] text-amber-700 mt-1">37,500 元（34,500＋3,000 全勤）→ 32,500 元（29,500＋3,000 全勤）；完成確認後自下一完整薪資月份生效。</div><button onClick={()=>confirmServiceSalaryAdjustmentByEmployee(record)} className="mt-2 px-3 py-2 rounded bg-amber-700 text-white text-xs font-black">閱讀並確認薪資調整</button></div>}{record.finalConfirmed&&<div className="mt-2 text-xs font-black text-emerald-700">✅ 已完成雙方再次確認｜生效：{record.salaryEffectiveFrom}</div>}</div>)}</div></div>}
 
                         {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
 
@@ -4840,7 +4912,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                               <input id={`use-comp-${u.uid}`} type="checkbox" className="accent-indigo-600" />
 
-                              病假 / 事假申請時，使用補休時數扣抵
+                              病假 / 事假申請時，可使用「請假日前已取得」的補休時數扣抵；後來取得的補休不得回溯抵扣
 
                           </label>
 
@@ -5124,9 +5196,9 @@ const calc = (uid) => {
 
                                 <div>🩸 生理假：本月 {s.monthStats.leaves.menstrual?.days || 0} 天｜年度累計 {s.yearStats.leaves.menstrual?.days || 0} 天｜前 3 日不併病假 {Math.min(s.yearStats.leaves.menstrual?.days || 0, 3)} 天｜第 4 日起併病假 {Math.max((s.yearStats.leaves.menstrual?.days || 0) - 3, 0)} 天（每月最多 1 日）</div>
 
-                                <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時（可選擇補休扣抵）</div>
+                                <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時（僅可用請假日前已取得補休扣抵）</div>
 
-                                <div>🗂️ 事假：{s.yearStats.leaves.personal?.days || 0} 天 / {s.yearStats.leaves.personal?.hours || 0} 小時（可選擇補休扣抵）</div>
+                                <div>🗂️ 事假：{s.yearStats.leaves.personal?.days || 0} 天 / {s.yearStats.leaves.personal?.hours || 0} 小時（僅可用請假日前已取得補休扣抵）</div>
 
                                 <div>🌴 特休：{s.yearStats.leaves.annual?.hours || 0} 小時（獨立帳戶）</div>
 
@@ -8564,6 +8636,14 @@ ${fromName} ⇄ ${toName}
 
                     : false;
 
+                if (finalUseComp) {
+
+                    const compAtLeaveDate = getCompBalanceBeforeDate({ shifts, uid:req.uid, leaveDate:req.date, shiftTypes:DEFAULT_SHIFT_TYPES });
+
+                    if (compAtLeaveDate.balance < leaveHours) return alert(`⚠️ 此假單不可使用補休抵扣。\n\n請假日期：${req.date}\n請假時數：${leaveHours} hr\n截至請假日前已取得且尚未使用的補休：${compAtLeaveDate.balance} hr\n\n請假日之後才產生的加班／補休不得回溯抵扣較早的病假或事假。`);
+
+                }
+
                 const leaveEntry = { 
 
                     uid: req.uid, 
@@ -8579,6 +8659,10 @@ ${fromName} ⇄ ${toName}
                     subUid: req.subUid || null,
 
                     useComp: finalUseComp,
+
+                    compEligibilityCutoffDate: finalUseComp ? req.date : null,
+
+                    compOffsetRule: finalUseComp ? 'only_hours_earned_before_leave_date' : null,
 
                     note: requestReason,
 
