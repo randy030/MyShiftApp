@@ -1,3 +1,5 @@
+TEATOP 班表 APP｜V14.0.0-alpha11.15｜完整程式碼
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import { initializeApp } from 'firebase/app';
@@ -22,17 +24,17 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.14";
+const CURRENT_VERSION = "V14.0.0-alpha11.15";
 
 const CURRENT_RELEASE_NOTES = [
 
- '修正換班申請已送出 LINE 通知，但系統通知中心看不到的問題。',
+ '新增獨立「服務品質、客訴改善及勞動條件補充協議書」，不修改既有已簽署勞動契約。',
 
- '換班流程改為對方先同意，再由主管或店長核准後正式套用班表。',
+ '新增管理員「員工服務態度／客訴改善紀錄」，保留查證、員工陳述、改善要求與認定結果。',
 
- '通知中心會顯示換班雙方、兩個日期與目前審核階段。',
+ '自畫假「假日最多 2 天」改為星期六、星期日、國定假日及補假合併計算。',
 
- '舊有尚未處理的換班申請也可直接在通知中心繼續完成。'
+ '2026 國定假日／補假已納入判斷；管理員亦可用公司行程標題標記國定假日或補假。'
 
 ];
 
@@ -155,45 +157,33 @@ const exportToCSV = (filename, rows) => {
 };
 
 const sendLineNotification = async (targetLineIds, messageText) => {
+
     if (!targetLineIds || targetLineIds.length === 0) return false;
 
     try {
-        const currentUser = auth.currentUser;
 
-        if (!currentUser) {
-            console.error("LINE 通知失敗：目前沒有 Firebase 登入使用者");
-            return false;
-        }
+        const response = await fetch(LINE_API_URL, { 
 
-        const idToken = await currentUser.getIdToken();
+            method: 'POST', 
 
-        const response = await fetch(LINE_API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${idToken}`
-            },
-            body: JSON.stringify({
-                to: targetLineIds,
-                messages: [
-                    {
-                        type: 'text',
-                        text: messageText
-                    }
-                ]
-            })
+            headers: { 'Content-Type': 'application/json' }, 
+
+            body: JSON.stringify({ to: targetLineIds, messages: [{ type: 'text', text: messageText }] }) 
+
         });
 
-        if (!response.ok) {
-            throw new Error(`LINE API ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`LINE API ${response.status}`);
 
         return true;
 
     } catch (e) {
+
         console.error("LINE 通知失敗", e);
+
         return false;
+
     }
+
 };
 
 const getApproverLineIds = (users = {}) => [...new Set(
@@ -672,6 +662,60 @@ const USER_COLORS = [
 
 const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', monthly: '每月', yearly: '每年' };
 
+ 
+
+// 2026（民國115年）國定假日／補假中，落在平日且應計入「假日畫假」額度的日期。
+
+// 星期六、日由程式自動判斷，不需要重複列入。
+
+// 後續年度可更新此表，或在「公司行程」標題加入「國定假日／補假／法定休假」字樣，系統亦會自動視為假日。
+
+const TAIWAN_PUBLIC_HOLIDAY_WEEKDAYS = new Set([
+
+    '2026-01-01',
+
+    '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20',
+
+    '2026-02-27',
+
+    '2026-04-03', '2026-04-06',
+
+    '2026-05-01',
+
+    '2026-06-19',
+
+    '2026-09-25', '2026-09-28',
+
+    '2026-10-09', '2026-10-26',
+
+    '2026-12-25'
+
+]);
+
+const isRosteredHolidayDate = (dateStr, events = []) => {
+
+    if (!dateStr) return false;
+
+    const dateObj = getLocalDate(dateStr);
+
+    const day = dateObj.getDay();
+
+    if (day === 0 || day === 6) return true;
+
+    if (TAIWAN_PUBLIC_HOLIDAY_WEEKDAYS.has(dateStr)) return true;
+
+    return (Array.isArray(events) ? events : []).some(event => {
+
+        if (!checkEventOnDate(event, dateStr)) return false;
+
+        const title = String(event?.title || '');
+
+        return /國定假日|補假|法定休假|政府公告放假/.test(title);
+
+    });
+
+};
+
 const getMonthData = (year, month) => ({ firstDay: new Date(year, month, 1).getDay(), days: new Date(year, month + 1, 0).getDate() });
 
 const getLocalDate = (dateStr) => { const [y, m, d] = dateStr.split('-'); return new Date(y, m - 1, d); };
@@ -1014,6 +1058,264 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
 
 };
 
+const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, appId }) => {
+
+    const activeUsers = (Array.isArray(users) ? users : []).filter(u => !u?.isResigned);
+
+    const [employeeUid, setEmployeeUid] = useState('');
+
+    const [meetingDate, setMeetingDate] = useState(new Date().toISOString().split('T')[0]);
+
+    const [agree, setAgree] = useState(false);
+
+    const employeeCanvasRef = useRef(null);
+
+    const employerCanvasRef = useRef(null);
+
+    const [drawingTarget, setDrawingTarget] = useState(null);
+
+    const [employeeSigned, setEmployeeSigned] = useState(false);
+
+    const [employerSigned, setEmployerSigned] = useState(false);
+
+    useEffect(() => {
+
+        if (isOpen && !employeeUid && activeUsers.length > 0) setEmployeeUid(activeUsers[0].uid);
+
+    }, [isOpen, employeeUid, activeUsers.length]);
+
+    if (!isOpen) return null;
+
+    const employee = activeUsers.find(u => u.uid === employeeUid);
+
+    const startDrawing = (target, e) => {
+
+        const canvas = target === 'employee' ? employeeCanvasRef.current : employerCanvasRef.current;
+
+        if (!canvas) return;
+
+        const rect = canvas.getBoundingClientRect();
+
+        const point = e.touches?.[0] || e;
+
+        const ctx = canvas.getContext('2d');
+
+        ctx.beginPath();
+
+        ctx.moveTo(point.clientX - rect.left, point.clientY - rect.top);
+
+        setDrawingTarget(target);
+
+        if (target === 'employee') setEmployeeSigned(true); else setEmployerSigned(true);
+
+    };
+
+    const draw = (target, e) => {
+
+        if (drawingTarget !== target) return;
+
+        e.preventDefault();
+
+        const canvas = target === 'employee' ? employeeCanvasRef.current : employerCanvasRef.current;
+
+        if (!canvas) return;
+
+        const rect = canvas.getBoundingClientRect();
+
+        const point = e.touches?.[0] || e;
+
+        const ctx = canvas.getContext('2d');
+
+        ctx.lineWidth = 2;
+
+        ctx.lineCap = 'round';
+
+        ctx.lineTo(point.clientX - rect.left, point.clientY - rect.top);
+
+        ctx.stroke();
+
+    };
+
+    const clearCanvas = target => {
+
+        const canvas = target === 'employee' ? employeeCanvasRef.current : employerCanvasRef.current;
+
+        if (!canvas) return;
+
+        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+        if (target === 'employee') setEmployeeSigned(false); else setEmployerSigned(false);
+
+    };
+
+    const handleSave = async () => {
+
+        if (!employee) return alert('請選擇員工');
+
+        if (!agree) return alert('請確認雙方已充分閱讀並同意補充協議內容');
+
+        if (!employeeSigned || !employerSigned) return alert('員工與店方代表均需完成簽名');
+
+        const docData = {
+
+            uid: employee.uid,
+
+            userName: employee.name,
+
+            formType: 'serviceSupplement',
+
+            formName: '服務品質、客訴改善及勞動條件補充協議書',
+
+            agreedAt: Date.now(),
+
+            employerName: currentUserInfo?.name || '店方代表',
+
+            customData: {
+
+                meetingDate,
+
+                originalSalary: 37500,
+
+                adjustedSalary: 32500,
+
+                noRetroactiveDeduction: true,
+
+                effectiveRule: '符合約定條件、完成查證及雙方確認後，自下一個完整薪資月份起適用'
+
+            },
+
+            signatureImage: employeeCanvasRef.current.toDataURL('image/png'),
+
+            employerSignatureImage: employerCanvasRef.current.toDataURL('image/png')
+
+        };
+
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'), docData);
+
+        await writeAuditLog({ db, appId, actor: currentUserInfo, action: 'SIGN_SERVICE_SUPPLEMENT', targetType: 'employee', targetId: employee.uid, detail: { employeeName: employee.name, meetingDate } });
+
+        alert('✅ 補充協議已由雙方簽署並保存；原勞動契約未被修改。');
+
+        onClose();
+
+    };
+
+    return (
+
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[90] p-4 animate-fade-in">
+
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-hidden flex flex-col">
+
+                <div className="bg-amber-700 p-4 text-white flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><FileSignature size={20}/> 服務品質、客訴改善及勞動條件補充協議書</h3><button onClick={onClose}><X size={20}/></button></div>
+
+                <div className="p-6 overflow-y-auto space-y-4 text-sm text-gray-700 leading-relaxed">
+
+                    <div className="grid sm:grid-cols-2 gap-3 bg-amber-50 border border-amber-200 rounded-lg p-4">
+
+                        <div><label className="block text-xs font-bold mb-1">簽署員工</label><select value={employeeUid} onChange={e=>setEmployeeUid(e.target.value)} className="w-full border rounded px-3 py-2 bg-white">{activeUsers.map(u=><option key={u.uid} value={u.uid}>{u.name}</option>)}</select></div>
+
+                        <div><label className="block text-xs font-bold mb-1">面談／簽署日期</label><input type="date" value={meetingDate} onChange={e=>setMeetingDate(e.target.value)} className="w-full border rounded px-3 py-2"/></div>
+
+                    </div>
+
+                    <div className="border rounded-lg p-5 bg-gray-50 space-y-4">
+
+                        <h4 className="font-black text-center text-lg text-gray-900">服務品質、客訴改善及勞動條件補充協議書</h4>
+
+                        <p>本補充協議係原勞動契約之補充文件。除本協議另有約定外，原勞動契約其他約定均維持不變；本文件不回溯修改或覆蓋雙方先前已完成簽署之勞動契約。</p>
+
+                        <p><strong>第一條｜服務品質及客訴處理</strong><br/>乙方執行門市服務工作時，應以合理、禮貌及符合門市服務規範之方式應對顧客。客戶提出抱怨本身不當然構成「客訴成立」。</p>
+
+                        <p><strong>第二條｜客訴成立認定程序</strong><br/>客訴須確實涉及乙方之服務態度、應對方式、言語或其他可歸責行為；甲方應進行基本查證，包括詢問當事員工及在場人員、檢視監視器、訂單紀錄、LINE 對話或其他可佐證資料，並排除產品本身、系統、外送平台、合理等待時間及其他非乙方可控制因素。乙方應有說明及陳述意見之機會，甲方始得依客觀資料作成是否成立之紀錄。</p>
+
+                        <p><strong>第三條｜改善及警告紀錄</strong><br/>服務態度事件原則採「提醒或書面紀錄 → 正式面談及改善紀錄 → 改善後再次發生同性質且經查證成立之事件」之漸進管理方式。各階段應留下事件、查證、員工陳述及改善要求紀錄。</p>
+
+                        <p><strong>第四條｜既有事件處理</strong><br/>雙方確認目前月薪維持新臺幣 <strong>37,500 元</strong>。本次及先前已發生之服務態度客訴僅作為改善與管理紀錄，不追溯扣減已提供勞務期間之既有工資。</p>
+
+                        <p><strong>第五條｜未來薪資調整程序</strong><br/>本次改善後，如乙方再次發生「同性質、可歸責且經查證成立」之服務態度客訴，甲方得依本協議啟動勞動條件及薪資調整協商程序。經雙方就具體事件、查證結果及調整內容再次確認後，未來月薪得由 <strong>37,500 元</strong> 調整為 <strong>32,500 元</strong>。</p>
+
+                        <p><strong>第六條｜生效時間及不追溯</strong><br/>如雙方確認適用前條薪資調整，應自下一個完整薪資月份起生效，不得以「罰款」、「每次客訴扣款」或其他方式回溯扣除事件發生月份以前已取得之工資。</p>
+
+                        <p><strong>第七條｜陳述及異議</strong><br/>乙方對客訴成立之認定有異議時，得提出書面或系統內說明；提出異議本身不得作為不利益處分之理由。客訴紀錄、成立認定與薪資調整應分別記錄，不得僅因收到顧客抱怨即逕行認定符合薪資調整條件。</p>
+
+                        <p><strong>第八條｜自由協商</strong><br/>雙方確認已充分閱讀及理解本協議內容，簽署係基於自由意思及協商結果。本協議完成後由系統保存完整簽署紀錄，雙方均得留存副本。</p>
+
+                    </div>
+
+                    <label className="flex gap-3 items-start bg-blue-50 border border-blue-200 rounded-lg p-3 font-bold text-blue-900"><input type="checkbox" checked={agree} onChange={()=>setAgree(!agree)} className="mt-1 accent-blue-600"/>雙方已逐條閱讀、完成面談及充分理解，並同意以本補充協議作為原勞動契約之補充文件。</label>
+
+                    <div className="grid sm:grid-cols-2 gap-4">
+
+                        {[['employee','員工簽名',employeeCanvasRef,employee?.name],['employer','店方代表簽名',employerCanvasRef,currentUserInfo?.name]].map(([target,label,ref,name]) => <div key={target} className="border rounded-lg overflow-hidden"><div className="bg-gray-100 px-3 py-2 flex justify-between text-xs font-bold"><span>{label}：{name || '—'}</span><button onClick={()=>clearCanvas(target)} className="text-red-600">清除</button></div><canvas ref={ref} width={420} height={130} onMouseDown={e=>startDrawing(target,e)} onMouseMove={e=>draw(target,e)} onMouseUp={()=>setDrawingTarget(null)} onMouseLeave={()=>setDrawingTarget(null)} onTouchStart={e=>startDrawing(target,e)} onTouchMove={e=>draw(target,e)} onTouchEnd={()=>setDrawingTarget(null)} className="w-full bg-white touch-none cursor-crosshair"></canvas></div>)}
+
+                    </div>
+
+                </div>
+
+                <div className="p-4 border-t bg-gray-50 flex gap-3"><button onClick={onClose} className="flex-1 border bg-white rounded-lg py-3 font-bold">取消</button><button onClick={handleSave} className="flex-1 bg-amber-700 text-white rounded-lg py-3 font-bold">雙方簽署並保存</button></div>
+
+            </div>
+
+        </div>
+
+    );
+
+};
+
+ 
+
+const ServiceRecordModal = ({ isOpen, onClose, users, currentUserInfo, db, appId }) => {
+
+    const activeUsers = (Array.isArray(users) ? users : []).filter(u => !u?.isResigned);
+
+    const [form, setForm] = useState({ uid: '', eventDate: new Date().toISOString().split('T')[0], stage: 'formal', complaint: '', employeeStatement: '', result: 'established', improvement: '', observationStart: '', observationEnd: '', evidence: [] });
+
+    useEffect(()=>{ if(isOpen && !form.uid && activeUsers[0]) setForm(prev=>({...prev,uid:activeUsers[0].uid})); },[isOpen,form.uid,activeUsers.length]);
+
+    if (!isOpen) return null;
+
+    const evidenceOptions = ['員工陳述','現場人員說明','監視器','訂單資料','LINE 對話','其他資料'];
+
+    const employee = activeUsers.find(u=>u.uid===form.uid);
+
+    const toggleEvidence = item => setForm(prev=>({...prev,evidence:prev.evidence.includes(item)?prev.evidence.filter(x=>x!==item):[...prev.evidence,item]}));
+
+    const save = async () => {
+
+        if (!employee || !form.eventDate || !form.complaint.trim()) return alert('請選擇員工、事件日期並填寫客訴／事件內容');
+
+        await addDoc(collection(db,'artifacts',appId,'public','data','serviceRecords'), { ...form, employeeName: employee.name, createdAt: Date.now(), createdByUid: currentUserInfo?.uid || '', createdByName: currentUserInfo?.name || '管理員' });
+
+        await writeAuditLog({ db, appId, actor: currentUserInfo, action: 'CREATE_SERVICE_RECORD', targetType: 'employee', targetId: employee.uid, detail: { employeeName: employee.name, eventDate: form.eventDate, result: form.result } });
+
+        alert('✅ 服務態度／客訴改善紀錄已保存');
+
+        onClose();
+
+    };
+
+    return <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[90] p-4"><div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[95vh] overflow-hidden flex flex-col"><div className="bg-slate-800 text-white p-4 flex justify-between"><h3 className="font-bold">員工服務態度／客訴改善紀錄</h3><button onClick={onClose}><X size={20}/></button></div><div className="p-6 overflow-y-auto space-y-4 text-sm">
+
+        <div className="grid sm:grid-cols-3 gap-3"><div><label className="font-bold text-xs">員工</label><select value={form.uid} onChange={e=>setForm({...form,uid:e.target.value})} className="w-full border rounded p-2">{activeUsers.map(u=><option key={u.uid} value={u.uid}>{u.name}</option>)}</select></div><div><label className="font-bold text-xs">事件日期</label><input type="date" value={form.eventDate} onChange={e=>setForm({...form,eventDate:e.target.value})} className="w-full border rounded p-2"/></div><div><label className="font-bold text-xs">紀錄階段</label><select value={form.stage} onChange={e=>setForm({...form,stage:e.target.value})} className="w-full border rounded p-2"><option value="reminder">提醒紀錄</option><option value="formal">正式面談／改善紀錄</option><option value="repeat">改善後再次發生</option></select></div></div>
+
+        <div><label className="font-bold text-xs">客訴／事件內容</label><textarea rows="3" value={form.complaint} onChange={e=>setForm({...form,complaint:e.target.value})} className="w-full border rounded p-2"/></div>
+
+        <div><label className="font-bold text-xs">查證資料</label><div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">{evidenceOptions.map(item=><label key={item} className="border rounded p-2 flex gap-2 items-center"><input type="checkbox" checked={form.evidence.includes(item)} onChange={()=>toggleEvidence(item)}/>{item}</label>)}</div></div>
+
+        <div><label className="font-bold text-xs">員工陳述／說明</label><textarea rows="3" value={form.employeeStatement} onChange={e=>setForm({...form,employeeStatement:e.target.value})} className="w-full border rounded p-2"/></div>
+
+        <div><label className="font-bold text-xs">查證結果</label><select value={form.result} onChange={e=>setForm({...form,result:e.target.value})} className="w-full border rounded p-2"><option value="established">客訴成立</option><option value="not_established">客訴不成立</option><option value="uncertain">無法確認</option></select></div>
+
+        <div><label className="font-bold text-xs">改善要求</label><textarea rows="3" value={form.improvement} onChange={e=>setForm({...form,improvement:e.target.value})} className="w-full border rounded p-2"/></div>
+
+        <div className="grid grid-cols-2 gap-3"><div><label className="font-bold text-xs">改善觀察開始</label><input type="date" value={form.observationStart} onChange={e=>setForm({...form,observationStart:e.target.value})} className="w-full border rounded p-2"/></div><div><label className="font-bold text-xs">改善觀察結束</label><input type="date" value={form.observationEnd} onChange={e=>setForm({...form,observationEnd:e.target.value})} className="w-full border rounded p-2"/></div></div>
+
+    </div><div className="p-4 border-t bg-gray-50 flex gap-3"><button onClick={onClose} className="flex-1 border bg-white rounded py-3 font-bold">取消</button><button onClick={save} className="flex-1 bg-slate-800 text-white rounded py-3 font-bold">保存改善紀錄</button></div></div></div>;
+
+};
+
+ 
+
 const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, storeConfig }) => {
 
     const [agree, setAgree] = useState(false);
@@ -1344,7 +1646,25 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 
                     <div className="text-sm leading-loose space-y-4">
 
-                        {sigData.formType === 'holiday' ? (
+                        {sigData.formType === 'serviceSupplement' ? (
+
+                            <>
+
+                                <p><strong>補充協議性質：</strong>本文件係原勞動契約之補充文件，原契約未被覆蓋或回溯修改。</p>
+
+                                <p><strong>服務品質及客訴認定：</strong>客戶提出抱怨本身不當然構成客訴成立；須涉及員工可歸責之服務態度、應對、言語或行為，經基本查證並給予員工陳述機會，且排除產品、系統、外送平台、合理等待時間及其他非員工可控制因素。</p>
+
+                                <p><strong>改善紀錄：</strong>採提醒／書面紀錄、正式面談改善、改善後再次發生之漸進管理方式，並分別留下事件、查證、陳述及改善要求。</p>
+
+                                <p><strong>薪資：</strong>簽署時月薪維持 <strong>$37,500</strong>；既有事件不追溯扣薪。改善後如再次發生同性質、可歸責且經查證成立之服務態度客訴，得啟動薪資調整協商；經雙方就具體事件及調整內容再次確認後，未來月薪得調整為 <strong>$32,500</strong>，自下一個完整薪資月份起適用。</p>
+
+                                <p><strong>禁止回溯扣款：</strong>不得以罰款、每次客訴扣款或其他方式回溯扣除已提供勞務期間之工資。</p>
+
+                                <p><strong>簽署日期：</strong>{sigData.customData?.meetingDate || new Date(sigData.agreedAt).toLocaleDateString()}</p>
+
+                            </>
+
+                        ) : sigData.formType === 'holiday' ? (
 
                             <>
 
@@ -1388,7 +1708,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 
                     </div>
 
-                    <div className="mt-8 flex justify-end">
+                    <div className="mt-8 flex flex-col sm:flex-row justify-end gap-8">
 
                         <div className="text-center">
 
@@ -1403,6 +1723,18 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
                             <p className="font-mono text-xs text-gray-400">Timestamp: {sigData.agreedAt}</p>
 
                         </div>
+
+                        {sigData.formType === 'serviceSupplement' && <div className="text-center">
+
+                            <p className="text-gray-500 mb-2 font-bold">店方代表：{sigData.employerName || '—'}</p>
+
+                            <div className="border-b-2 border-gray-800 pb-2 mb-2 w-64 min-h-[100px] flex items-end justify-center">
+
+                                {sigData.employerSignatureImage && <img src={sigData.employerSignatureImage} alt="Employer Signature" className="max-h-24 object-contain mix-blend-multiply" />}
+
+                            </div>
+
+                        </div>}
 
                     </div>
 
@@ -1429,6 +1761,28 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
     const [signModal, setSignModal] = useState(null); 
 
     const [viewData, setViewData] = useState(null);
+
+    const [serviceSupplementOpen, setServiceSupplementOpen] = useState(false);
+
+    const [serviceRecordOpen, setServiceRecordOpen] = useState(false);
+
+    const [serviceRecords, setServiceRecords] = useState([]);
+
+    useEffect(() => {
+
+        if (!isPrivileged) return;
+
+        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'serviceRecords'), snap => {
+
+            const list = []; snap.forEach(item => list.push({ id: item.id, ...item.data() }));
+
+            setServiceRecords(list.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0)));
+
+        });
+
+        return () => unsub();
+
+    }, [db, appId, isPrivileged]);
 
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
 
@@ -1506,6 +1860,26 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     </div>
 
+                    {isPrivileged && <div className="bg-white p-5 rounded-xl border shadow-sm hover:shadow-md">
+
+                        <div className="flex items-center gap-2 mb-2 text-amber-700"><ShieldAlert size={20}/><h3 className="font-bold text-lg">服務品質／客訴補充協議</h3></div>
+
+                        <p className="text-sm text-gray-500 mb-4 h-10">原勞動契約保持不變；面談時由店方與員工另外雙方簽署補充協議。</p>
+
+                        <button onClick={()=>setServiceSupplementOpen(true)} className="w-full font-bold py-2 rounded-lg border bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100">建立並雙方簽署</button>
+
+                    </div>}
+
+                    {isPrivileged && <div className="bg-white p-5 rounded-xl border shadow-sm hover:shadow-md">
+
+                        <div className="flex items-center gap-2 mb-2 text-slate-700"><StickyNote size={20}/><h3 className="font-bold text-lg">服務態度／客訴改善紀錄</h3></div>
+
+                        <p className="text-sm text-gray-500 mb-4 h-10">記錄提醒、正式面談、查證資料、員工陳述、改善要求及後續結果。</p>
+
+                        <button onClick={()=>setServiceRecordOpen(true)} className="w-full font-bold py-2 rounded-lg border bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100">新增改善紀錄</button>
+
+                    </div>}
+
                 </div>
 
             )}
@@ -1538,7 +1912,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                                             <div className="text-xs text-gray-500 font-normal mt-1">
 
-                                                {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
+                                                {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : sig.formType === 'serviceSupplement' ? `原月薪 $${sig.customData?.originalSalary || 37500} → 條件成立並再次確認後 $${sig.customData?.adjustedSalary || 32500}` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
 
                                             </div>
 
@@ -1582,9 +1956,31 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
             
 
+            {isPrivileged && activeTab === 'records' && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4">
+
+                <div className="p-4 bg-slate-50 border-b font-bold text-slate-700">服務態度／客訴改善紀錄</div>
+
+                <div className="divide-y">{serviceRecords.length === 0 ? <div className="p-6 text-center text-sm text-gray-400">尚無改善紀錄</div> : serviceRecords.map(record => <div key={record.id} className="p-4 text-sm">
+
+                    <div className="flex flex-wrap gap-2 justify-between"><div className="font-bold text-slate-800">{record.employeeName}｜{record.eventDate}</div><div className={`text-xs font-bold px-2 py-1 rounded ${record.result==='established'?'bg-red-50 text-red-700':record.result==='not_established'?'bg-green-50 text-green-700':'bg-gray-100 text-gray-600'}`}>{record.result==='established'?'客訴成立':record.result==='not_established'?'客訴不成立':'無法確認'}</div></div>
+
+                    <div className="mt-2 text-gray-600">{record.complaint}</div>
+
+                    {record.employeeStatement && <div className="mt-1 text-xs text-gray-500">員工陳述：{record.employeeStatement}</div>}
+
+                    {record.improvement && <div className="mt-1 text-xs text-indigo-700 font-bold">改善要求：{record.improvement}</div>}
+
+                </div>)}</div>
+
+            </div>}
+
             {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
 
             {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
+
+            <ServiceSupplementModal isOpen={serviceSupplementOpen} onClose={()=>setServiceSupplementOpen(false)} users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} />
+
+            <ServiceRecordModal isOpen={serviceRecordOpen} onClose={()=>setServiceRecordOpen(false)} users={users} currentUserInfo={currentUserInfo} db={db} appId={appId} />
 
         </div>
 
@@ -4326,7 +4722,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                   } else if (lt.id === 'rostered') { 
 
-                                      let totalRostered = 0; let weekendRostered = 0;
+                                      let totalRostered = 0; let holidayRostered = 0;
 
                                       Object.keys(shifts).forEach(d => {
 
@@ -4336,9 +4732,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                                   totalRostered++;
 
-                                                  const dObj = new Date(d);
-
-                                                  if (dObj.getDay() === 0 || dObj.getDay() === 6) weekendRostered++;
+                                                  if (isRosteredHolidayDate(d, events)) holidayRostered++;
 
                                               }
 
@@ -4346,9 +4740,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                       });
 
-                                      const targetDateObj = new Date(dateStr);
-
-                                      const isTargetWeekend = targetDateObj.getDay() === 0 || targetDateObj.getDay() === 6;
+                                      const isTargetHoliday = isRosteredHolidayDate(dateStr, events);
 
   
 
@@ -4356,7 +4748,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                           if (totalRostered >= 3) { limitReached = true; limitMsg = "本月自畫假已達 3 天上限！"; }
 
-                                          else if (isTargetWeekend && weekendRostered >= 2) { limitReached = true; limitMsg = "本月假日(六日)畫假已達 2 天上限！"; }
+                                          else if (isTargetHoliday && holidayRostered >= 2) { limitReached = true; limitMsg = "本月假日（六日／國定假日／補假）畫假已達 2 天上限！"; }
 
                                       } 
 
