@@ -664,7 +664,7 @@ const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', mo
 
 // 2026（民國115年）國定假日／補假資料。
 
-// 月曆只對「國定假日當天」加紅色細框；補假與一般星期六、日都不加紅框。
+// 月曆只對這些「國定假日／補假」加紅色細框；一般星期六、日不加紅框。
 
 // 星期六、日仍會計入「每月假日自畫最多 2 天」額度。
 
@@ -3858,11 +3858,11 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                         return (
 
-                            <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${publicHoliday?.type === 'national' ? 'ring-1 ring-inset ring-red-400' : ''} ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
+                            <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${publicHoliday ? 'ring-1 ring-inset ring-red-400' : ''} ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
 
-                                <div className="flex justify-between items-start mb-1"><span className={`text-sm font-bold ml-1 ${publicHoliday?.type === 'national' ? 'text-red-600' : 'text-gray-700'}`}>{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
+                                <div className="flex justify-between items-start mb-1"><span className={`text-sm font-bold ml-1 ${publicHoliday ? 'text-red-600' : 'text-gray-700'}`}>{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
 
-                                {publicHoliday && <div className={`text-[10px] leading-tight font-black px-1 mb-1 truncate ${publicHoliday.type === 'national' ? 'text-red-600' : 'text-gray-500'}`} title={publicHoliday.name}>{publicHoliday.name}</div>}
+                                {publicHoliday && <div className="text-[10px] leading-tight font-black text-red-600 px-1 mb-1 truncate" title={publicHoliday.name}>{publicHoliday.name}</div>}
 
                                 {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
 
@@ -6858,7 +6858,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
                   <h3 className="font-black text-xl text-gray-800 flex items-center gap-3"><Calendar className="text-red-500" size={24}/> 年度假日管理</h3>
 
-                  <p className="text-sm text-gray-500 mt-2">只有國定假日當天會在月曆以紅色細框與紅字名稱標示；補假只顯示名稱、不加紅框。國定假日／補假皆納入「假日自畫最多 2 天」判斷。店休日維持原本功能與顯示方式，不在此設定。</p>
+                  <p className="text-sm text-gray-500 mt-2">國定假日／補假會在月曆以紅色細框與紅字名稱顯示，並納入「假日自畫最多 2 天」判斷。店休日維持原本功能與顯示方式，不在此設定。</p>
 
               </div>
 
@@ -6890,7 +6890,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
                               <div><div className="font-black text-gray-800 text-sm">{item.date}　{item.name}</div><div className="text-[10px] font-bold text-red-500 mt-1">{item.type === 'makeup' ? '補假' : '國定假日'}・系統內建</div></div>
 
-                              {item.type === 'national' ? <div className="w-4 h-4 rounded border border-red-400 shrink-0" title="國定假日月曆紅色細框示意" /> : <span className="text-[10px] font-black text-gray-400 shrink-0">不加紅框</span>}
+                              <div className="w-4 h-4 rounded border border-red-400 shrink-0" title="月曆紅色細框示意" />
 
                           </div>
 
@@ -6930,7 +6930,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
                   <div className="flex gap-2"><button onClick={resetHolidayForm} className="flex-1 bg-white border border-gray-200 text-gray-500 py-3 rounded-2xl text-xs font-black">清空</button><button onClick={saveCustomHoliday} disabled={!isSuperAdmin} className="flex-1 bg-red-500 text-white py-3 rounded-2xl text-xs font-black shadow disabled:bg-gray-200 disabled:text-gray-400">{editingHolidayId ? '儲存修改' : '新增假日'}</button></div>
 
-                  <div className="text-[11px] text-gray-500 leading-5">此處只管理國定假日／補假。只有國定假日當天顯示紅色細框；補假與一般星期六、日不顯示紅框，但仍會計入假日自畫額度；店休日維持原本班表日期內的「設為店休」功能。</div>
+                  <div className="text-[11px] text-gray-500 leading-5">此處只管理國定假日／補假。一般星期六、日仍會計入假日自畫額度，但不會顯示紅框；店休日維持原本班表日期內的「設為店休」功能。</div>
 
               </div>
 
