@@ -1,5 +1,3 @@
-TEATOP 班表 APP｜V14.0.0-alpha11.15｜完整程式碼
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import { initializeApp } from 'firebase/app';
