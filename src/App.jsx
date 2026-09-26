@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase/app';
 
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
 
-import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, getDoc, addDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, getDoc, getDocs, addDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
 
 import { 
 
@@ -22,17 +22,19 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.15.1";
+const CURRENT_VERSION = "V14.0.0-alpha11.15.2";
 
 const CURRENT_RELEASE_NOTES = [
 
- '新增月曆國定假日／補假紅色細框與假日名稱標示，不改變既有店休日呈現方式。',
+ '生理假統計改為每月最多 1 日，並顯示年度累計、前 3 日與第 4 日起併入病假之統計。',
 
- '新增「系統設定 → 年度假日管理」，管理員可新增、編輯或刪除額外國定假日／補假日期。',
+ '新增 Pre-11.16 歷史資料封存：可一次封存既有薪資、已簽署合約／同意書與盤點紀錄，並保留稽核紀錄。',
 
- '2026 國定假日與補假提供內建名稱；自訂假日會同步套用月曆標示及「假日自畫最多 2 天」判斷。',
+ '薪資結構改為基本薪資＋全勤獎金＋油資／固定津貼＋自訂加項－扣項，並分開記錄銀行轉帳與現金支付。',
 
- '保留 V14.0.0-alpha11.15 的服務品質補充協議、改善紀錄及自畫假規則。'
+ '既有已鎖定薪資與歷史資料不重新計算；11.16 後續改版將以本版封存點為基準。',
+
+ '保留 11.15.1 的國定假日／補假紅框標示與年度假日管理。'
 
 ];
 
@@ -1400,7 +1402,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
     
 
-    const { workLocation, salaryAmount, contractStart, contractEnd, isIndefinite } = currentUserInfo;
+    const { workLocation, salaryAmount, baseSalary, attendanceBonus, fixedAllowance, contractStart, contractEnd, isIndefinite } = currentUserInfo;
 
     const resolvedWorkLocation = workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
 
@@ -1482,7 +1484,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
             formName = '員工勞動契約暨保密與工作守則同意書'; 
 
-            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount };
+            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount: Number(baseSalary || salaryAmount || 0) + Number(attendanceBonus || 0) + Number(fixedAllowance || 0), baseSalary: Number(baseSalary || salaryAmount || 0), attendanceBonus: Number(attendanceBonus || 0), fixedAllowance: Number(fixedAllowance || 0) };
 
         }
 
@@ -1580,7 +1582,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
                                     <li><strong>自畫假/排休</strong>：每月自畫休假上限 3 天，且逢星期六、日之假日最多僅能畫休 2 天。</li>
 
-                                    <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理；生理假每年最多 3 天、每月最多 1 天；全年事假上限 14 日、病假上限 30 日。</li>
+                                    <li><strong>生理假/病假/事假</strong>：依法與公司內部規定辦理；生理假每月最多 1 日，全年前 3 日不併入病假、第 4 日起併入病假計算；全年事假上限 14 日、病假依現行規定辦理。</li>
 
                                 </ol>
 
@@ -1628,7 +1630,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
                                 <p className="pl-4 mt-2">本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則。</p>
 
-                                <p className="pl-4 mt-1">1. 生理假：每年最多 3 天，每月最多 1 天。</p>
+                                <p className="pl-4 mt-1">1. 生理假：每月最多 1 日；全年前 3 日不併入病假，第 4 日起併入病假計算。</p>
 
                                 <p className="pl-4 mt-1">2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</p>
 
@@ -1772,7 +1774,7 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 
                                 <p><strong>第八條：機密保密</strong><br/>乙方對職務上知悉之營業機密負絕對保密義務，違者願負法律責任與損害賠償。</p>
 
-                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每年最多 3 天，每月最多 1 天。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
+                                <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每月最多 1 日；全年前 3 日不併入病假，第 4 日起併入病假計算。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇是否使用補休時數扣抵；主管於核准流程中得依申請內容確認最終扣抵方式。</p>
 
                             </>
 
@@ -2230,6 +2232,8 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
 
     const loadHistoryForEdit = (hist) => {
 
+        if (hist?.archived) return alert('🔒 此盤點紀錄已封存，只能查看／匯出，不可再修改。');
+
         const nextRecords = hist?.data && typeof hist.data === 'object' ? hist.data : {};
 
         setRecords(nextRecords);
@@ -2297,6 +2301,8 @@ const InventoryView = ({ db, appId, inventoryItems, currentUserInfo }) => {
         const targetRecordId = editingRecordId || targetDate;
 
         const existingHistory = historyList.find(hist => hist.id === targetRecordId) || (selectedHistory?.id === targetRecordId ? selectedHistory : null);
+
+        if (existingHistory?.archived) return alert('🔒 此盤點紀錄已封存，不可覆寫。');
 
         const createdAt = existingHistory?.createdAt || existingHistory?.timestamp || now;
 
@@ -4792,7 +4798,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                   if (lt.id === 'menstrual') {
 
-                                      if (getLeaveCount('menstrual', yearStr) >= 3) { limitReached = true; limitMsg = "生理假一年最多請 3 天！"; } else if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天！"; }
+                                      if (getLeaveCount('menstrual', monthStr) >= 1) { limitReached = true; limitMsg = "本月生理假已請過 1 天！"; }
 
                                   } else if (lt.id === 'sick') { if (getLeaveCount('sick', yearStr) >= 30) { limitReached = true; limitMsg = "病假一年最多請 30 天！"; }
 
@@ -5040,7 +5046,7 @@ const calc = (uid) => {
 
                             <div className="grid grid-cols-2 gap-2 text-[11px] text-amber-800">
 
-                                <div>🩸 生理假：{s.yearStats.leaves.menstrual?.days || 0} 天（每年最多 3 天／每月最多 1 天）</div>
+                                <div>🩸 生理假：本月 {s.monthStats.leaves.menstrual?.days || 0} 天｜年度累計 {s.yearStats.leaves.menstrual?.days || 0} 天｜前 3 日不併病假 {Math.min(s.yearStats.leaves.menstrual?.days || 0, 3)} 天｜第 4 日起併病假 {Math.max((s.yearStats.leaves.menstrual?.days || 0) - 3, 0)} 天（每月最多 1 日）</div>
 
                                 <div>🤒 病假：{s.yearStats.leaves.sick?.days || 0} 天 / {s.yearStats.leaves.sick?.hours || 0} 小時（可選擇補休扣抵）</div>
 
@@ -5376,7 +5382,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
 
-        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>薪資結算基數</td><td>${formatMoney(summary.settlementBase)}</td></tr><tr><td>油資 / 津貼 / 獎金</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>預估實領</td><td>${formatMoney(summary.netPay)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
 
         printWindow.document.close();
 
@@ -5422,7 +5428,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             annual_leave: 'annual',
 
-            'annual-leave': 'annual'
+            'annual-leave': 'annual',
+
+            menstrual: 'menstrual'
 
         };
 
@@ -5443,6 +5451,10 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             personalHours: 0,
 
             annualHours: 0,
+
+            menstrualDays: 0,
+
+            menstrualDetails: [],
 
             sickDetails: [],
 
@@ -5532,6 +5544,14 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             }
 
+            if (normalizedLeaveType === 'menstrual') {
+
+                summary.menstrualDays += 1;
+
+                summary.menstrualDetails.push({ ...detail, hours: 0 });
+
+            }
+
         });
 
  
@@ -5541,6 +5561,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         summary.personalDetails.sort((a, b) => a.date.localeCompare(b.date));
 
         summary.annualDetails.sort((a, b) => a.date.localeCompare(b.date));
+
+        summary.menstrualDetails.sort((a, b) => a.date.localeCompare(b.date));
 
  
 
@@ -5578,9 +5600,43 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
  
 
+    const getMenstrualYearStats = (uid, yearStr) => {
+
+        let days = 0;
+
+        Object.keys(shifts || {}).forEach(dateStr => {
+
+            if (!dateStr.startsWith(yearStr)) return;
+
+            const dayData = shifts[dateStr];
+
+            if (dayData?.isClosed) return;
+
+            const assignment = Array.isArray(dayData?.assignments)
+
+                ? dayData.assignments.find(item => item.uid === uid && normalizePayrollLeaveType(item) === 'menstrual')
+
+                : null;
+
+            if (assignment) days += 1;
+
+        });
+
+        return { days, firstThreeDays: Math.min(days, 3), mergedIntoSickDays: Math.max(days - 3, 0) };
+
+    };
+
+ 
+
     const getSettlementBase = (user, record = {}) => {
 
-        return getNumber(record.settlementBase || user?.salaryAmount || record.base);
+        const legacyTotal = getNumber(user?.salaryAmount || record.base);
+
+        const baseSalary = getNumber(record.baseSalary ?? user?.baseSalary ?? (legacyTotal > 3000 ? legacyTotal - 3000 : legacyTotal));
+
+        const attendanceBonus = getNumber(record.attendanceBonus ?? user?.attendanceBonus ?? (legacyTotal > 3000 ? 3000 : 0));
+
+        return getNumber(record.settlementBase || (baseSalary + attendanceBonus));
 
     };
 
@@ -5600,6 +5656,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const annualRemainingHours = Math.max(0, annualEntitledHours - annualUsedYearHours);
 
+        const menstrualYearStats = getMenstrualYearStats(user.uid, String(monthStr || targetMonth).slice(0, 4));
+
         const sickDeduction = leaveSummary.sickHours * hourlyRate * 0.5;
 
         const personalDeduction = leaveSummary.personalHours * hourlyRate;
@@ -5609,6 +5667,14 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         const gasTotal = gasRecords.reduce((sum, item) => sum + getNumber(item.amount), 0);
 
         const gasCapped = Math.min(gasTotal, 500);
+
+        const legacyTotal = getNumber(user?.salaryAmount || 0);
+
+        const baseSalary = getNumber(record.baseSalary ?? user?.baseSalary ?? (legacyTotal > 3000 ? legacyTotal - 3000 : legacyTotal));
+
+        const attendanceBonus = getNumber(record.attendanceBonus ?? user?.attendanceBonus ?? (legacyTotal > 3000 ? 3000 : 0));
+
+        const fixedAllowance = getNumber(record.fixedAllowance ?? user?.fixedAllowance ?? 0);
 
         const subsidy = getNumber(record.subsidy);
 
@@ -5620,55 +5686,47 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const manualAdjustment = getNumber(record.manualAdjustment);
 
+        const customIncomeItems = Array.isArray(record.customIncomeItems) ? record.customIncomeItems : [];
+
+        const customIncomeTotal = customIncomeItems.reduce((sum, item) => sum + getNumber(item.amount), 0);
+
         const manualDeduction = getNumber(record.manualDeduction);
 
-        const totalAdditions = gasCapped + subsidy + birthdayBonus + festivalBonus + yearBonus + manualAdjustment;
+        const regularPay = baseSalary + attendanceBonus;
+
+        const totalAdditions = gasCapped + fixedAllowance + subsidy + birthdayBonus + festivalBonus + yearBonus + manualAdjustment + customIncomeTotal;
+
+        const grossPay = regularPay + totalAdditions;
 
         const totalDeductions = sickDeduction + personalDeduction + manualDeduction;
 
-        const netPay = settlementBase + totalAdditions - totalDeductions;
+        const netPay = grossPay - totalDeductions;
+
+        const bankTransfer = getNumber(record.bankTransfer);
+
+        const cashPayment = getNumber(record.cashPayment);
+
+        const paymentTotal = bankTransfer + cashPayment;
+
+        const paymentDifference = paymentTotal - netPay;
 
  
 
         return {
 
-            settlementBase,
+            settlementBase, baseSalary, attendanceBonus, fixedAllowance, regularPay, grossPay,
 
-            hourlyRate,
+            hourlyRate, leaveSummary, menstrualYearStats,
 
-            leaveSummary,
+            annualUsedYearHours, annualEntitledHours, annualRemainingHours,
 
-            annualUsedYearHours,
+            sickDeduction, personalDeduction, gasTotal, gasCapped, subsidy,
 
-            annualEntitledHours,
+            birthdayBonus, festivalBonus, yearBonus, manualAdjustment, customIncomeItems, customIncomeTotal,
 
-            annualRemainingHours,
+            manualDeduction, totalAdditions, totalDeductions, netPay,
 
-            sickDeduction,
-
-            personalDeduction,
-
-            gasTotal,
-
-            gasCapped,
-
-            subsidy,
-
-            birthdayBonus,
-
-            festivalBonus,
-
-            yearBonus,
-
-            manualAdjustment,
-
-            manualDeduction,
-
-            totalAdditions,
-
-            totalDeductions,
-
-            netPay
+            bankTransfer, cashPayment, paymentTotal, paymentDifference
 
         };
 
@@ -5966,11 +6024,15 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
 
-                                    <label className="block text-xs font-black text-indigo-800 mb-1">薪資結算基數</label>
+                                    <label className="block text-xs font-black text-indigo-800 mb-1">基本薪資</label>
 
-                                    <input type="number" min="0" placeholder="例如：37500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.settlementBase ?? user.salaryAmount ?? record.base ?? ''} onChange={event => updatePayroll(user.uid, 'settlementBase', event.target.value)} disabled={payrollStatus === 'locked'} />
+                                    <input type="number" min="0" placeholder="例如：29500" className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 font-black text-indigo-700 focus:outline-none focus:border-indigo-500" value={record.baseSalary ?? user.baseSalary ?? (Number(user.salaryAmount || 0) > 3000 ? Number(user.salaryAmount) - 3000 : user.salaryAmount) ?? ''} onChange={event => updatePayroll(user.uid, 'baseSalary', event.target.value)} disabled={payrollStatus === 'locked'} />
 
-                                    <div className="text-[11px] text-indigo-600 mt-2">每小時薪資：{formatMoney(summary.hourlyRate)} / hr</div>
+                                    <label className="block text-xs font-black text-emerald-800 mt-2 mb-1">全勤獎金</label>
+
+                                    <input type="number" min="0" placeholder="例如：3000" className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 font-black text-emerald-700 focus:outline-none focus:border-emerald-500" value={record.attendanceBonus ?? user.attendanceBonus ?? (Number(user.salaryAmount || 0) > 3000 ? 3000 : '')} onChange={event => updatePayroll(user.uid, 'attendanceBonus', event.target.value)} disabled={payrollStatus === 'locked'} />
+
+                                    <div className="text-[11px] text-indigo-600 mt-2">扣薪結算基數：{formatMoney(summary.settlementBase)}｜每小時：{formatMoney(summary.hourlyRate)} / hr</div>
 
                                 </div>
 
@@ -6048,6 +6110,14 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                         </div>
 
+                                        <div className="bg-pink-50 rounded-lg p-2 border border-pink-100">
+
+                                            <div className="text-xs font-bold text-pink-800">生理假：本月 {summary.leaveSummary.menstrualDays} 天｜年度累計 {summary.menstrualYearStats.days} 天</div>
+
+                                            <div className="text-[10px] text-pink-700 mt-1">前 3 日不併病假 {summary.menstrualYearStats.firstThreeDays} 天｜第 4 日起併病假 {summary.menstrualYearStats.mergedIntoSickDays} 天｜每月最多 1 日</div>
+
+                                        </div>
+
                                         <div className="bg-emerald-50 rounded-lg p-2 border border-emerald-100">
 
                                             <div className="flex justify-between text-xs font-bold text-emerald-800"><span>特休：{summary.leaveSummary.annualHours} hr</span><span className="text-emerald-700">扣薪 $0</span></div>
@@ -6108,7 +6178,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                         <div className="border-t pt-2 space-y-1">
 
-                                            <div className="flex justify-between"><span className="text-gray-500">薪資結算基數</span><span className="font-bold">{formatMoney(summary.settlementBase)}</span></div>
+                                            <div className="flex justify-between"><span className="text-gray-500">基本薪資</span><span className="font-bold">{formatMoney(summary.baseSalary)}</span></div>
+
+                                            <div className="flex justify-between"><span className="text-gray-500">全勤獎金</span><span className="font-bold">+{formatMoney(summary.attendanceBonus)}</span></div>
+
+                                            <div className="flex justify-between"><span className="text-gray-500">固定津貼</span><span className="font-bold">+{formatMoney(summary.fixedAllowance)}</span></div>
 
                                             <div className="flex justify-between"><span className="text-gray-500">加項合計</span><span className="font-bold text-green-700">+{formatMoney(summary.totalAdditions)}</span></div>
 
@@ -6123,6 +6197,24 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
                                 </div>
 
  
+
+                                <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 space-y-2">
+
+                                    <div className="font-black text-sm text-sky-800">薪資組成與支付方式</div>
+
+                                    <label className="block text-xs font-bold text-sky-700">固定津貼／其他固定收入<input type="number" placeholder="0" className="mt-1 w-full bg-white border rounded px-2 py-1.5" value={record.fixedAllowance ?? user.fixedAllowance ?? ''} onChange={event => updatePayroll(user.uid, 'fixedAllowance', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
+                                    <div className="grid grid-cols-2 gap-2">
+
+                                        <label className="text-xs font-bold text-gray-600">銀行轉帳<input type="number" placeholder="0" className="mt-1 w-full bg-white border rounded px-2 py-1.5" value={record.bankTransfer || ''} onChange={event => updatePayroll(user.uid, 'bankTransfer', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
+                                        <label className="text-xs font-bold text-gray-600">現金支付<input type="number" placeholder="0" className="mt-1 w-full bg-white border rounded px-2 py-1.5" value={record.cashPayment || ''} onChange={event => updatePayroll(user.uid, 'cashPayment', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
+
+                                    </div>
+
+                                    <div className={`text-xs font-black p-2 rounded ${Math.abs(summary.paymentDifference) < 1 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>支付核對：應實發 {formatMoney(summary.netPay)}｜已登錄 {formatMoney(summary.paymentTotal)}｜差額 {formatMoney(summary.paymentDifference)} {Math.abs(summary.paymentDifference) < 1 ? '✅' : '⚠️'}</div>
+
+                                </div>
 
                                 <label className="block text-xs font-bold text-gray-600">結算備註<textarea rows="3" placeholder="例如：本月獎勵、扣款原因、匯款備註..." className="mt-1 w-full border rounded-lg px-2 py-2 text-sm font-normal focus:outline-none focus:border-indigo-500" value={record.note || ''} onChange={event => updatePayroll(user.uid, 'note', event.target.value)} disabled={payrollStatus === 'locked'} /></label>
 
@@ -6268,6 +6360,84 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
  
 
+  const [archiveInfo, setArchiveInfo] = useState(null);
+
+  const [archiving, setArchiving] = useState(false);
+
+  useEffect(() => {
+
+      const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'pre1116Archive'), snap => setArchiveInfo(snap.exists() ? snap.data() : null));
+
+      return () => unsub();
+
+  }, [db, appId]);
+
+ 
+
+  const archivePre1116Data = async () => {
+
+      if (!isSuperAdmin || archiving) return;
+
+      if (archiveInfo?.completedAt) return alert(`🔒 已於 ${formatDateTime(archiveInfo.completedAt)} 完成 Pre-11.16 封存。`);
+
+      if (!window.confirm('確定封存目前既有薪資、已簽署合約／同意書與盤點紀錄？\n\n封存後既有盤點不可再修改；既有薪資月份會設為鎖定。此動作是 11.16 前的歷史資料保護點。')) return;
+
+      setArchiving(true);
+
+      try {
+
+          const now = Date.now();
+
+          const actorName = currentUserInfo?.name || '管理員';
+
+          const payrollSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'payrolls'));
+
+          for (const payrollDoc of payrollSnap.docs) {
+
+              await setDoc(payrollDoc.ref, { status: 'locked', archived: true, archivedAt: now, archivedByName: actorName, lockedAt: payrollDoc.data()?.lockedAt || now, lockedByName: payrollDoc.data()?.lockedByName || actorName }, { merge: true });
+
+          }
+
+          const signatureSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'signatures'));
+
+          for (const signatureDoc of signatureSnap.docs) {
+
+              await setDoc(signatureDoc.ref, { archived: true, archivedAt: now, archivedByName: actorName }, { merge: true });
+
+          }
+
+          const inventorySnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'inventoryRecords'));
+
+          for (const inventoryDoc of inventorySnap.docs) {
+
+              await setDoc(inventoryDoc.ref, { archived: true, archivedAt: now, archivedByName: actorName }, { merge: true });
+
+          }
+
+          const snapshot = { completedAt: now, completedByUid: currentUserInfo?.uid || '', completedByName: actorName, version: CURRENT_VERSION, payrollCount: payrollSnap.size, signatureCount: signatureSnap.size, inventoryCount: inventorySnap.size };
+
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'pre1116Archive'), snapshot, { merge: true });
+
+          await writeAuditLog({ db, appId, actor: { name: actorName }, action: 'archive_pre_1116', targetType: 'system_archive', targetId: 'pre1116', detail: snapshot });
+
+          alert(`✅ Pre-11.16 歷史資料封存完成\n薪資 ${payrollSnap.size} 筆／合約與同意書 ${signatureSnap.size} 筆／盤點 ${inventorySnap.size} 筆`);
+
+      } catch (error) {
+
+          console.error(error);
+
+          alert(`封存失敗：${error?.message || error}`);
+
+      } finally {
+
+          setArchiving(false);
+
+      }
+
+  };
+
+ 
+
   const buildInventoryGroups = (sourceItems = []) => {
 
       const groups = [];
@@ -6342,15 +6512,15 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
   const userList = Object.values(users || {});
 
-  const pendingUsersCount = userList.filter(u => !u?.isResigned && (!u?.salaryAmount || !u?.contractStart)).length;
+  const pendingUsersCount = userList.filter(u => !u?.isResigned && (!(u?.baseSalary || u?.salaryAmount) || !u?.contractStart)).length;
 
  
 
   const saveUser = async () => {
 
-      if (isSuperAdmin && (!formData.startDate || !formData.salaryAmount || !formData.contractStart)) {
+      if (isSuperAdmin && (!formData.startDate || !(formData.baseSalary || formData.salaryAmount) || !formData.contractStart)) {
 
-          return alert('🚨 請務必填寫「到職日」、「本薪」及「合約起始日」！');
+          return alert('🚨 請務必填寫「到職日」、「基本薪資」及「合約起始日」！');
 
       }
 
@@ -7030,7 +7200,11 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
                             <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">到職日</label><input type="date" value={formData.startDate || ''} onChange={e=>setFormData({...formData, startDate:e.target.value})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
 
-                            <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">本薪</label><input type="number" value={formData.salaryAmount || ''} onChange={e=>setFormData({...formData, salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+                            <div className="space-y-1"><label className="text-[10px] font-black text-gray-400 ml-2">基本薪資</label><input type="number" value={formData.baseSalary ?? (Number(formData.salaryAmount || 0) > 3000 ? Number(formData.salaryAmount) - 3000 : formData.salaryAmount) ?? ''} onChange={e=>setFormData({...formData, baseSalary:Number(e.target.value), salaryAmount:Number(e.target.value)})} className="w-full bg-white border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-500" /></div>
+
+                            <div className="space-y-1"><label className="text-[10px] font-black text-emerald-500 ml-2">全勤獎金</label><input type="number" value={formData.attendanceBonus ?? (Number(formData.salaryAmount || 0) > 3000 ? 3000 : '')} onChange={e=>setFormData({...formData, attendanceBonus:Number(e.target.value)})} className="w-full bg-emerald-50 border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-emerald-500" /></div>
+
+                            <div className="space-y-1"><label className="text-[10px] font-black text-sky-500 ml-2">固定津貼／雜項收入</label><input type="number" value={formData.fixedAllowance ?? ''} onChange={e=>setFormData({...formData, fixedAllowance:Number(e.target.value)})} className="w-full bg-sky-50 border-0 p-4 rounded-2xl text-sm font-bold shadow-sm focus:ring-2 focus:ring-sky-500" /></div>
 
                         </div>
 
@@ -7109,6 +7283,20 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       </div>
 
  
+
+ 
+
+<div className="bg-slate-900 text-white p-6 rounded-[2rem] border border-slate-700 shadow-lg">
+
+    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+
+        <div><div className="font-black text-lg flex items-center gap-2"><Lock size={18}/> Pre-11.16 歷史資料封存</div><div className="text-xs text-slate-300 mt-2">11.16 改資料結構前，鎖定既有薪資、已簽署合約／同意書與盤點紀錄。封存不刪除原資料。</div>{archiveInfo?.completedAt && <div className="text-xs text-emerald-300 mt-2">✅ 已封存｜{formatDateTime(archiveInfo.completedAt)}｜{archiveInfo.completedByName}｜薪資 {archiveInfo.payrollCount || 0}／文件 {archiveInfo.signatureCount || 0}／盤點 {archiveInfo.inventoryCount || 0}</div>}</div>
+
+        <button onClick={archivePre1116Data} disabled={!isSuperAdmin || archiving || !!archiveInfo?.completedAt} className="px-5 py-3 rounded-xl bg-white text-slate-900 text-xs font-black disabled:bg-slate-600 disabled:text-slate-300">{archiveInfo?.completedAt ? '🔒 已完成封存' : archiving ? '封存處理中…' : '建立 Pre-11.16 封存點'}</button>
+
+    </div>
+
+</div>
 
  
 
@@ -7898,7 +8086,7 @@ useEffect(() => {
 
 // 🟢 請貼在這裡 (handleRequest 的上方)
 
-const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!u.salaryAmount || !u.contractStart)).length;
+const needsSetupCount = Object.values(safeUsers).filter(u => !u.isResigned && (!(u.baseSalary || u.salaryAmount) || !u.contractStart)).length;
 
     const handleRequest = async (req, action) => {
 
