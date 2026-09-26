@@ -1,6 +1,3 @@
-// V14.0.0-alpha11.15
-// 修正部署版：移除 Word 文件標題文字
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import { initializeApp } from 'firebase/app';
@@ -25,17 +22,17 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.15";
+const CURRENT_VERSION = "V14.0.0-alpha11.15.1";
 
 const CURRENT_RELEASE_NOTES = [
 
- '新增獨立「服務品質、客訴改善及勞動條件補充協議書」，不修改既有已簽署勞動契約。',
+ '新增月曆國定假日／補假紅色細框與假日名稱標示，不改變既有店休日呈現方式。',
 
- '新增管理員「員工服務態度／客訴改善紀錄」，保留查證、員工陳述、改善要求與認定結果。',
+ '新增「系統設定 → 年度假日管理」，管理員可新增、編輯或刪除額外國定假日／補假日期。',
 
- '自畫假「假日最多 2 天」改為星期六、星期日、國定假日及補假合併計算。',
+ '2026 國定假日與補假提供內建名稱；自訂假日會同步套用月曆標示及「假日自畫最多 2 天」判斷。',
 
- '2026 國定假日／補假已納入判斷；管理員亦可用公司行程標題標記國定假日或補假。'
+ '保留 V14.0.0-alpha11.15 的服務品質補充協議、改善紀錄及自畫假規則。'
 
 ];
 
@@ -665,35 +662,121 @@ const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', mo
 
  
 
-// 2026（民國115年）國定假日／補假中，落在平日且應計入「假日畫假」額度的日期。
+// 2026（民國115年）國定假日／補假資料。
 
-// 星期六、日由程式自動判斷，不需要重複列入。
+// 月曆只對這些「國定假日／補假」加紅色細框；一般星期六、日不加紅框。
 
-// 後續年度可更新此表，或在「公司行程」標題加入「國定假日／補假／法定休假」字樣，系統亦會自動視為假日。
+// 星期六、日仍會計入「每月假日自畫最多 2 天」額度。
 
-const TAIWAN_PUBLIC_HOLIDAY_WEEKDAYS = new Set([
+const TAIWAN_PUBLIC_HOLIDAYS_2026 = [
 
-    '2026-01-01',
+    { date: '2026-01-01', name: '元旦', type: 'national' },
 
-    '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20',
+    { date: '2026-02-16', name: '農曆除夕', type: 'national' },
 
-    '2026-02-27',
+    { date: '2026-02-17', name: '春節', type: 'national' },
 
-    '2026-04-03', '2026-04-06',
+    { date: '2026-02-18', name: '春節', type: 'national' },
 
-    '2026-05-01',
+    { date: '2026-02-19', name: '春節', type: 'national' },
 
-    '2026-06-19',
+    { date: '2026-02-20', name: '春節補假', type: 'makeup' },
 
-    '2026-09-25', '2026-09-28',
+    { date: '2026-02-27', name: '和平紀念日補假', type: 'makeup' },
 
-    '2026-10-09', '2026-10-26',
+    { date: '2026-02-28', name: '和平紀念日', type: 'national' },
 
-    '2026-12-25'
+    { date: '2026-04-03', name: '兒童節補假', type: 'makeup' },
 
-]);
+    { date: '2026-04-04', name: '兒童節', type: 'national' },
 
-const isRosteredHolidayDate = (dateStr, events = []) => {
+    { date: '2026-04-05', name: '清明節', type: 'national' },
+
+    { date: '2026-04-06', name: '清明節補假', type: 'makeup' },
+
+    { date: '2026-05-01', name: '勞動節', type: 'national' },
+
+    { date: '2026-06-19', name: '端午節', type: 'national' },
+
+    { date: '2026-09-25', name: '中秋節', type: 'national' },
+
+    { date: '2026-09-28', name: '教師節', type: 'national' },
+
+    { date: '2026-10-09', name: '國慶日補假', type: 'makeup' },
+
+    { date: '2026-10-10', name: '國慶日', type: 'national' },
+
+    { date: '2026-10-25', name: '臺灣光復紀念日', type: 'national' },
+
+    { date: '2026-10-26', name: '臺灣光復紀念日補假', type: 'makeup' },
+
+    { date: '2026-12-25', name: '行憲紀念日', type: 'national' }
+
+];
+
+const normalizePublicHoliday = (item = {}) => ({
+
+    id: String(item.id || `${item.date || ''}_${item.name || ''}`),
+
+    date: String(item.date || ''),
+
+    name: String(item.name || '國定假日'),
+
+    type: item.type === 'makeup' ? 'makeup' : 'national',
+
+    source: item.source || 'custom'
+
+});
+
+const getPublicHolidayInfo = (dateStr, customHolidays = [], events = []) => {
+
+    if (!dateStr) return null;
+
+    const customMatch = (Array.isArray(customHolidays) ? customHolidays : [])
+
+        .map(normalizePublicHoliday)
+
+        .find(item => item.date === dateStr);
+
+    if (customMatch) return customMatch;
+
+    const builtInMatch = TAIWAN_PUBLIC_HOLIDAYS_2026.find(item => item.date === dateStr);
+
+    if (builtInMatch) return { ...builtInMatch, id: `builtin_${dateStr}`, source: 'builtin' };
+
+    const eventMatch = (Array.isArray(events) ? events : []).find(event => {
+
+        if (!checkEventOnDate(event, dateStr)) return false;
+
+        return /國定假日|補假|法定休假|政府公告放假/.test(String(event?.title || ''));
+
+    });
+
+    if (eventMatch) {
+
+        const eventTitle = String(eventMatch.title || '國定假日');
+
+        return {
+
+            id: `event_${eventMatch.id || dateStr}`,
+
+            date: dateStr,
+
+            name: eventTitle,
+
+            type: /補假/.test(eventTitle) ? 'makeup' : 'national',
+
+            source: 'event'
+
+        };
+
+    }
+
+    return null;
+
+};
+
+const isRosteredHolidayDate = (dateStr, events = [], customHolidays = []) => {
 
     if (!dateStr) return false;
 
@@ -703,17 +786,7 @@ const isRosteredHolidayDate = (dateStr, events = []) => {
 
     if (day === 0 || day === 6) return true;
 
-    if (TAIWAN_PUBLIC_HOLIDAY_WEEKDAYS.has(dateStr)) return true;
-
-    return (Array.isArray(events) ? events : []).some(event => {
-
-        if (!checkEventOnDate(event, dateStr)) return false;
-
-        const title = String(event?.title || '');
-
-        return /國定假日|補假|法定休假|政府公告放假/.test(title);
-
-    });
+    return !!getPublicHolidayInfo(dateStr, customHolidays, events);
 
 };
 
@@ -3773,6 +3846,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                         const todaysEvents = (events || []).filter(event => checkEventOnDate(event, dateStr));
 
+                        const publicHoliday = getPublicHolidayInfo(dateStr, dbData.publicHolidays || [], events || []);
+
                         const leaveAssignments = (data.assignments || []).filter(assignment => assignment.type === 'LEAVE');
 
                         const leaveUserIds = new Set(leaveAssignments.map(assignment => assignment.uid));
@@ -3783,9 +3858,11 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                         return (
 
-                            <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
+                            <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${publicHoliday ? 'ring-1 ring-inset ring-red-400' : ''} ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
 
-                                <div className="flex justify-between items-start mb-1"><span className="text-sm font-bold text-gray-700 ml-1">{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
+                                <div className="flex justify-between items-start mb-1"><span className={`text-sm font-bold ml-1 ${publicHoliday ? 'text-red-600' : 'text-gray-700'}`}>{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
+
+                                {publicHoliday && <div className="text-[10px] leading-tight font-black text-red-600 px-1 mb-1 truncate" title={publicHoliday.name}>{publicHoliday.name}</div>}
 
                                 {todaysEvents.map(event => <div key={event.id} className="bg-purple-100 text-purple-800 border-purple-300 border text-[11px] px-1 rounded mb-1 font-bold truncate"><Megaphone size={10} className="inline mr-1" />{event.time && `${event.time} `}{event.title}</div>)}
 
@@ -3853,7 +3930,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                     <div className="border-t p-4 space-y-4">
 
-                        <div className="text-xs text-gray-500">休假卡片以人員固定跳色顯示；手機優先顯示「姓名＋假別縮寫」，例如「正儒自畫」、「秉錚休」。未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
+                        <div className="text-xs text-gray-500">休假卡片以人員固定跳色顯示；國定假日／補假以紅色細框與紅字名稱標示，星期六、日不因週末自動加紅框。手機優先顯示「姓名＋假別縮寫」，例如「正儒自畫」、「秉錚休」。未標示休假的在職人員預設皆為上班。點日期可查看班別與調班明細。</div>
 
                         {!isReadOnly && isSuperAdmin && (
 
@@ -3917,7 +3994,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
 const ShiftModal = ({ dateStr, onClose, dbData, currentUserInfo, setEditingEvent, isSuperAdmin, isPrivileged, getUserColor, db, appId, isReadOnly }) => {
 
-    const { shifts, requests, events, users, leaves, shiftsDef } = dbData;
+    const { shifts, requests, events, users, leaves, shiftsDef, publicHolidays = [] } = dbData;
 
     const dayData = shifts[dateStr] || { assignments: [], note: '', isClosed: false };
 
@@ -4733,7 +4810,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                                   totalRostered++;
 
-                                                  if (isRosteredHolidayDate(d, events)) holidayRostered++;
+                                                  if (isRosteredHolidayDate(d, events, publicHolidays)) holidayRostered++;
 
                                               }
 
@@ -4741,7 +4818,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                                       });
 
-                                      const isTargetHoliday = isRosteredHolidayDate(dateStr, events);
+                                      const isTargetHoliday = isRosteredHolidayDate(dateStr, events, publicHolidays);
 
   
 
@@ -6131,7 +6208,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
  
 
-const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftTypes = DEFAULT_SHIFT_TYPES, appId, storeConfig, db, isSuperAdmin }) => {
+const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftTypes = DEFAULT_SHIFT_TYPES, holidayConfig = {}, appId, storeConfig, db, isSuperAdmin }) => {
 
   const [editingId, setEditingId] = useState(null);
 
@@ -6155,6 +6232,14 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
   const [shiftForm, setShiftForm] = useState({ id: '', label: '', display: '', start: '', end: '', hours: '' });
 
+  const [holidayYear, setHolidayYear] = useState('2026');
+
+  const [customHolidays, setCustomHolidays] = useState(Array.isArray(holidayConfig?.customHolidays) ? holidayConfig.customHolidays : []);
+
+  const [editingHolidayId, setEditingHolidayId] = useState(null);
+
+  const [holidayForm, setHolidayForm] = useState({ date: '', name: '', type: 'national' });
+
   const canManageInventory = isSuperAdmin || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor';
 
  
@@ -6172,6 +6257,14 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
       setCustomShiftList((Array.isArray(shiftTypes) ? shiftTypes : []).filter(item => !defaultShiftTypeIds.includes(item.id)));
 
   }, [shiftTypes, defaultShiftTypeIds]);
+
+ 
+
+  useEffect(() => {
+
+      setCustomHolidays(Array.isArray(holidayConfig?.customHolidays) ? holidayConfig.customHolidays : []);
+
+  }, [holidayConfig]);
 
  
 
@@ -6655,6 +6748,92 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
  
 
+  const persistCustomHolidays = async (nextList) => {
+
+      const normalized = (Array.isArray(nextList) ? nextList : [])
+
+          .map(normalizePublicHoliday)
+
+          .filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item.date) && item.name);
+
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'holidayConfig'), { customHolidays: normalized }, { merge: true });
+
+      setCustomHolidays(normalized);
+
+      return normalized;
+
+  };
+
+ 
+
+  const resetHolidayForm = () => {
+
+      setEditingHolidayId(null);
+
+      setHolidayForm({ date: '', name: '', type: 'national' });
+
+  };
+
+ 
+
+  const startEditHoliday = (item) => {
+
+      setEditingHolidayId(item.id);
+
+      setHolidayForm({ date: item.date || '', name: item.name || '', type: item.type === 'makeup' ? 'makeup' : 'national' });
+
+  };
+
+ 
+
+  const saveCustomHoliday = async () => {
+
+      if (!isSuperAdmin) return alert('只有最高管理員可以管理年度假日');
+
+      if (!holidayForm.date || !holidayForm.name.trim()) return alert('請完整填寫日期與假日名稱');
+
+      const itemId = editingHolidayId || `holiday_${Date.now()}`;
+
+      const nextItem = normalizePublicHoliday({ id: itemId, ...holidayForm, source: 'custom' });
+
+      let nextList = [...customHolidays];
+
+      const idx = nextList.findIndex(item => item.id === itemId);
+
+      if (idx >= 0) nextList[idx] = nextItem; else nextList.push(nextItem);
+
+      await persistCustomHolidays(nextList);
+
+      resetHolidayForm();
+
+      alert(`✅ 假日已${idx >= 0 ? '更新' : '新增'}，月曆與自畫假判斷會同步套用。`);
+
+  };
+
+ 
+
+  const deleteCustomHoliday = async (itemId) => {
+
+      if (!isSuperAdmin) return alert('只有最高管理員可以管理年度假日');
+
+      const target = customHolidays.find(item => item.id === itemId);
+
+      if (!window.confirm(`確定要刪除「${target?.name || '這筆假日'}」嗎？`)) return;
+
+      await persistCustomHolidays(customHolidays.filter(item => item.id !== itemId));
+
+      if (editingHolidayId === itemId) resetHolidayForm();
+
+  };
+
+ 
+
+  const builtInHolidaysForYear = TAIWAN_PUBLIC_HOLIDAYS_2026.filter(item => item.date.startsWith(`${holidayYear}-`));
+
+  const customHolidaysForYear = customHolidays.filter(item => String(item.date || '').startsWith(`${holidayYear}-`)).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+ 
+
   return (
 
     <div className="space-y-8 pb-20 max-w-5xl mx-auto animate-fade-in">
@@ -6666,6 +6845,96 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
         <h2 className="font-black text-3xl text-gray-800 tracking-tighter">{currentUserInfo?.name || '管理員'}</h2>
 
         <p className="text-indigo-500 font-black text-xs uppercase tracking-widest mt-1">Permission Controller</p>
+
+      </div>
+
+ 
+
+      <div className="bg-white p-8 rounded-[2.5rem] border border-red-100 shadow-lg shadow-red-50/40">
+
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5 mb-6">
+
+              <div>
+
+                  <h3 className="font-black text-xl text-gray-800 flex items-center gap-3"><Calendar className="text-red-500" size={24}/> 年度假日管理</h3>
+
+                  <p className="text-sm text-gray-500 mt-2">國定假日／補假會在月曆以紅色細框與紅字名稱顯示，並納入「假日自畫最多 2 天」判斷。店休日維持原本功能與顯示方式，不在此設定。</p>
+
+              </div>
+
+              <div className="flex items-center gap-2 bg-red-50 border border-red-100 rounded-2xl px-4 py-3">
+
+                  <span className="text-xs font-black text-red-500">年度</span>
+
+                  <select value={holidayYear} onChange={e=>setHolidayYear(e.target.value)} className="bg-white border border-red-100 rounded-xl px-3 py-2 text-sm font-black text-gray-700 focus:outline-none">
+
+                      <option value="2026">2026</option>
+
+                  </select>
+
+              </div>
+
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr,340px] gap-6">
+
+              <div className="space-y-3">
+
+                  <div className="text-xs font-black text-gray-500">2026 內建國定假日／補假</div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+
+                      {builtInHolidaysForYear.map(item => (
+
+                          <div key={item.date} className="flex items-center justify-between gap-3 rounded-2xl border border-red-100 bg-red-50/40 px-4 py-3">
+
+                              <div><div className="font-black text-gray-800 text-sm">{item.date}　{item.name}</div><div className="text-[10px] font-bold text-red-500 mt-1">{item.type === 'makeup' ? '補假' : '國定假日'}・系統內建</div></div>
+
+                              <div className="w-4 h-4 rounded border border-red-400 shrink-0" title="月曆紅色細框示意" />
+
+                          </div>
+
+                      ))}
+
+                  </div>
+
+                  <div className="pt-3 border-t border-gray-100">
+
+                      <div className="text-xs font-black text-gray-500 mb-2">管理員額外設定</div>
+
+                      {customHolidaysForYear.length === 0 ? <div className="text-xs text-gray-400 bg-gray-50 rounded-2xl p-4">目前沒有額外設定的假日。</div> : customHolidaysForYear.map(item => (
+
+                          <div key={item.id} className="flex items-center justify-between gap-3 bg-white border border-gray-100 rounded-2xl px-4 py-3 mb-2">
+
+                              <div><div className="font-black text-gray-800 text-sm">{item.date}　{item.name}</div><div className="text-[10px] font-bold text-red-500 mt-1">{item.type === 'makeup' ? '補假' : '國定假日'}・管理員設定</div></div>
+
+                              <div className="flex gap-2"><button onClick={()=>startEditHoliday(item)} disabled={!isSuperAdmin} className="px-3 py-2 rounded-xl bg-red-50 text-red-600 text-xs font-black disabled:bg-gray-100 disabled:text-gray-400">編輯</button><button onClick={()=>deleteCustomHoliday(item.id)} disabled={!isSuperAdmin} className="px-3 py-2 rounded-xl bg-gray-100 text-gray-500 text-xs font-black disabled:text-gray-300">刪除</button></div>
+
+                          </div>
+
+                      ))}
+
+                  </div>
+
+              </div>
+
+              <div className="bg-gray-50 border border-gray-100 rounded-[2rem] p-5 space-y-3">
+
+                  <div className="font-black text-gray-800">新增／編輯假日</div>
+
+                  <input type="date" value={holidayForm.date} disabled={!isSuperAdmin} onChange={e=>setHolidayForm({...holidayForm, date:e.target.value})} className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold disabled:bg-gray-100" />
+
+                  <input value={holidayForm.name} disabled={!isSuperAdmin} onChange={e=>setHolidayForm({...holidayForm, name:e.target.value})} placeholder="例如：政府公告補假" className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold disabled:bg-gray-100" />
+
+                  <select value={holidayForm.type} disabled={!isSuperAdmin} onChange={e=>setHolidayForm({...holidayForm, type:e.target.value})} className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold disabled:bg-gray-100"><option value="national">國定假日</option><option value="makeup">補假</option></select>
+
+                  <div className="flex gap-2"><button onClick={resetHolidayForm} className="flex-1 bg-white border border-gray-200 text-gray-500 py-3 rounded-2xl text-xs font-black">清空</button><button onClick={saveCustomHoliday} disabled={!isSuperAdmin} className="flex-1 bg-red-500 text-white py-3 rounded-2xl text-xs font-black shadow disabled:bg-gray-200 disabled:text-gray-400">{editingHolidayId ? '儲存修改' : '新增假日'}</button></div>
+
+                  <div className="text-[11px] text-gray-500 leading-5">此處只管理國定假日／補假。一般星期六、日仍會計入假日自畫額度，但不會顯示紅框；店休日維持原本班表日期內的「設為店休」功能。</div>
+
+              </div>
+
+          </div>
 
       </div>
 
@@ -7287,7 +7556,7 @@ function App() {
 
         users: {}, shifts: {}, events: [], requests: [], signatures: [], 
 
-        gasReceipts: {}, payrollRecords: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES,
+        gasReceipts: {}, payrollRecords: {}, storeLocation: null, inventoryItems: DEFAULT_INVENTORY_ITEMS, shiftTypes: DEFAULT_SHIFT_TYPES, holidayConfig: { customHolidays: [] }, publicHolidays: [],
 
         usersLoaded: false, shiftsLoaded: false
 
@@ -7435,7 +7704,17 @@ function App() {
 
         });
 
-        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); unsubShiftCfg(); };
+        const unsubHolidayCfg = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'holidayConfig'), (snap) => {
+
+            const holidayConfig = snap.exists() ? snap.data() : { customHolidays: [] };
+
+            const publicHolidays = Array.isArray(holidayConfig?.customHolidays) ? holidayConfig.customHolidays : [];
+
+            setDbData(prev => ({ ...prev, holidayConfig, publicHolidays }));
+
+        });
+
+        return () => { unsubUsers(); unsubShifts(); unsubSigs(); unsubReqs(); unsubEvents(); unsubGas(); unsubLoc(); unsubInv(); unsubShiftCfg(); unsubHolidayCfg(); };
 
     }, [user]);
 
@@ -8299,7 +8578,7 @@ ${fromName} ⇄ ${toName}
 
             // 🟢 修正：只保留一個 settings，並加上空值保護
 
-            case 'settings': return <SettingsView users={safeUsers} currentUserInfo={currentUserInfo} inventoryItems={safeInventoryItems} shiftTypes={safeShiftTypes} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
+            case 'settings': return <SettingsView users={safeUsers} currentUserInfo={currentUserInfo} inventoryItems={safeInventoryItems} shiftTypes={safeShiftTypes} holidayConfig={dbData.holidayConfig} appId={appId} storeConfig={dbData.storeLocation} db={db} isSuperAdmin={isSuperAdmin} />;
 
             
 
