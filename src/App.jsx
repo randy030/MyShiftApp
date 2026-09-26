@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.1";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.2";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '11.16.2：內建 2027（民國116年）國定假日／補假，並補正 2026 小年夜（2/15）；年度假日管理可直接切換 2026／2027 查看。',
 
  '11.16.1：補充協議第一、三、五條文字調整；既有改善機會已完成，未來事件仍保留查證與員工陳述。',
 
@@ -720,25 +722,33 @@ const REPEAT_LABELS = { none: '不重複', daily: '每天', weekly: '每週', mo
 
  
 
-// 2026（民國115年）國定假日／補假資料。
+// 2026～2027（民國115～116年）國定假日／補假資料。
 
 // 月曆只對這些「國定假日／補假」加紅色細框；一般星期六、日不加紅框。
 
 // 星期六、日仍會計入「每月假日自畫最多 2 天」額度。
 
-const TAIWAN_PUBLIC_HOLIDAYS_2026 = [
+// 2027 依行政院人事行政總處 116 年政府行政機關辦公日曆表內建；
+
+// 民間企業若國定假日遇個別勞工的例假／休息日，實際補假日仍應依勞動法令及勞雇約定辦理。
+
+const TAIWAN_PUBLIC_HOLIDAYS = [
+
+    // ===== 2026 / 民國115年 =====
 
     { date: '2026-01-01', name: '元旦', type: 'national' },
 
+    { date: '2026-02-15', name: '小年夜', type: 'national' },
+
     { date: '2026-02-16', name: '農曆除夕', type: 'national' },
 
-    { date: '2026-02-17', name: '春節', type: 'national' },
+    { date: '2026-02-17', name: '春節初一', type: 'national' },
 
-    { date: '2026-02-18', name: '春節', type: 'national' },
+    { date: '2026-02-18', name: '春節初二', type: 'national' },
 
-    { date: '2026-02-19', name: '春節', type: 'national' },
+    { date: '2026-02-19', name: '春節初三', type: 'national' },
 
-    { date: '2026-02-20', name: '春節補假', type: 'makeup' },
+    { date: '2026-02-20', name: '小年夜補假', type: 'makeup' },
 
     { date: '2026-02-27', name: '和平紀念日補假', type: 'makeup' },
 
@@ -764,13 +774,61 @@ const TAIWAN_PUBLIC_HOLIDAYS_2026 = [
 
     { date: '2026-10-10', name: '國慶日', type: 'national' },
 
-    { date: '2026-10-25', name: '臺灣光復紀念日', type: 'national' },
+    { date: '2026-10-25', name: '臺灣光復暨金門古寧頭大捷紀念日', type: 'national' },
 
-    { date: '2026-10-26', name: '臺灣光復紀念日補假', type: 'makeup' },
+    { date: '2026-10-26', name: '臺灣光復暨金門古寧頭大捷紀念日補假', type: 'makeup' },
 
-    { date: '2026-12-25', name: '行憲紀念日', type: 'national' }
+    { date: '2026-12-25', name: '行憲紀念日', type: 'national' },
 
-];
+    // ===== 2027 / 民國116年 =====
+
+    { date: '2027-01-01', name: '元旦', type: 'national' },
+
+    { date: '2027-02-04', name: '小年夜', type: 'national' },
+
+    { date: '2027-02-05', name: '農曆除夕', type: 'national' },
+
+    { date: '2027-02-06', name: '春節初一', type: 'national' },
+
+    { date: '2027-02-07', name: '春節初二', type: 'national' },
+
+    { date: '2027-02-08', name: '春節初三', type: 'national' },
+
+    { date: '2027-02-09', name: '春節補假', type: 'makeup' },
+
+    { date: '2027-02-10', name: '春節補假', type: 'makeup' },
+
+    { date: '2027-02-28', name: '和平紀念日', type: 'national' },
+
+    { date: '2027-03-01', name: '和平紀念日補假', type: 'makeup' },
+
+    { date: '2027-04-04', name: '兒童節', type: 'national' },
+
+    { date: '2027-04-05', name: '清明節', type: 'national' },
+
+    { date: '2027-04-06', name: '兒童節補假', type: 'makeup' },
+
+    { date: '2027-04-30', name: '勞動節補假', type: 'makeup' },
+
+    { date: '2027-05-01', name: '勞動節', type: 'national' },
+
+    { date: '2027-06-09', name: '端午節', type: 'national' },
+
+    { date: '2027-09-15', name: '中秋節', type: 'national' },
+
+    { date: '2027-09-28', name: '教師節', type: 'national' },
+
+    { date: '2027-10-10', name: '國慶日', type: 'national' },
+
+    { date: '2027-10-11', name: '國慶日補假', type: 'makeup' },
+
+    { date: '2027-10-25', name: '臺灣光復暨金門古寧頭大捷紀念日', type: 'national' },
+
+    { date: '2027-12-24', name: '行憲紀念日補假', type: 'makeup' },
+
+    { date: '2027-12-25', name: '行憲紀念日', type: 'national' },
+
+    { date: '2027-12-31', name: '2028 元旦補假', type: 'makeup' }
 
 const normalizePublicHoliday = (item = {}) => ({
 
@@ -798,7 +856,7 @@ const getPublicHolidayInfo = (dateStr, customHolidays = [], events = []) => {
 
     if (customMatch) return customMatch;
 
-    const builtInMatch = TAIWAN_PUBLIC_HOLIDAYS_2026.find(item => item.date === dateStr);
+    const builtInMatch = TAIWAN_PUBLIC_HOLIDAYS.find(item => item.date === dateStr);
 
     if (builtInMatch) return { ...builtInMatch, id: `builtin_${dateStr}`, source: 'builtin' };
 
@@ -7170,7 +7228,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
  
 
-  const builtInHolidaysForYear = TAIWAN_PUBLIC_HOLIDAYS_2026.filter(item => item.date.startsWith(`${holidayYear}-`));
+  const builtInHolidaysForYear = TAIWAN_PUBLIC_HOLIDAYS.filter(item => item.date.startsWith(`${holidayYear}-`));
 
   const customHolidaysForYear = customHolidays.filter(item => String(item.date || '').startsWith(`${holidayYear}-`)).sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
@@ -7212,6 +7270,8 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
                       <option value="2026">2026</option>
 
+                      <option value="2027">2027</option>
+
                   </select>
 
               </div>
@@ -7222,7 +7282,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
               <div className="space-y-3">
 
-                  <div className="text-xs font-black text-gray-500">2026 內建國定假日／補假</div>
+                  <div className="text-xs font-black text-gray-500">{holidayYear} 內建國定假日／補假</div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
 
