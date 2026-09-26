@@ -22,9 +22,13 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.15.2.1";
+const CURRENT_VERSION = "V14.0.0-alpha11.16";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '11.16：補充協議加入雙方簽署／生效狀態、事件查證與最終確認、薪資歷程及下一完整薪資月生效。',
+
+ '11.16：生理假薪資修正為半薪，並列入薪資扣薪明細；生理假不影響全勤獎金。',
 
  '修正出勤統計：生理假現在直接顯示本月、年度累計、前 3 日不併病假與第 4 日起併病假。',
 
@@ -1252,7 +1256,25 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                 meetingDate,
 
+                agreementVersion: '11.16-1',
+
+                status: 'signed_effective',
+
+                employeeSignedAt: Date.now(),
+
+                employerSignedAt: Date.now(),
+
+                effectiveDate: meetingDate,
+
+                originalBaseSalary: 34500,
+
+                originalAttendanceBonus: 3000,
+
                 originalSalary: 37500,
+
+                adjustedBaseSalary: 29500,
+
+                adjustedAttendanceBonus: 3000,
 
                 adjustedSalary: 32500,
 
@@ -1310,7 +1332,7 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                         <p><strong>第四條｜既有事件處理</strong><br/>雙方確認目前月薪維持新臺幣 <strong>37,500 元</strong>。本次及先前已發生之服務態度客訴僅作為改善與管理紀錄，不追溯扣減已提供勞務期間之既有工資。</p>
 
-                        <p><strong>第五條｜未來薪資調整程序</strong><br/>本次改善後，如乙方再次發生「同性質、可歸責且經查證成立」之服務態度客訴，甲方得依本協議啟動勞動條件及薪資調整協商程序。經雙方就具體事件、查證結果及調整內容再次確認後，未來月薪得由 <strong>37,500 元</strong> 調整為 <strong>32,500 元</strong>。</p>
+                        <p><strong>第五條｜未來薪資調整程序</strong><br/>本次改善後，如乙方再次發生「同性質、可歸責且經查證成立」之服務態度客訴，甲方得依本協議啟動勞動條件及薪資調整協商程序。經雙方就具體事件、查證結果及調整內容再次確認後，未來固定薪資得由 <strong>34,500 元</strong> 調整為 <strong>29,500 元</strong>；每月 <strong>3,000 元全勤獎金制度維持不變</strong>，因此正常符合全勤條件之月薪由 <strong>37,500 元</strong> 調整為 <strong>32,500 元</strong>。32,500 元已包含 3,000 元全勤獎金，不得再重複加計。</p>
 
                         <p><strong>第六條｜生效時間及不追溯</strong><br/>如雙方確認適用前條薪資調整，應自下一個完整薪資月份起生效，不得以「罰款」、「每次客訴扣款」或其他方式回溯扣除事件發生月份以前已取得之工資。</p>
 
@@ -1346,7 +1368,7 @@ const ServiceRecordModal = ({ isOpen, onClose, users, currentUserInfo, db, appId
 
     const activeUsers = (Array.isArray(users) ? users : []).filter(u => !u?.isResigned);
 
-    const [form, setForm] = useState({ uid: '', eventDate: new Date().toISOString().split('T')[0], stage: 'formal', complaint: '', employeeStatement: '', result: 'established', improvement: '', observationStart: '', observationEnd: '', evidence: [] });
+    const [form, setForm] = useState({ uid: '', eventDate: new Date().toISOString().split('T')[0], stage: 'formal', complaint: '', employeeStatement: '', result: 'uncertain', serviceAttitudeRelated: true, sameNature: false, attributable: false, finalConfirmed: false, improvement: '', observationStart: '', observationEnd: '', evidence: [] });
 
     useEffect(()=>{ if(isOpen && !form.uid && activeUsers[0]) setForm(prev=>({...prev,uid:activeUsers[0].uid})); },[isOpen,form.uid,activeUsers.length]);
 
@@ -1362,7 +1384,7 @@ const ServiceRecordModal = ({ isOpen, onClose, users, currentUserInfo, db, appId
 
         if (!employee || !form.eventDate || !form.complaint.trim()) return alert('請選擇員工、事件日期並填寫客訴／事件內容');
 
-        await addDoc(collection(db,'artifacts',appId,'public','data','serviceRecords'), { ...form, employeeName: employee.name, createdAt: Date.now(), createdByUid: currentUserInfo?.uid || '', createdByName: currentUserInfo?.name || '管理員' });
+        await addDoc(collection(db,'artifacts',appId,'public','data','serviceRecords'), { ...form, recordDate: new Date().toISOString().split('T')[0], eventType: 'service_complaint', investigationStatus: 'admin_reviewed', customerIdentityHidden: true, finalFinding: form.result, updatedAt: Date.now(), updatedByUid: currentUserInfo?.uid || '', updatedByName: currentUserInfo?.name || '管理員', employeeName: employee.name, createdAt: Date.now(), createdByUid: currentUserInfo?.uid || '', createdByName: currentUserInfo?.name || '管理員' });
 
         await writeAuditLog({ db, appId, actor: currentUserInfo, action: 'CREATE_SERVICE_RECORD', targetType: 'employee', targetId: employee.uid, detail: { employeeName: employee.name, eventDate: form.eventDate, result: form.result } });
 
@@ -1381,6 +1403,8 @@ const ServiceRecordModal = ({ isOpen, onClose, users, currentUserInfo, db, appId
         <div><label className="font-bold text-xs">查證資料</label><div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">{evidenceOptions.map(item=><label key={item} className="border rounded p-2 flex gap-2 items-center"><input type="checkbox" checked={form.evidence.includes(item)} onChange={()=>toggleEvidence(item)}/>{item}</label>)}</div></div>
 
         <div><label className="font-bold text-xs">員工陳述／說明</label><textarea rows="3" value={form.employeeStatement} onChange={e=>setForm({...form,employeeStatement:e.target.value})} className="w-full border rounded p-2"/></div>
+
+        <div className="grid sm:grid-cols-3 gap-2"><label className="border rounded p-2 flex gap-2 items-center"><input type="checkbox" checked={form.serviceAttitudeRelated} onChange={e=>setForm({...form,serviceAttitudeRelated:e.target.checked})}/>服務態度相關</label><label className="border rounded p-2 flex gap-2 items-center"><input type="checkbox" checked={form.sameNature} onChange={e=>setForm({...form,sameNature:e.target.checked})}/>與既有問題同性質</label><label className="border rounded p-2 flex gap-2 items-center"><input type="checkbox" checked={form.attributable} onChange={e=>setForm({...form,attributable:e.target.checked})}/>可歸責員工</label></div>
 
         <div><label className="font-bold text-xs">查證結果</label><select value={form.result} onChange={e=>setForm({...form,result:e.target.value})} className="w-full border rounded p-2"><option value="established">客訴成立</option><option value="not_established">客訴不成立</option><option value="uncertain">無法確認</option></select></div>
 
@@ -1848,21 +1872,51 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     useEffect(() => {
 
-        if (!isPrivileged) return;
-
         const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'serviceRecords'), snap => {
 
             const list = []; snap.forEach(item => list.push({ id: item.id, ...item.data() }));
 
-            setServiceRecords(list.sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0)));
+            setServiceRecords(list.filter(item => isPrivileged || item.uid === currentUserInfo.uid).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0)));
 
         });
 
         return () => unsub();
 
-    }, [db, appId, isPrivileged]);
+    }, [db, appId, isPrivileged, currentUserInfo.uid]);
 
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
+
+    const getNextMonthStart = (dateStr) => { const d = new Date(`${dateStr}T00:00:00`); return `${d.getFullYear() + (d.getMonth()===11?1:0)}-${String((d.getMonth()+1)%12+1).padStart(2,'0')}-01`; };
+
+    const finalizeServiceSalaryAdjustment = async (record) => {
+
+        const agreement = signatures.filter(s=>s.uid===record.uid && s.formType==='serviceSupplement' && s.customData?.status==='signed_effective').sort((a,b)=>Number(b.agreedAt||0)-Number(a.agreedAt||0))[0];
+
+        if (!agreement) return alert('⚠️ 此員工沒有已由雙方簽署並生效的補充協議，不得啟動薪資調整。');
+
+        if (record.eventDate < (agreement.customData?.effectiveDate || '9999-12-31')) return alert('🔒 本事件發生於補充協議生效前，只能作為歷史改善紀錄。');
+
+        if (!(record.result==='established' && record.serviceAttitudeRelated && record.sameNature && record.attributable)) return alert('⚠️ 必須同時符合：查證成立、服務態度相關、同性質、可歸責，才能進入最終確認。');
+
+        if (record.salaryAdjustmentId || record.finalConfirmed) return alert('此事件已完成薪資調整確認。');
+
+        if (!window.confirm('最終確認：此動作不追溯扣薪，固定薪資將自下一個完整薪資月份由 34,500 調整為 29,500；3,000 全勤獎金制度維持不變。是否繼續？')) return;
+
+        const effectiveFrom = getNextMonthStart(record.eventDate);
+
+        const adjustmentRef = await addDoc(collection(db,'artifacts',appId,'public','data','salaryAdjustments'), { uid:record.uid, employeeName:record.employeeName, serviceRecordId:record.id, agreementId:agreement.id, confirmedAt:Date.now(), confirmedByUid:currentUserInfo?.uid||'', confirmedByName:currentUserInfo?.name||'管理員', effectiveFrom, oldBaseSalary:34500, newBaseSalary:29500, attendanceBonus:3000, oldNormalMonthlySalary:37500, newNormalMonthlySalary:32500, noRetroactiveDeduction:true });
+
+        const historyItem = { id: adjustmentRef.id, effectiveFrom, baseSalary:29500, attendanceBonus:3000, fixedAllowance:0, normalMonthlySalary:32500, reason:'服務態度補充協議薪資調整', agreementId:agreement.id, serviceRecordId:record.id, createdAt:Date.now() };
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','users',record.uid), { salaryHistory:arrayUnion(historyItem), salaryAdjustmentPending:{ effectiveFrom, baseSalary:29500, attendanceBonus:3000, normalMonthlySalary:32500, adjustmentId:adjustmentRef.id } });
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','serviceRecords',record.id), { finalConfirmed:true, finalConfirmedAt:Date.now(), finalConfirmedByUid:currentUserInfo?.uid||'', salaryAdjustmentId:adjustmentRef.id, salaryEffectiveFrom:effectiveFrom });
+
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'FINALIZE_SERVICE_SALARY_ADJUSTMENT',targetType:'employee',targetId:record.uid,detail:{serviceRecordId:record.id,agreementId:agreement.id,effectiveFrom,oldBaseSalary:34500,newBaseSalary:29500}});
+
+        alert(`✅ 已完成最終確認。新固定薪資自 ${effectiveFrom} 起適用；事件月份不追溯扣薪。`);
+
+    };
 
     const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
 
@@ -2048,11 +2102,17 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     {record.improvement && <div className="mt-1 text-xs text-indigo-700 font-bold">改善要求：{record.improvement}</div>}
 
+                    <div className="mt-2 text-[11px] text-gray-500">服務態度相關：{record.serviceAttitudeRelated?'是':'否'}｜同性質：{record.sameNature?'是':'否'}｜可歸責：{record.attributable?'是':'否'}</div>
+
+                    {record.finalConfirmed ? <div className="mt-2 text-xs font-black text-emerald-700">✅ 已完成最終確認｜新薪資生效：{record.salaryEffectiveFrom}</div> : <button onClick={()=>finalizeServiceSalaryAdjustment(record)} className="mt-3 px-3 py-2 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-black">最終確認並建立下一完整薪資月調整</button>}
+
                 </div>)}</div>
 
             </div>}
 
-            {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
+            {!isPrivileged && serviceRecords.length > 0 && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4"><div className="p-4 bg-slate-50 border-b font-bold text-slate-700">我的服務態度／改善紀錄</div><div className="divide-y">{serviceRecords.map(record=><div key={record.id} className="p-4 text-sm"><div className="font-bold">{record.eventDate}｜{record.result==='established'?'查證成立':record.result==='not_established'?'查證不成立':'查證中／無法確認'}</div><div className="mt-2 text-gray-600">{record.complaint}</div>{record.employeeStatement&&<div className="mt-1 text-xs text-gray-500">我的說明：{record.employeeStatement}</div>}{record.improvement&&<div className="mt-1 text-xs text-indigo-700">改善要求：{record.improvement}</div>}</div>)}</div></div>}
+
+                        {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
 
             {viewData && <ViewSignatureModal sigData={viewData} onClose={()=>setViewData(null)} />}
 
@@ -5398,7 +5458,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
 
-        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪（半薪）</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>生理假扣薪（半薪）</td><td>-${formatMoney(summary.menstrualDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、生理假扣半薪、事假扣全薪；生理假不影響全勤獎金；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
 
         printWindow.document.close();
 
@@ -5469,6 +5529,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
             annualHours: 0,
 
             menstrualDays: 0,
+
+            menstrualHours: 0,
 
             menstrualDetails: [],
 
@@ -5564,7 +5626,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                 summary.menstrualDays += 1;
 
-                summary.menstrualDetails.push({ ...detail, hours: 0 });
+                summary.menstrualHours += leaveHours;
+
+                summary.menstrualDetails.push({ ...detail, hours: leaveHours });
 
             }
 
@@ -5644,6 +5708,24 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
  
 
+    // 11.16：依薪資歷程解析指定月份適用的薪資結構；舊資料沒有歷程時維持原欄位相容。
+
+    const getSalaryStructureForMonth = (user, monthStr) => {
+
+        const histories = Array.isArray(user?.salaryHistory) ? [...user.salaryHistory] : [];
+
+        const monthStart = `${monthStr}-01`;
+
+        const matched = histories.filter(item => item?.effectiveFrom && item.effectiveFrom <= monthStart).sort((a,b)=>String(b.effectiveFrom).localeCompare(String(a.effectiveFrom)))[0];
+
+        if (matched) return { baseSalary:getNumber(matched.baseSalary), attendanceBonus:getNumber(matched.attendanceBonus), fixedAllowance:getNumber(matched.fixedAllowance), salaryHistoryId:matched.id || matched.effectiveFrom, effectiveFrom:matched.effectiveFrom };
+
+        const legacyTotal = getNumber(user?.salaryAmount || 0);
+
+        return { baseSalary:getNumber(user?.baseSalary ?? (legacyTotal > 3000 ? legacyTotal - 3000 : legacyTotal)), attendanceBonus:getNumber(user?.attendanceBonus ?? (legacyTotal > 3000 ? 3000 : 0)), fixedAllowance:getNumber(user?.fixedAllowance || 0), salaryHistoryId:'legacy', effectiveFrom:'' };
+
+    };
+
     const getSettlementBase = (user, record = {}) => {
 
         const legacyTotal = getNumber(user?.salaryAmount || record.base);
@@ -5676,6 +5758,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const sickDeduction = leaveSummary.sickHours * hourlyRate * 0.5;
 
+        const menstrualDeduction = leaveSummary.menstrualHours * hourlyRate * 0.5;
+
         const personalDeduction = leaveSummary.personalHours * hourlyRate;
 
         const gasRecords = gasReceipts?.[monthStr]?.[user.uid] || [];
@@ -5684,13 +5768,13 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const gasCapped = Math.min(gasTotal, 500);
 
-        const legacyTotal = getNumber(user?.salaryAmount || 0);
+        const salaryStructure = getSalaryStructureForMonth(user, monthStr);
 
-        const baseSalary = getNumber(record.baseSalary ?? user?.baseSalary ?? (legacyTotal > 3000 ? legacyTotal - 3000 : legacyTotal));
+        const baseSalary = getNumber(record.baseSalary ?? salaryStructure.baseSalary);
 
-        const attendanceBonus = getNumber(record.attendanceBonus ?? user?.attendanceBonus ?? (legacyTotal > 3000 ? 3000 : 0));
+        const attendanceBonus = getNumber(record.attendanceBonus ?? salaryStructure.attendanceBonus);
 
-        const fixedAllowance = getNumber(record.fixedAllowance ?? user?.fixedAllowance ?? 0);
+        const fixedAllowance = getNumber(record.fixedAllowance ?? salaryStructure.fixedAllowance);
 
         const subsidy = getNumber(record.subsidy);
 
@@ -5714,7 +5798,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const grossPay = regularPay + totalAdditions;
 
-        const totalDeductions = sickDeduction + personalDeduction + manualDeduction;
+        const totalDeductions = sickDeduction + menstrualDeduction + personalDeduction + manualDeduction;
 
         const netPay = grossPay - totalDeductions;
 
@@ -5736,11 +5820,11 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             annualUsedYearHours, annualEntitledHours, annualRemainingHours,
 
-            sickDeduction, personalDeduction, gasTotal, gasCapped, subsidy,
+            sickDeduction, menstrualDeduction, personalDeduction, gasTotal, gasCapped, subsidy,
 
             birthdayBonus, festivalBonus, yearBonus, manualAdjustment, customIncomeItems, customIncomeTotal,
 
-            manualDeduction, totalAdditions, totalDeductions, netPay,
+            manualDeduction, totalAdditions, totalDeductions, netPay, salaryStructure,
 
             bankTransfer, cashPayment, paymentTotal, paymentDifference
 
@@ -5900,7 +5984,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                         <h2 className="font-bold flex gap-2 text-indigo-700"><DollarSign/> 薪資結算中心 (機密)</h2>
 
-                        <p className="text-xs text-gray-400 mt-1">病假扣半薪、事假扣全薪；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p>
+                        <p className="text-xs text-gray-400 mt-1">病假扣半薪、生理假扣半薪、事假扣全薪；生理假不影響全勤獎金；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p>
 
                     </div>
 
