@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.15.2";
+const CURRENT_VERSION = "V14.0.0-alpha11.15.2.1";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '修正出勤統計：生理假現在直接顯示本月、年度累計、前 3 日不併病假與第 4 日起併病假。',
 
  '生理假統計改為每月最多 1 日，並顯示年度累計、前 3 日與第 4 日起併入病假之統計。',
 
@@ -3150,7 +3152,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
 
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 
                     <div className="bg-white/95 text-gray-800 rounded-xl p-4">
 
@@ -3169,6 +3171,20 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
                         <div className={`text-3xl font-black mt-1 ${compRemainingHours < 0 ? 'text-red-600' : 'text-teal-700'}`}>{remainingHoursLabel(compRemainingHours)}</div>
 
                         <div className="text-[10px] text-gray-500 mt-2">累積加班 {remainingHoursLabel(yearlyTimeStats?.yearStats?.otEarned)}｜已使用 {remainingHoursLabel(yearlyTimeStats?.yearStats?.compHoursUsed)}</div>
+
+                    </div>
+
+                    <div className="bg-white/95 text-gray-800 rounded-xl p-4">
+
+                        <div className="text-xs font-black text-pink-600">生理假統計</div>
+
+                        <div className="text-3xl font-black text-pink-700 mt-1">{yearlyTimeStats?.monthStats?.leaves?.menstrual?.days || 0} 天</div>
+
+                        <div className="text-[10px] text-gray-500 mt-2">本月使用｜每月最多 1 日</div>
+
+                        <div className="text-[11px] font-bold text-pink-700 mt-2">年度累計 {yearlyTimeStats?.yearStats?.leaves?.menstrual?.days || 0} 天</div>
+
+                        <div className="text-[10px] text-gray-500 mt-1">前 3 日不併病假 {Math.min(yearlyTimeStats?.yearStats?.leaves?.menstrual?.days || 0, 3)} 天｜第 4 日起併病假 {Math.max((yearlyTimeStats?.yearStats?.leaves?.menstrual?.days || 0) - 3, 0)} 天</div>
 
                     </div>
 
