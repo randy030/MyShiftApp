@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.2.1";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.2.2";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '11.16.2.2：修正版本更新視窗：手機畫面限制最大高度、更新內容可獨立捲動，「我知道了」固定在底部，避免內容過長無法關閉。',
 
  '11.16.2.1：修正 2026／2027 國定假日陣列結尾缺少 ]; 導致 Vercel 建置失敗。',
 
@@ -9452,11 +9454,11 @@ ${fromName} ⇄ ${toName}
 
 {showVersionNotice && user?.uid && !loading && currentUserInfo?.uid && coreDataReady && (
 
-    <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="version-notice-title" aria-describedby="version-notice-description">
+    <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="version-notice-title" aria-describedby="version-notice-description">
 
-        <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100">
+        <div className="bg-white w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] rounded-[2rem] shadow-2xl overflow-hidden border border-indigo-100 flex flex-col">
 
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+            <div className="bg-indigo-600 text-white px-5 sm:px-6 py-4 flex items-center justify-between shrink-0">
 
                 <div>
 
@@ -9466,27 +9468,27 @@ ${fromName} ⇄ ${toName}
 
                 </div>
 
-                <button onClick={dismissVersionNotice} className="text-white/80 hover:text-white font-black">✕</button>
+                <button onClick={dismissVersionNotice} className="text-white/80 hover:text-white font-black text-xl leading-none p-2 -mr-2" aria-label="關閉版本更新提醒">✕</button>
 
             </div>
 
-            <div className="p-6 space-y-3 text-sm text-gray-700">
+            <div className="px-5 sm:px-6 pt-5 pb-3 space-y-3 text-sm text-gray-700 overflow-y-auto overscroll-contain flex-1 min-h-0">
 
                 <div className="font-black text-gray-800">已更新至：{CURRENT_VERSION}</div>
 
-                <div id="version-notice-description" className="text-xs text-gray-500">按下「我知道了」後，本版本不會再重複顯示；下一次版本更新才會再提醒。</div>
+                <div id="version-notice-description" className="text-xs text-gray-500">此視窗只顯示本次版本重點；按下「我知道了」後，本版本不會再重複顯示。</div>
 
                 <ul className="list-disc pl-5 space-y-2">
 
-                    {CURRENT_RELEASE_NOTES.map(note => <li key={note}>{note}</li>)}
+                    {CURRENT_RELEASE_NOTES.slice(0, 1).map(note => <li key={note}>{note}</li>)}
 
                 </ul>
 
-                <div className="pt-3">
+            </div>
 
-                    <button onClick={dismissVersionNotice} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700">我知道了</button>
+            <div className="shrink-0 border-t border-gray-100 bg-white px-5 sm:px-6 py-4">
 
-                </div>
+                <button onClick={dismissVersionNotice} className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-black hover:bg-indigo-700 active:bg-indigo-800">我知道了</button>
 
             </div>
 
