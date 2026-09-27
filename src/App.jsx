@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.3";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.4";
 
 const CURRENT_RELEASE_NOTES = [
+
+    '細微更新與系統整理。',
 
  '細微更新與系統整理。',
 
@@ -2029,6 +2031,14 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     const [serviceRecords, setServiceRecords] = useState([]);
 
+    const [resignationCases, setResignationCases] = useState([]);
+
+    const [selectedResignationUid, setSelectedResignationUid] = useState('');
+
+    const [resignationModalOpen, setResignationModalOpen] = useState(false);
+
+    const [resignationForm, setResignationForm] = useState({ lastWorkDate:'', reason:'', handover:'', signerName:'', voluntaryConfirmed:false });
+
     useEffect(() => {
 
         const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'serviceRecords'), snap => {
@@ -2042,6 +2052,116 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
         return () => unsub();
 
     }, [db, appId, isPrivileged, currentUserInfo.uid]);
+
+    useEffect(() => {
+
+        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'resignationCases'), snap => {
+
+            const list = []; snap.forEach(item => list.push({ id:item.id, ...item.data() }));
+
+            setResignationCases(list.filter(item => isPrivileged || item.uid === currentUserInfo.uid).sort((a,b)=>Number(b.openedAt||0)-Number(a.openedAt||0)));
+
+        });
+
+        return () => unsub();
+
+    }, [db, appId, isPrivileged, currentUserInfo.uid]);
+
+    const myOpenResignationCase = resignationCases.find(item => item.uid === currentUserInfo.uid && item.status === 'open');
+
+    const openResignationFormForEmployee = async () => {
+
+        if (!isPrivileged) return;
+
+        const target = (Array.isArray(users) ? users : []).find(u => u.uid === selectedResignationUid);
+
+        if (!target) return alert('請先選擇要開放離職申請書的員工。');
+
+        if (resignationCases.some(item => item.uid === target.uid && item.status === 'open')) return alert('此員工目前已有開放中的自願離職申請書。');
+
+        await addDoc(collection(db,'artifacts',appId,'public','data','resignationCases'), {
+
+            uid:target.uid, employeeName:target.name||'', hireDate:target.contractStart||target.hireDate||'', status:'open', visibleToEmployee:true,
+
+            openedAt:Date.now(), openedByUid:currentUserInfo.uid||'', openedByName:currentUserInfo.name||'管理員', version:CURRENT_VERSION
+
+        });
+
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'OPEN_VOLUNTARY_RESIGNATION_FORM',targetType:'employee',targetId:target.uid,detail:{employeeName:target.name||''}});
+
+        setSelectedResignationUid('');
+
+        alert('已開放自願離職申請書。只有該員工登入後看得到。');
+
+    };
+
+    const closeResignationForm = async (item) => {
+
+        if (!isPrivileged || item.status !== 'open') return;
+
+        if (!window.confirm(`確定關閉 ${item.employeeName} 的自願離職申請書？關閉後員工端會立即隱藏。`)) return;
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','resignationCases',item.id), { status:'closed', visibleToEmployee:false, closedAt:Date.now(), closedByUid:currentUserInfo.uid||'', closedByName:currentUserInfo.name||'管理員' });
+
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'CLOSE_VOLUNTARY_RESIGNATION_FORM',targetType:'employee',targetId:item.uid,detail:{caseId:item.id}});
+
+    };
+
+    const submitVoluntaryResignation = async () => {
+
+        const item = myOpenResignationCase;
+
+        if (!item) return alert('目前沒有開放中的自願離職申請書。');
+
+        if (!resignationForm.lastWorkDate) return alert('請填寫預計最後工作日。');
+
+        if (!resignationForm.voluntaryConfirmed) return alert('請先確認本申請係由本人基於自由意願提出。');
+
+        if ((resignationForm.signerName||'').trim() !== (currentUserInfo.name||'').trim()) return alert('簽署姓名須與本人姓名一致。');
+
+        if (!window.confirm('送出後將形成自願離職申請紀錄，內容不得由員工自行修改。\n\n確認送出？')) return;
+
+        const signedAt = Date.now();
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','resignationCases',item.id), {
+
+            status:'employee_submitted', visibleToEmployee:true, submittedAt:signedAt, lastWorkDate:resignationForm.lastWorkDate,
+
+            reason:resignationForm.reason.trim(), handover:resignationForm.handover.trim(), signerName:resignationForm.signerName.trim(),
+
+            voluntaryConfirmed:true, employeeStatement:'本離職申請係本人基於自由意願提出。', immutableAfterSubmit:true
+
+        });
+
+        await addDoc(collection(db,'artifacts',appId,'public','data','signatures'), {
+
+            uid:currentUserInfo.uid, userName:currentUserInfo.name||'', formType:'resignation', formName:'自願離職申請書', agreedAt:signedAt,
+
+            customData:{ caseId:item.id, hireDate:item.hireDate||'', lastWorkDate:resignationForm.lastWorkDate, reason:resignationForm.reason.trim(), handover:resignationForm.handover.trim(), signerName:resignationForm.signerName.trim(), voluntaryConfirmed:true, employeeStatement:'本離職申請係本人基於自由意願提出。', version:CURRENT_VERSION }
+
+        });
+
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'EMPLOYEE_SUBMIT_VOLUNTARY_RESIGNATION',targetType:'employee',targetId:currentUserInfo.uid,detail:{caseId:item.id,lastWorkDate:resignationForm.lastWorkDate}});
+
+        setResignationModalOpen(false);
+
+        setResignationForm({ lastWorkDate:'', reason:'', handover:'', signerName:'', voluntaryConfirmed:false });
+
+        alert('自願離職申請書已送出，等待店方收悉。');
+
+    };
+
+    const acknowledgeResignation = async (item) => {
+
+        if (!isPrivileged || item.status !== 'employee_submitted') return;
+
+        await updateDoc(doc(db,'artifacts',appId,'public','data','resignationCases',item.id), { status:'acknowledged', acknowledgedAt:Date.now(), acknowledgedByUid:currentUserInfo.uid||'', acknowledgedByName:currentUserInfo.name||'管理員' });
+
+        await writeAuditLog({db,appId,actor:currentUserInfo,action:'ACKNOWLEDGE_VOLUNTARY_RESIGNATION',targetType:'employee',targetId:item.uid,detail:{caseId:item.id,lastWorkDate:item.lastWorkDate||''}});
+
+        alert('已標記為「雇主已收悉」。此動作不等同代替員工提出或簽署離職。');
+
+    };
 
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
 
@@ -2182,6 +2302,16 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     </div>
 
+                    {!isPrivileged && myOpenResignationCase && <div className="bg-white p-5 rounded-xl border border-rose-200 shadow-sm hover:shadow-md">
+
+                        <div className="flex items-center gap-2 mb-2 text-rose-700"><FileSignature size={20}/><h3 className="font-bold text-lg">自願離職申請書</h3></div>
+
+                        <p className="text-sm text-gray-500 mb-4 h-10">此表單由店方針對您個別開放；未開放時不會顯示。</p>
+
+                        <button onClick={()=>{setResignationForm(v=>({...v,signerName:currentUserInfo.name||''}));setResignationModalOpen(true);}} className="w-full font-bold py-2 rounded-lg border bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100">填寫並簽署</button>
+
+                    </div>}
+
                     {isPrivileged && <div className="bg-white p-5 rounded-xl border shadow-sm hover:shadow-md">
 
                         <div className="flex items-center gap-2 mb-2 text-amber-700"><ShieldAlert size={20}/><h3 className="font-bold text-lg">A版｜服務品質／客訴補充協議</h3></div>
@@ -2234,7 +2364,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                                             <div className="text-xs text-gray-500 font-normal mt-1">
 
-                                                {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : sig.formType === 'serviceSupplement' ? `原月薪 $${sig.customData?.originalSalary || 37500} → 條件成立並再次確認後 $${sig.customData?.adjustedSalary || 32500}` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
+                                                {sig.formType === 'holiday' ? `原: ${sig.customData?.origDate} ➡️ 調: ${sig.customData?.newDate}` : sig.formType === 'serviceSupplement' ? `原月薪 $${sig.customData?.originalSalary || 37500} → 條件成立並再次確認後 $${sig.customData?.adjustedSalary || 32500}` : sig.formType === 'resignation' ? `最後工作日：${sig.customData?.lastWorkDate || '-'}｜本人自願提出` : `月薪: $${sig.customData?.salaryAmount} / 地點: ${sig.customData?.workLocation}`}
 
                                             </div>
 
@@ -2280,6 +2410,48 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
             {isPrivileged && activeTab === 'records' && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4">
 
+                <div className="p-4 bg-rose-50 border-b font-bold text-rose-800">自願離職申請書｜開放與收悉管理</div>
+
+                <div className="p-4 border-b flex flex-col sm:flex-row gap-2">
+
+                    <select value={selectedResignationUid} onChange={e=>setSelectedResignationUid(e.target.value)} className="flex-1 border rounded-lg px-3 py-2 text-sm">
+
+                        <option value="">選擇員工</option>
+
+                        {(Array.isArray(users)?users:[]).filter(u=>!u.isResigned).map(u=><option key={u.uid} value={u.uid}>{u.name}</option>)}
+
+                    </select>
+
+                    <button onClick={openResignationFormForEmployee} className="px-4 py-2 rounded-lg bg-rose-700 text-white text-sm font-black">開放自願離職申請書</button>
+
+                </div>
+
+                <div className="divide-y">
+
+                    {resignationCases.length===0 ? <div className="p-6 text-center text-sm text-gray-400">尚無離職申請案件</div> : resignationCases.map(item=><div key={item.id} className="p-4 text-sm">
+
+                        <div className="flex flex-wrap items-center justify-between gap-2"><div className="font-black text-gray-800">{item.employeeName}</div><div className="text-xs font-bold text-gray-500">{item.status==='open'?'已開放／等待員工':item.status==='employee_submitted'?'員工已提出自願離職':item.status==='acknowledged'?'雇主已收悉':'已關閉'}</div></div>
+
+                        {item.lastWorkDate && <div className="mt-2 text-gray-600">預計最後工作日：{item.lastWorkDate}</div>}
+
+                        {item.reason && <div className="mt-1 text-gray-500">離職原因：{item.reason}</div>}
+
+                        <div className="mt-3 flex gap-2">
+
+                            {item.status==='open' && <button onClick={()=>closeResignationForm(item)} className="px-3 py-2 rounded border text-xs font-black text-gray-600">關閉並隱藏</button>}
+
+                            {item.status==='employee_submitted' && <button onClick={()=>acknowledgeResignation(item)} className="px-3 py-2 rounded bg-emerald-700 text-white text-xs font-black">標記雇主已收悉</button>}
+
+                        </div>
+
+                    </div>)}
+
+                </div>
+
+            </div>}
+
+            {isPrivileged && activeTab === 'records' && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4">
+
                 <div className="p-4 bg-slate-50 border-b font-bold text-slate-700">服務態度／客訴改善紀錄</div>
 
                 <div className="divide-y">{serviceRecords.length === 0 ? <div className="p-6 text-center text-sm text-gray-400">尚無改善紀錄</div> : serviceRecords.map(record => <div key={record.id} className="p-4 text-sm">
@@ -2301,6 +2473,36 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
             </div>}
 
             {!isPrivileged && serviceRecords.length > 0 && <div className="bg-white rounded-xl border overflow-hidden shadow-sm mt-4"><div className="p-4 bg-slate-50 border-b font-bold text-slate-700">我的服務態度／改善紀錄</div><div className="divide-y">{serviceRecords.map(record=><div key={record.id} className="p-4 text-sm"><div className="font-bold">{record.eventDate}｜{record.result==='established'?'查證成立':record.result==='not_established'?'查證不成立':'查證中／無法確認'}</div><div className="mt-2 text-gray-600">{record.complaint}</div>{record.employeeStatement&&<div className="mt-1 text-xs text-gray-500">我的說明：{record.employeeStatement}</div>}{record.improvement&&<div className="mt-1 text-xs text-indigo-700">改善要求：{record.improvement}</div>}{record.salaryAdjustmentStatus==='pending_employee_confirmation' && <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3"><div className="text-xs font-black text-amber-800">⚠️ 勞動條件／薪資調整待您再次確認</div><div className="text-[11px] text-amber-700 mt-1">37,500 元（34,500＋3,000 全勤）→ 32,500 元（29,500＋3,000 全勤）；完成確認後自下一完整薪資月份生效。</div><button onClick={()=>confirmServiceSalaryAdjustmentByEmployee(record)} className="mt-2 px-3 py-2 rounded bg-amber-700 text-white text-xs font-black">閱讀並確認薪資調整</button></div>}{record.finalConfirmed&&<div className="mt-2 text-xs font-black text-emerald-700">✅ 已完成雙方再次確認｜生效：{record.salaryEffectiveFrom}</div>}</div>)}</div></div>}
+
+            {resignationModalOpen && myOpenResignationCase && <div className="fixed inset-0 bg-black/60 z-[95] flex items-center justify-center p-3">
+
+                <div className="bg-white w-full max-w-xl max-h-[88dvh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+
+                    <div className="px-5 py-4 bg-rose-700 text-white flex justify-between items-center shrink-0"><div className="font-black">自願離職申請書</div><button onClick={()=>setResignationModalOpen(false)} className="font-black text-xl">✕</button></div>
+
+                    <div className="p-5 space-y-4 overflow-y-auto flex-1 min-h-0 text-sm">
+
+                        <div className="bg-gray-50 border rounded-xl p-3">姓名：<b>{currentUserInfo.name}</b><br/>到職日：<b>{myOpenResignationCase.hireDate || '未登錄'}</b><br/>提出日期：<b>{new Date().toLocaleDateString()}</b></div>
+
+                        <label className="block font-bold">預計最後工作日<input type="date" value={resignationForm.lastWorkDate} onChange={e=>setResignationForm(v=>({...v,lastWorkDate:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal" /></label>
+
+                        <label className="block font-bold">離職原因（選填）<textarea value={resignationForm.reason} onChange={e=>setResignationForm(v=>({...v,reason:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal min-h-20" /></label>
+
+                        <label className="block font-bold">交接事項（選填）<textarea value={resignationForm.handover} onChange={e=>setResignationForm(v=>({...v,handover:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal min-h-20" /></label>
+
+                        <label className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl p-3"><input type="checkbox" checked={resignationForm.voluntaryConfirmed} onChange={e=>setResignationForm(v=>({...v,voluntaryConfirmed:e.target.checked}))} className="mt-1"/><span className="font-bold text-rose-900">本人確認：本離職申請係本人基於自由意願提出。</span></label>
+
+                        <label className="block font-bold">本人簽署姓名<input value={resignationForm.signerName} onChange={e=>setResignationForm(v=>({...v,signerName:e.target.value}))} placeholder="請輸入本人姓名" className="mt-1 w-full border rounded-lg px-3 py-2 font-normal" /></label>
+
+                        <div className="text-xs text-gray-500">送出後會保存簽署時間與內容，員工端不得自行修改；店方僅能標記「已收悉」，不能代替您提出或簽署。</div>
+
+                    </div>
+
+                    <div className="p-4 border-t bg-white shrink-0"><button onClick={submitVoluntaryResignation} className="w-full py-3 rounded-xl bg-rose-700 text-white font-black">確認並送出自願離職申請</button></div>
+
+                </div>
+
+            </div>}
 
                         {signModal && <SignModal formType={signModal} onClose={()=>setSignModal(null)} currentUserInfo={currentUserInfo} db={db} appId={appId} setView={setView} storeConfig={storeConfig} />}
 
