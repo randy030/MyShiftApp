@@ -22,7 +22,7 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.4";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.5";
 
 const CURRENT_RELEASE_NOTES = [
 
@@ -2037,7 +2037,13 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     const [resignationModalOpen, setResignationModalOpen] = useState(false);
 
-    const [resignationForm, setResignationForm] = useState({ lastWorkDate:'', reason:'', handover:'', signerName:'', voluntaryConfirmed:false });
+    const resignationSignatureCanvasRef = useRef(null);
+
+    const resignationSignatureDrawingRef = useRef(false);
+
+    const resignationSignatureLastPointRef = useRef(null);
+
+    const [resignationForm, setResignationForm] = useState({ lastWorkDate:'', reason:'', handover:'', voluntaryConfirmed:false, signatureDataUrl:'' });
 
     useEffect(() => {
 
@@ -2107,17 +2113,129 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     };
 
+    const toLocalDateInput = (date) => {
+
+        const d = new Date(date);
+
+        const y = d.getFullYear();
+
+        const m = String(d.getMonth()+1).padStart(2,'0');
+
+        const day = String(d.getDate()).padStart(2,'0');
+
+        return `${y}-${m}-${day}`;
+
+    };
+
+    const addCalendarDays = (date, days) => { const d = new Date(date); d.setHours(12,0,0,0); d.setDate(d.getDate()+days); return d; };
+
+    const addCalendarMonths = (date, months) => { const d = new Date(date); d.setHours(12,0,0,0); d.setMonth(d.getMonth()+months); return d; };
+
+    const addCalendarYears = (date, years) => { const d = new Date(date); d.setHours(12,0,0,0); d.setFullYear(d.getFullYear()+years); return d; };
+
+    const getResignationNoticeRule = (hireDateValue, noticeDateValue = new Date()) => {
+
+        if (!hireDateValue) return { noticeDays:null, minLastWorkDate:'', label:'到職日未登錄，無法自動推算預告期間，請先聯絡管理員補正到職日。' };
+
+        const hire = new Date(`${hireDateValue}T12:00:00`);
+
+        const notice = new Date(noticeDateValue); notice.setHours(12,0,0,0);
+
+        if (Number.isNaN(hire.getTime())) return { noticeDays:null, minLastWorkDate:'', label:'到職日格式異常，請先聯絡管理員。' };
+
+        if (notice < addCalendarMonths(hire,3)) return { noticeDays:0, minLastWorkDate:'', label:'工作未滿3個月：勞基法目前未明定自請離職預告天數；本表不強制鎖定法定最早日，仍應依勞雇雙方合法約定辦理。' };
+
+        let noticeDays = 10;
+
+        if (notice >= addCalendarYears(hire,3)) noticeDays = 30;
+
+        else if (notice >= addCalendarYears(hire,1)) noticeDays = 20;
+
+        const minDate = addCalendarDays(notice, noticeDays);
+
+        return { noticeDays, minLastWorkDate:toLocalDateInput(minDate), label:`依目前年資，依法應於 ${noticeDays} 日前預告；預告日當日不計，自次日起依曆計算。系統推算最早最後工作日為 ${toLocalDateInput(minDate)}。` };
+
+    };
+
+    const resignationNoticeRule = getResignationNoticeRule(myOpenResignationCase?.hireDate, new Date());
+
+    const prepareResignationForm = () => {
+
+        const rule = getResignationNoticeRule(myOpenResignationCase?.hireDate, new Date());
+
+        setResignationForm({ lastWorkDate:rule.minLastWorkDate || '', reason:'', handover:'', voluntaryConfirmed:false, signatureDataUrl:'' });
+
+        setResignationModalOpen(true);
+
+        setTimeout(()=>{
+
+            const canvas = resignationSignatureCanvasRef.current;
+
+            if (!canvas) return;
+
+            const rect = canvas.getBoundingClientRect();
+
+            const ratio = window.devicePixelRatio || 1;
+
+            canvas.width = Math.max(1, Math.floor(rect.width * ratio)); canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+
+            const ctx = canvas.getContext('2d'); ctx.scale(ratio,ratio); ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#111827';
+
+        },50);
+
+    };
+
+    const getSignaturePoint = (e) => { const canvas=resignationSignatureCanvasRef.current; const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; };
+
+    const startResignationSignature = (e) => {
+
+        const canvas=resignationSignatureCanvasRef.current; if(!canvas) return; e.preventDefault(); canvas.setPointerCapture?.(e.pointerId);
+
+        resignationSignatureDrawingRef.current=true; resignationSignatureLastPointRef.current=getSignaturePoint(e);
+
+    };
+
+    const drawResignationSignature = (e) => {
+
+        if(!resignationSignatureDrawingRef.current) return; e.preventDefault(); const canvas=resignationSignatureCanvasRef.current; if(!canvas) return;
+
+        const ctx=canvas.getContext('2d'); const p=getSignaturePoint(e); const last=resignationSignatureLastPointRef.current || p;
+
+        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); resignationSignatureLastPointRef.current=p;
+
+    };
+
+    const endResignationSignature = (e) => {
+
+        if(!resignationSignatureDrawingRef.current) return; e.preventDefault(); resignationSignatureDrawingRef.current=false; resignationSignatureLastPointRef.current=null;
+
+        const canvas=resignationSignatureCanvasRef.current; if(canvas) setResignationForm(v=>({...v,signatureDataUrl:canvas.toDataURL('image/png')}));
+
+    };
+
+    const clearResignationSignature = () => {
+
+        const canvas=resignationSignatureCanvasRef.current; if(canvas){ const ctx=canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); }
+
+        setResignationForm(v=>({...v,signatureDataUrl:''}));
+
+    };
+
     const submitVoluntaryResignation = async () => {
 
         const item = myOpenResignationCase;
 
         if (!item) return alert('目前沒有開放中的自願離職申請書。');
 
-        if (!resignationForm.lastWorkDate) return alert('請填寫預計最後工作日。');
+        const noticeRule = getResignationNoticeRule(item.hireDate, new Date());
+
+        if (noticeRule.minLastWorkDate && resignationForm.lastWorkDate < noticeRule.minLastWorkDate) return alert(`依目前年資，法定預告期為 ${noticeRule.noticeDays} 日，最早最後工作日為 ${noticeRule.minLastWorkDate}。可選擇更晚日期，但不可早於系統推算日期。`);
+
+        if (!resignationForm.lastWorkDate) return alert('請確認預計最後工作日。');
 
         if (!resignationForm.voluntaryConfirmed) return alert('請先確認本申請係由本人基於自由意願提出。');
 
-        if ((resignationForm.signerName||'').trim() !== (currentUserInfo.name||'').trim()) return alert('簽署姓名須與本人姓名一致。');
+        if (!resignationForm.signatureDataUrl) return alert('請先在簽名框完成本人親簽。');
 
         if (!window.confirm('送出後將形成自願離職申請紀錄，內容不得由員工自行修改。\n\n確認送出？')) return;
 
@@ -2127,7 +2245,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
             status:'employee_submitted', visibleToEmployee:true, submittedAt:signedAt, lastWorkDate:resignationForm.lastWorkDate,
 
-            reason:resignationForm.reason.trim(), handover:resignationForm.handover.trim(), signerName:resignationForm.signerName.trim(),
+            reason:resignationForm.reason.trim(), handover:resignationForm.handover.trim(), signatureDataUrl:resignationForm.signatureDataUrl,
 
             voluntaryConfirmed:true, employeeStatement:'本離職申請係本人基於自由意願提出。', immutableAfterSubmit:true
 
@@ -2137,7 +2255,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
             uid:currentUserInfo.uid, userName:currentUserInfo.name||'', formType:'resignation', formName:'自願離職申請書', agreedAt:signedAt,
 
-            customData:{ caseId:item.id, hireDate:item.hireDate||'', lastWorkDate:resignationForm.lastWorkDate, reason:resignationForm.reason.trim(), handover:resignationForm.handover.trim(), signerName:resignationForm.signerName.trim(), voluntaryConfirmed:true, employeeStatement:'本離職申請係本人基於自由意願提出。', version:CURRENT_VERSION }
+            customData:{ caseId:item.id, hireDate:item.hireDate||'', lastWorkDate:resignationForm.lastWorkDate, noticeDays:noticeRule.noticeDays, statutoryEarliestLastWorkDate:noticeRule.minLastWorkDate, reason:resignationForm.reason.trim(), handover:resignationForm.handover.trim(), signatureDataUrl:resignationForm.signatureDataUrl, voluntaryConfirmed:true, employeeStatement:'本離職申請係本人基於自由意願提出。', version:CURRENT_VERSION }
 
         });
 
@@ -2145,7 +2263,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
         setResignationModalOpen(false);
 
-        setResignationForm({ lastWorkDate:'', reason:'', handover:'', signerName:'', voluntaryConfirmed:false });
+        setResignationForm({ lastWorkDate:'', reason:'', handover:'', voluntaryConfirmed:false, signatureDataUrl:'' });
 
         alert('自願離職申請書已送出，等待店方收悉。');
 
@@ -2308,7 +2426,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                         <p className="text-sm text-gray-500 mb-4 h-10">此表單由店方針對您個別開放；未開放時不會顯示。</p>
 
-                        <button onClick={()=>{setResignationForm(v=>({...v,signerName:currentUserInfo.name||''}));setResignationModalOpen(true);}} className="w-full font-bold py-2 rounded-lg border bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100">填寫並簽署</button>
+                        <button onClick={prepareResignationForm} className="w-full font-bold py-2 rounded-lg border bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100">填寫並簽署</button>
 
                     </div>}
 
@@ -2484,7 +2602,9 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                         <div className="bg-gray-50 border rounded-xl p-3">姓名：<b>{currentUserInfo.name}</b><br/>到職日：<b>{myOpenResignationCase.hireDate || '未登錄'}</b><br/>提出日期：<b>{new Date().toLocaleDateString()}</b></div>
 
-                        <label className="block font-bold">預計最後工作日<input type="date" value={resignationForm.lastWorkDate} onChange={e=>setResignationForm(v=>({...v,lastWorkDate:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal" /></label>
+                        <label className="block font-bold">預計最後工作日<input type="date" min={resignationNoticeRule.minLastWorkDate || undefined} value={resignationForm.lastWorkDate} onChange={e=>setResignationForm(v=>({...v,lastWorkDate:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal" /><div className="text-xs text-gray-500 mt-1">{resignationNoticeRule.minLastWorkDate ? `系統已帶入法定預告期推算的最早日期；員工可選更晚日期，但不可提前。` : `未滿3個月或到職資料不足時，系統不會自行假設法定預告天數。`}</div></label>
+
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900"><div className="font-black mb-1">離職預告期間自動推算</div><div className="text-xs leading-5">{resignationNoticeRule.label}</div></div>
 
                         <label className="block font-bold">離職原因（選填）<textarea value={resignationForm.reason} onChange={e=>setResignationForm(v=>({...v,reason:e.target.value}))} className="mt-1 w-full border rounded-lg px-3 py-2 font-normal min-h-20" /></label>
 
@@ -2492,9 +2612,9 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                         <label className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl p-3"><input type="checkbox" checked={resignationForm.voluntaryConfirmed} onChange={e=>setResignationForm(v=>({...v,voluntaryConfirmed:e.target.checked}))} className="mt-1"/><span className="font-bold text-rose-900">本人確認：本離職申請係本人基於自由意願提出。</span></label>
 
-                        <label className="block font-bold">本人簽署姓名<input value={resignationForm.signerName} onChange={e=>setResignationForm(v=>({...v,signerName:e.target.value}))} placeholder="請輸入本人姓名" className="mt-1 w-full border rounded-lg px-3 py-2 font-normal" /></label>
+                        <div className="block font-bold">本人親簽<div className="mt-1 border-2 border-dashed border-gray-300 rounded-xl bg-white overflow-hidden"><canvas ref={resignationSignatureCanvasRef} onPointerDown={startResignationSignature} onPointerMove={drawResignationSignature} onPointerUp={endResignationSignature} onPointerCancel={endResignationSignature} onPointerLeave={endResignationSignature} className="w-full h-36 touch-none cursor-crosshair" /></div><div className="mt-2 flex items-center justify-between gap-2"><span className="text-xs text-gray-500">請以手指、觸控筆或滑鼠在框內親簽。</span><button type="button" onClick={clearResignationSignature} className="px-3 py-1.5 rounded-lg border text-xs font-black text-gray-600">清除重簽</button></div></div>
 
-                        <div className="text-xs text-gray-500">送出後會保存簽署時間與內容，員工端不得自行修改；店方僅能標記「已收悉」，不能代替您提出或簽署。</div>
+                        <div className="text-xs text-gray-500">送出後會保存預告期推算結果、最後工作日、本人手寫簽名、簽署時間與內容，員工端不得自行修改；店方僅能標記「已收悉」，不能代替您提出或簽署。</div>
 
                     </div>
 
