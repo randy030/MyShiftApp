@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.2.2";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.3";
 
 const CURRENT_RELEASE_NOTES = [
+
+ '細微更新與系統整理。',
 
  '11.16.2.2：修正版本更新視窗：手機畫面限制最大高度、更新內容可獨立捲動，「我知道了」固定在底部，避免內容過長無法關閉。',
 
@@ -55,6 +57,22 @@ const CURRENT_RELEASE_NOTES = [
  '保留 11.15.1 的國定假日／補假紅框標示與年度假日管理。'
 
 ];
+
+const CONTRACT_SCHEME_CUTOFF = '2026-09-27';
+
+const resolveContractScheme = (user = {}) => {
+
+    if (user?.contractScheme === 'A' || user?.contractScheme === 'B') return user.contractScheme;
+
+    const startDate = user?.startDate || user?.hireDate || user?.contractStart || '';
+
+    return startDate && startDate <= CONTRACT_SCHEME_CUTOFF ? 'A' : 'B';
+
+};
+
+const isContractSchemeA = (user = {}) => resolveContractScheme(user) === 'A';
+
+const isContractSchemeB = (user = {}) => resolveContractScheme(user) === 'B';
 
 const LINE_API_URL = "/api/webhook"; 
 
@@ -1256,7 +1274,7 @@ const GasReceiptModal = ({ isOpen, onClose, user, monthStr, db, appId, currentRe
 
 const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, appId }) => {
 
-    const activeUsers = (Array.isArray(users) ? users : []).filter(u => !u?.isResigned);
+    const activeUsers = (Array.isArray(users) ? users : []).filter(u => !u?.isResigned && isContractSchemeA(u));
 
     const [employeeUid, setEmployeeUid] = useState('');
 
@@ -1543,6 +1561,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
     
 
     const { workLocation, salaryAmount, baseSalary, attendanceBonus, fixedAllowance, contractStart, contractEnd, isIndefinite } = currentUserInfo;
+    const contractScheme = resolveContractScheme(currentUserInfo);
 
     const resolvedWorkLocation = workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
 
@@ -1622,9 +1641,9 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
         } else if (formType === 'contract') {
 
-            formName = '員工勞動契約暨保密與工作守則同意書'; 
+            formName = contractScheme === 'B' ? 'B版｜員工勞動契約暨服務品質、保密與工作守則同意書' : 'A版｜員工勞動契約暨保密與工作守則同意書'; 
 
-            customData = { contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount: Number(baseSalary || salaryAmount || 0) + Number(attendanceBonus || 0) + Number(fixedAllowance || 0), baseSalary: Number(baseSalary || salaryAmount || 0), attendanceBonus: Number(attendanceBonus || 0), fixedAllowance: Number(fixedAllowance || 0) };
+            customData = { contractScheme, contractVersion: contractScheme === 'B' ? 'B-1' : 'A-legacy', contractStart, contractEnd: isIndefinite ? '不定期契約' : contractEnd, workLocation: resolvedWorkLocation, salaryAmount: Number(baseSalary || salaryAmount || 0) + Number(attendanceBonus || 0) + Number(fixedAllowance || 0), baseSalary: Number(baseSalary || salaryAmount || 0), attendanceBonus: Number(attendanceBonus || 0), fixedAllowance: Number(fixedAllowance || 0), serviceTermsIncluded: contractScheme === 'B', serviceTermsEffectiveDate: contractScheme === 'B' ? contractStart : '' };
 
         }
 
@@ -1652,7 +1671,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[95vh]">
 
-                <div className="bg-gray-800 p-4 text-white flex justify-between items-center"><h3 className="font-bold">{formType === 'holiday' ? '填寫：國定假日調移同意書' : '填寫：員工勞動契約暨保密與工作守則同意書'}</h3><button onClick={onClose}><X size={20}/></button></div>
+                <div className="bg-gray-800 p-4 text-white flex justify-between items-center"><h3 className="font-bold">{formType === 'holiday' ? '填寫：國定假日調移同意書' : `填寫：${contractScheme}版員工勞動契約`}</h3><button onClick={onClose}><X size={20}/></button></div>
 
                 <div className="p-6 overflow-y-auto flex-1 space-y-4">
 
@@ -1696,7 +1715,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
 
                             <>
 
-                                <h4 className="font-bold text-center text-xl mb-4 text-gray-900">員工勞動契約暨保密與工作守則同意書</h4>
+                                <h4 className="font-bold text-center text-xl mb-4 text-gray-900">{contractScheme === 'B' ? 'B版｜員工勞動契約暨服務品質、保密與工作守則同意書' : 'A版｜員工勞動契約暨保密與工作守則同意書'}</h4>
 
                                 <p className="mb-4">立契約書人 <strong>{currentUserInfo.name}</strong> (以下簡稱乙方)，受雇於本公司 (以下簡稱甲方)，雙方同意訂定本勞動契約，共同遵守約定條款如下：</p>
 
@@ -1775,6 +1794,22 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
                                 <p className="pl-4 mt-1">2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。</p>
 
                                 <p className="pl-4 mt-1">3. 病假 / 事假：申請時可選擇使用補休時數扣抵，但僅限請假發生日以前已取得且尚未使用之補休；請假日後才產生之加班／補休不得回溯抵扣。主管核准時由系統依時序及可用餘額檢核。</p>
+
+                                {contractScheme === 'B' && <>
+
+                                    <p className="font-bold text-gray-900 mt-4 bg-amber-50 px-2 py-1 rounded inline-block">第九條：服務品質、客訴查證及既有改善機制</p>
+
+                                    <p className="pl-4 mt-2">乙方執行門市服務工作時，應以合理、禮貌及符合門市服務規範之方式應對顧客。客戶提出抱怨或反映本身不直接視為客訴成立；甲方應就具體事件進行合理查證，並給予乙方陳述及說明機會。經確認事件與乙方服務態度有關且可歸責於乙方者，始列為成立之服務態度事件。</p>
+
+                                    <p className="font-bold text-gray-900 mt-4 bg-amber-50 px-2 py-1 rounded inline-block">第十條：未來勞動條件及薪資調整程序</p>
+
+                                    <p className="pl-4 mt-2">本契約生效後，如乙方發生同性質、可歸責且經查證成立之服務態度事件，甲方得啟動勞動條件及薪資調整協商程序。乙方目前正常符合全勤條件時之每月薪資，以本契約記載之固定薪資、全勤獎金及固定津貼合計為準；其中全勤獎金已包含於每月薪資總額內，並非另行重複加發。任何後續固定薪資調整均須就具體事件、查證結果及調整內容由雙方再次確認，未完成雙方確認前不得建立新薪資歷程或變更薪資。</p>
+
+                                    <p className="font-bold text-gray-900 mt-4 bg-amber-50 px-2 py-1 rounded inline-block">第十一條：生效時間、不追溯及異議</p>
+
+                                    <p className="pl-4 mt-2">經雙方再次確認之薪資調整，自下一個完整薪資月份起生效，不得以罰款、每次客訴扣款或其他方式回溯扣除既有工資。乙方對客訴成立認定有異議時，得提出書面或系統內說明；提出異議本身不得作為不利益處分之理由。</p>
+
+                                </>}
 
                             </>
 
@@ -1916,6 +1951,16 @@ const ViewSignatureModal = ({ sigData, onClose }) => {
 
                                 <p><strong>請假規則附錄</strong><br/>本附錄為本同意書之一部分，員工於系統內簽署本同意書時，視為已一併閱讀並同意以下請假規則：<br/>1. 生理假：每月最多 1 日；全年前 3 日不併入病假，第 4 日起併入病假計算；薪資依半薪規則處理。<br/>2. 特休：屬獨立假別，由系統依到職年資依法計算，不列入補休扣抵。<br/>3. 病假 / 事假：申請時可選擇使用補休時數扣抵，但僅限請假發生日以前已取得且尚未使用之補休；請假日後才產生之加班／補休不得回溯抵扣。主管核准時由系統依時序及可用餘額檢核。</p>
 
+                                {sigData.customData?.contractScheme === 'B' && <>
+
+                                    <p><strong>第九條：服務品質及客訴查證</strong><br/>客戶抱怨或反映本身不直接視為客訴成立；甲方應合理查證並給予乙方陳述機會，經確認屬服務態度相關且可歸責於乙方者，始列為成立事件。</p>
+
+                                    <p><strong>第十條：未來勞動條件及薪資調整程序</strong><br/>如發生同性質、可歸責且經查證成立之服務態度事件，僅得啟動薪資調整協商。任何後續固定薪資調整仍須由雙方就具體事件、查證結果及調整內容再次確認；未完成雙方再次確認前，不變更薪資。</p>
+
+                                    <p><strong>第十一條：生效、不追溯及異議</strong><br/>完成雙方再次確認之調整，自下一個完整薪資月份起生效，不得回溯扣除既有工資；乙方得就事件認定提出說明或異議。</p>
+
+                                </>}
+
                             </>
 
                         )}
@@ -2000,15 +2045,24 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     const userSignatures = signatures.filter(s => s.uid === currentUserInfo.uid);
 
+    const contractScheme = resolveContractScheme(currentUserInfo);
+
+    const isSchemeA = contractScheme === 'A';
+
+    const isSchemeB = contractScheme === 'B';
+
     const getNextMonthStart = (dateStr) => { const d = new Date(`${dateStr}T00:00:00`); return `${d.getFullYear() + (d.getMonth()===11?1:0)}-${String((d.getMonth()+1)%12+1).padStart(2,'0')}-01`; };
 
     const startServiceSalaryAdjustment = async (record) => {
 
-        const agreement = signatures.filter(s=>s.uid===record.uid && s.formType==='serviceSupplement' && s.customData?.status==='signed_effective').sort((a,b)=>Number(b.agreedAt||0)-Number(a.agreedAt||0))[0];
+        const targetUser = (Array.isArray(users) ? users : []).find(u => u.uid === record.uid) || {};
+        const targetScheme = resolveContractScheme(targetUser);
+        const agreement = signatures.filter(s => s.uid === record.uid && (targetScheme === 'B' ? (s.formType === 'contract' && s.customData?.contractScheme === 'B' && s.customData?.serviceTermsIncluded) : (s.formType === 'serviceSupplement' && s.customData?.status === 'signed_effective'))).sort((a,b)=>Number(b.agreedAt||0)-Number(a.agreedAt||0))[0];
 
-        if (!agreement) return alert('⚠️ 此員工沒有已由雙方簽署並生效的補充協議，不得啟動薪資調整協商。');
+        if (!agreement) return alert(targetScheme === 'B' ? '⚠️ 此員工尚未簽署含服務品質條款的 B 版勞動契約，不得啟動薪資調整協商。' : '⚠️ 此員工沒有已簽署並生效的 A 版補充協議，不得啟動薪資調整協商。');
 
-        if (record.eventDate < (agreement.customData?.effectiveDate || '9999-12-31')) return alert('🔒 本事件發生於補充協議生效前，只能作為歷史改善紀錄。');
+        const agreementEffectiveDate = targetScheme === 'B' ? (agreement.customData?.serviceTermsEffectiveDate || agreement.customData?.contractStart || '9999-12-31') : (agreement.customData?.effectiveDate || '9999-12-31');
+        if (record.eventDate < agreementEffectiveDate) return alert('🔒 本事件發生於適用契約條款生效前，只能作為歷史改善紀錄。');
 
         if (!(record.result==='established' && record.serviceAttitudeRelated && record.sameNature && record.attributable)) return alert('⚠️ 必須同時符合：查證成立、服務態度相關、同性質、可歸責，才能啟動薪資調整協商。');
 
@@ -2054,7 +2108,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
     };
 
-    const hasSignedContract = userSignatures.some(s=>s.formType==='contract');
+    const hasSignedContract = userSignatures.some(s => s.formType === 'contract' && (isSchemeA ? s.customData?.contractScheme !== 'B' : s.customData?.contractScheme === 'B'));
 
     const handleSignContract = () => {
 
@@ -2102,9 +2156,9 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     <div className={`bg-white p-5 rounded-xl border shadow-sm transition-all ${isLocked ? 'ring-4 ring-red-500 ring-opacity-50' : 'hover:shadow-md'}`}>
 
-                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">員工勞動契約暨保密與工作守則同意書</h3></div>
+                        <div className="flex items-center gap-2 mb-2 text-indigo-600"><FileText size={20}/><h3 className="font-bold text-lg">{contractScheme}版｜員工勞動契約</h3></div>
 
-                        <p className="text-sm text-gray-500 mb-4 h-10">新進員工報到或年度工作規範及業務機密保密約定。</p>
+                        <p className="text-sm text-gray-500 mb-4 h-10">{isSchemeA ? `既有員工契約制度（到職日 ${CONTRACT_SCHEME_CUTOFF} 含以前）` : `新進員工整併契約（到職日 ${CONTRACT_SCHEME_CUTOFF} 之後）`}</p>
 
                         <button onClick={handleSignContract} className={`w-full font-bold py-2 rounded-lg border transition-colors ${hasSignedContract ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 shadow-sm'}`}>
 
@@ -2130,9 +2184,9 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     {isPrivileged && <div className="bg-white p-5 rounded-xl border shadow-sm hover:shadow-md">
 
-                        <div className="flex items-center gap-2 mb-2 text-amber-700"><ShieldAlert size={20}/><h3 className="font-bold text-lg">服務品質／客訴補充協議</h3></div>
+                        <div className="flex items-center gap-2 mb-2 text-amber-700"><ShieldAlert size={20}/><h3 className="font-bold text-lg">A版｜服務品質／客訴補充協議</h3></div>
 
-                        <p className="text-sm text-gray-500 mb-4 h-10">原勞動契約保持不變；面談時由店方與員工另外雙方簽署補充協議。</p>
+                        <p className="text-sm text-gray-500 mb-4 h-10">僅供 A 版既有員工使用；B 版已將相同制度整併於完整勞動契約。</p>
 
                         <button onClick={()=>setServiceSupplementOpen(true)} className="w-full font-bold py-2 rounded-lg border bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100">建立並雙方簽署</button>
 
@@ -6767,6 +6821,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
           isAdmin: ['boss', 'supervisor'].includes(formData.role),
 
           workLocation: formData.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店',
+          contractScheme: formData.contractScheme || resolveContractScheme(formData),
 
       };
 
@@ -7492,7 +7547,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
 
                                 <div className="text-[10px] text-gray-400 font-bold uppercase mt-1 tracking-widest">
 
-                                  {u?.contractStart ? `合約期間: ${u.contractStart} ~ ${u.contractEnd || '長期'}` : '⚠️ 合約日期未設定'}
+                                  {u?.contractStart ? `${resolveContractScheme(u)}版｜合約期間: ${u.contractStart} ~ ${u.contractEnd || '長期'}` : `⚠️ ${resolveContractScheme(u)}版｜合約日期未設定`}
 
                                 </div>
 
@@ -8316,7 +8371,8 @@ useEffect(() => {
 
     const canApproveLeaveRequests = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true;
 
-    const hasSignedContract = safeSignatures.some(s => s.uid === user?.uid && s.formType === 'contract');
+    const currentContractScheme = resolveContractScheme(currentUserInfo || user || {});
+    const hasSignedContract = safeSignatures.some(s => s.uid === user?.uid && s.formType === 'contract' && (currentContractScheme === 'A' ? s.customData?.contractScheme !== 'B' : s.customData?.contractScheme === 'B'));
 
     const isLocked = !isSuperAdmin && !hasSignedContract;
 
@@ -9476,7 +9532,7 @@ ${fromName} ⇄ ${toName}
 
                 <div className="font-black text-gray-800">已更新至：{CURRENT_VERSION}</div>
 
-                <div id="version-notice-description" className="text-xs text-gray-500">此視窗只顯示本次版本重點；按下「我知道了」後，本版本不會再重複顯示。</div>
+                <div id="version-notice-description" className="text-xs text-gray-500">本次為細微更新；按下「我知道了」後，本版本不會再重複顯示。</div>
 
                 <ul className="list-disc pl-5 space-y-2">
 
