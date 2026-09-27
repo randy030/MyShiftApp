@@ -22,7 +22,7 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.5";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.5.1";
 
 const CURRENT_RELEASE_NOTES = [
 
@@ -2420,7 +2420,7 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
 
                     </div>
 
-                    {!isPrivileged && myOpenResignationCase && <div className="bg-white p-5 rounded-xl border border-rose-200 shadow-sm hover:shadow-md">
+                    {myOpenResignationCase && <div className="bg-white p-5 rounded-xl border border-rose-200 shadow-sm hover:shadow-md">
 
                         <div className="flex items-center gap-2 mb-2 text-rose-700"><FileSignature size={20}/><h3 className="font-bold text-lg">自願離職申請書</h3></div>
 
