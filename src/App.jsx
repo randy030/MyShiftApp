@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import { initializeApp } from 'firebase/app';
@@ -22,9 +23,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.6.1";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.6.2";
 
 const CURRENT_RELEASE_NOTES = [
+
+    '11.16.6.2：修正生理假為半薪扣薪；所有請假時數與出勤異常未出勤時數統一無條件進位至 0.5 小時，早退時間向前取整至半小時（例 12:15→12:00、15:40→15:30）。',
 
     '11.16.6.1：主管可登記出勤異常；新增早退／遲到／曠職／其他未出勤，依實際出勤時間自動計算未出勤時數並帶入薪資扣薪與員工薪資單。',
 
@@ -448,13 +451,27 @@ const calculateShiftHours = (shiftCode, shiftTypes = DEFAULT_SHIFT_TYPES) => {
 
 };
 
+// 11.16.6.2：請假／未出勤時數一律無條件進位到 0.5 小時。
+
+// 例：0.1H→0.5H、8.75H→9H；避免 15 分、20 分等零碎分鐘低估扣薪時數。
+
+const ceilToHalfHour = value => {
+
+    const raw = Number(value);
+
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+
+    return Math.ceil((raw - 1e-9) * 2) / 2;
+
+};
+
 const resolveLeaveHours = (assignment, shiftTypes = DEFAULT_SHIFT_TYPES) => {
 
     const existingHours = Number(assignment?.leaveHours);
 
-    if (Number.isFinite(existingHours) && existingHours > 0) return existingHours;
+    if (Number.isFinite(existingHours) && existingHours > 0) return ceilToHalfHour(existingHours);
 
-    if (assignment?.shiftCode) return calculateShiftHours(assignment.shiftCode, shiftTypes);
+    if (assignment?.shiftCode) return ceilToHalfHour(calculateShiftHours(assignment.shiftCode, shiftTypes));
 
     return 8;
 
@@ -480,7 +497,7 @@ const normalizeCustomLeaveHours = (value, fallbackHours = 8) => {
 
     if (!Number.isFinite(raw) || raw <= 0) return fallback;
 
-    const rounded = Math.round(raw * 2) / 2;
+    const rounded = ceilToHalfHour(raw);
 
     return Math.max(0.5, Math.min(rounded, Math.max(fallback, 12)));
 
@@ -524,7 +541,7 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
 
             yearStats.leaves[lType].days += 1;
 
-            if (lType !== 'menstrual') yearStats.leaves[lType].hours += hrs;
+            yearStats.leaves[lType].hours += hrs;
 
             if (lType === 'annual') yearStats.usedAnnualHours += hrs;
 
@@ -542,7 +559,9 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
 
                 }
 
-            } else if (hrs > 0 && lType !== 'menstrual' && lType !== 'annual') {
+            } else if (hrs > 0 && lType !== 'annual') {
+
+                // 生理假與病假同為半薪：deductHours 記錄實際請假時數，金額由薪資層乘 0.5。
 
                 yearStats.leaves[lType].deductHours += hrs;
 
@@ -554,11 +573,11 @@ const getUserYearlyTimeStats = ({ shifts = {}, uid, targetYear, targetMonth = ''
 
                 monthStats.leaves[lType].days += 1;
 
-                if (lType !== 'menstrual') monthStats.leaves[lType].hours += hrs;
+                monthStats.leaves[lType].hours += hrs;
 
                 if (assign.useComp && lType !== 'menstrual' && lType !== 'annual') monthStats.leaves[lType].compHours += hrs;
 
-                else if (lType !== 'annual' && lType !== 'menstrual') monthStats.leaves[lType].deductHours += hrs;
+                else if (lType !== 'annual') monthStats.leaves[lType].deductHours += hrs;
 
             }
 
@@ -666,7 +685,7 @@ const DEFAULT_LEAVE_TYPES = [
 
     { id: 'annual', label: '特休', deduct: false }, 
 
-    { id: 'menstrual', label: '生理假', deduct: false }, 
+    { id: 'menstrual', label: '生理假', deduct: true }, 
 
     { id: 'sick', label: '病假', deduct: true }, 
 
@@ -3567,7 +3586,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
 
         const hourly = base > 0 ? base / 30 / 8 : 0;
 
-        const deduction = leaveLabel === '病假' ? hourly * hours * 0.5 : leaveLabel === '事假' ? hourly * hours : 0;
+        const deduction = ['病假', '生理假'].includes(leaveLabel) ? hourly * hours * 0.5 : leaveLabel === '事假' ? hourly * hours : 0;
 
         return { ...assign, leaveLabel, hours, deduction, reason: assign.note || assign.reason || '未填寫理由' };
 
@@ -3611,11 +3630,13 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
 
         const personalHours = leaveRows.filter(row => row.leaveLabel === '事假').reduce((sum, row) => sum + row.hours, 0);
 
+        const menstrualHours = leaveRows.filter(row => row.leaveLabel === '生理假').reduce((sum, row) => sum + row.hours, 0);
+
         const overtimeHours = overtimeRows.filter(row => row.hours > 0).reduce((sum, row) => sum + row.hours, 0);
 
         const compHours = overtimeRows.filter(row => row.hours < 0).reduce((sum, row) => sum + Math.abs(row.hours), 0);
 
-        return { scheduledHours, lateCount, missingCount, annualHours, sickHours, personalHours, overtimeHours, compHours, userRecords };
+        return { scheduledHours, lateCount, missingCount, annualHours, sickHours, menstrualHours, personalHours, overtimeHours, compHours, userRecords };
 
     }, [monthAssignments, attendanceList, selectedUser?.uid, leaveRows, overtimeRows, shiftTypes]);
 
@@ -4723,6 +4744,38 @@ const getYearlyBalance = (uid, yearToFind) => {
 
     };
 
+    const minutesToTime = totalMinutes => {
+
+        const normalized = ((Number(totalMinutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+
+        const hour = Math.floor(normalized / 60);
+
+        const minute = normalized % 60;
+
+        return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+    };
+
+    const floorTimeToHalfHour = value => {
+
+        const minutes = timeToMinutes(value);
+
+        if (minutes === null) return null;
+
+        return minutesToTime(Math.floor(minutes / 30) * 30);
+
+    };
+
+    const ceilTimeToHalfHour = value => {
+
+        const minutes = timeToMinutes(value);
+
+        if (minutes === null) return null;
+
+        return minutesToTime(Math.ceil(minutes / 30) * 30);
+
+    };
+
     const getAttendanceAnomalyLabel = kind => kind === 'early_leave' ? '早退' : kind === 'late' ? '遲到' : kind === 'other' ? '其他未出勤' : '曠職';
 
 
@@ -4753,7 +4806,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
         let actualWorkHours = 0;
 
-        let absenceHours = scheduledHours;
+        let absenceHours = ceilToHalfHour(scheduledHours);
 
 
         if (absenceKind !== 'absence') {
@@ -4770,13 +4823,21 @@ const getYearlyBalance = (uid, yearToFind) => {
 
             if (worked === null) return alert('時間格式錯誤，請使用 HH:MM，例如 09:00、12:00。');
 
-            actualStart = startInput;
+            // 早退採「向前取整到半小時」：12:15→12:00、15:40→15:30。
 
-            actualEnd = endInput;
+            // 遲到則向後取整到半小時；其他未出勤至少依時數無條件進位 0.5H。
 
-            actualWorkHours = Math.min(scheduledHours, worked);
+            actualStart = absenceKind === 'late' ? (ceilTimeToHalfHour(startInput) || startInput) : startInput;
 
-            absenceHours = Math.max(0, Math.round((scheduledHours - actualWorkHours) * 100) / 100);
+            actualEnd = absenceKind === 'early_leave' ? (floorTimeToHalfHour(endInput) || endInput) : endInput;
+
+            const normalizedWorked = getWorkedHoursFromTimes(actualStart, actualEnd);
+
+            actualWorkHours = Math.min(scheduledHours, normalizedWorked === null ? worked : normalizedWorked);
+
+            absenceHours = Math.max(0, ceilToHalfHour(scheduledHours - actualWorkHours));
+
+            actualWorkHours = Math.max(0, Math.round((scheduledHours - absenceHours) * 2) / 2);
 
             if (absenceHours <= 0) return alert('依輸入的實際出勤時間計算，沒有未出勤時數，無需登記異常。');
 
@@ -4880,7 +4941,7 @@ const getYearlyBalance = (uid, yearToFind) => {
 
                 const defaultLeaveHours = resolveDefaultLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
 
-                const leaveHours = lType === 'annual' ? normalizeCustomLeaveHours(customLeaveHours, defaultLeaveHours) : resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
+                const leaveHours = customLeaveHours !== null && customLeaveHours !== undefined ? normalizeCustomLeaveHours(customLeaveHours, defaultLeaveHours) : resolveLeaveHours(baseAssign, shiftsDef || DEFAULT_SHIFT_TYPES);
 
                 const leaveEntry = { uid, type: 'LEAVE', leaveType: lType, leaveHours, shiftCode: baseAssign?.shiftCode || null, subUid: subUid || null, useComp: ['sick', 'personal'].includes(lType) ? useComp : false, timestamp: Date.now() };
 
@@ -6428,7 +6489,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             if (assignment.type === 'ABSENCE') {
 
-                const absenceHours = Math.max(0, Number(assignment.absenceHours || 0));
+                const absenceHours = Math.max(0, ceilToHalfHour(Number(assignment.absenceHours || 0)));
 
                 summary.absenceHours += absenceHours;
 
