@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import { initializeApp } from 'firebase/app';
@@ -23,11 +22,13 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.6.2";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.6.3";
 
 const CURRENT_RELEASE_NOTES = [
 
     '11.16.6.2：修正生理假為半薪扣薪；所有請假時數與出勤異常未出勤時數統一無條件進位至 0.5 小時，早退時間向前取整至半小時（例 12:15→12:00、15:40→15:30）。',
+
+    '11.16.6.3：統一出勤統計與薪資結算基數，生理假明確顯示半薪扣款；薪資金額不做時數式無條件進位；早退／遲到／曠職扣薪明細獨立顯示；恢復月班表「一鍵帶入班別」文字按鈕。',
 
     '11.16.6.1：主管可登記出勤異常；新增早退／遲到／曠職／其他未出勤，依實際出勤時間自動計算未出勤時數並帶入薪資扣薪與員工薪資單。',
 
@@ -3582,7 +3583,11 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
 
         const hours = resolveLeaveHours(assign, shiftTypes);
 
-        const base = Number(selectedUser?.salarySettlementBase || selectedUser?.salaryAmount || selectedUser?.salary || 0);
+        // 11.16.6.3：出勤頁預估扣薪必須與薪資結算使用同一基數，避免生理假畫面顯示錯誤金額。
+
+        const structuredBase = Number(selectedUser?.baseSalary || 0) + Number(selectedUser?.attendanceBonus || 0);
+
+        const base = Number(selectedUser?.salarySettlementBase || (structuredBase > 0 ? structuredBase : 0) || selectedUser?.salaryAmount || selectedUser?.salary || 0);
 
         const hourly = base > 0 ? base / 30 / 8 : 0;
 
@@ -3702,7 +3707,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
 
         const rows = [['日期','員工','類型','班別／假別','時數','理由／備註','扣薪／補休影響']];
 
-        leaveRows.forEach(row => rows.push([row.date, selectedUser?.name || '', '請假', row.leaveLabel, row.hours, row.reason, row.deduction > 0 ? `扣薪 ${Math.round(row.deduction)}` : '扣薪 0']));
+        leaveRows.forEach(row => rows.push([row.date, selectedUser?.name || '', '請假', row.leaveLabel, row.hours, row.reason, row.deduction > 0 ? `扣薪 ${Number(row.deduction).toLocaleString('zh-TW', { maximumFractionDigits:2 })}` : '扣薪 0']));
 
         overtimeRows.forEach(row => rows.push([row.date, selectedUser?.name || '', row.hours > 0 ? '加班' : '補休扣抵', row.shiftLabel, row.hours, row.reason, row.hours > 0 ? `加班 +${row.hours}hr` : `補休 ${Math.abs(row.hours)}hr`]));
 
@@ -3830,7 +3835,7 @@ const AttendanceView = ({ users = [], currentDate, db, appId, shifts = {}, shift
 
                 <div className="p-4 border-b bg-gray-50 flex items-center justify-between"><div><h3 className="font-bold text-gray-700">請假、特休明細</h3><p className="text-xs text-gray-400 mt-1">完整保留假別、時數、申請理由與病假／事假扣薪影響。</p></div>{isSuperAdmin && <button onClick={()=>setView && setView('payroll')} className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg font-bold">前往薪資結算</button>}</div>
 
-                {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}　{row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">理由／備註：{row.reason}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Math.round(row.deduction)}` : '扣薪 $0'}</div></div>)}</div>}
+                {leaveRows.length === 0 ? <div className="p-6 text-center text-gray-400 text-sm">本月沒有請假或特休紀錄</div> : <div className="divide-y">{leaveRows.map((row, index) => <div key={`${row.date}-${index}`} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><div className="font-bold text-gray-800">{row.date}　{row.leaveLabel}　{row.hours} 小時</div><div className="text-xs text-gray-500 mt-1">理由／備註：{row.reason}</div></div><div className={row.deduction > 0 ? 'font-black text-red-600' : 'font-black text-green-600'}>{row.deduction > 0 ? `預估扣薪 -$${Number(row.deduction).toLocaleString('zh-TW', { minimumFractionDigits:Number.isInteger(row.deduction) ? 0 : 2, maximumFractionDigits:2 })}` : '扣薪 $0'}</div></div>)}</div>}
 
             </div>
 
@@ -4236,7 +4241,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
     const handleAutoFillMonthlyShifts = async () => {
 
-        if (isReadOnly || !isSuperAdmin) return;
+        if (isReadOnly || !(isSuperAdmin || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isManager === true)) return;
 
         if (activeUsers.length === 0) return alert('目前沒有可填補班別的在職員工。');
 
@@ -4424,7 +4429,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                     <div className="flex items-center gap-1">
 
-                        {!isReadOnly && isSuperAdmin && (
+                        {!isReadOnly && (isSuperAdmin || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isManager === true) && (
 
                             <button
 
@@ -4434,11 +4439,11 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                                 title="自動填補當月空班"
 
-                                className={`p-2 rounded-lg border transition-colors ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+                                className={`px-3 py-2 rounded-lg border transition-colors flex items-center gap-1.5 text-xs font-black ${isAutoFilling ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
 
                             >
 
-                                <Clock size={18} />
+                                <Clock size={18} /><span className="hidden sm:inline">一鍵帶入班別</span>
 
                             </button>
 
@@ -6046,7 +6051,7 @@ const EmployeePayslipView = ({ db, appId, currentUserInfo }) => {
     }, [db, appId, currentUserInfo.uid]);
 
 
-    const money = value => `$${Math.round(Number(value || 0)).toLocaleString('zh-TW')}`;
+    const money = value => { const amount = Number(value || 0); return `$${amount.toLocaleString('zh-TW', { minimumFractionDigits:Number.isInteger(amount) ? 0 : 2, maximumFractionDigits:2 })}`; };
 
     return (
 
@@ -6395,11 +6400,15 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
     const formatMoney = (value) => {
 
-        const roundedValue = Math.round(getNumber(value));
+        const exactValue = getNumber(value);
 
-        return `$${roundedValue.toLocaleString('zh-TW')}`;
+        return `$${exactValue.toLocaleString('zh-TW', { minimumFractionDigits: Number.isInteger(exactValue) ? 0 : 2, maximumFractionDigits: 2 })}`;
 
     };
+
+    // 時薪顯示保留 2 位小數；薪資公式直接使用原始值，不做無條件進位。
+
+    const formatHourlyRate = value => `$${getNumber(value).toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
  
 
@@ -7052,13 +7061,13 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3"><div className="text-[11px] font-bold text-emerald-700">本月加項</div><div className="mt-1 font-black text-emerald-700">+{formatMoney(summary.totalAdditions)}</div></div>
 
-                            <div className="bg-red-50 border border-red-100 rounded-xl p-3"><div className="text-[11px] font-bold text-red-700">病假 / 事假扣薪</div><div className="mt-1 font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.personalDeduction)}</div></div>
+                            <div className="bg-red-50 border border-red-100 rounded-xl p-3"><div className="text-[11px] font-bold text-red-700">請假 / 出勤異常扣薪</div><div className="mt-1 font-black text-red-700">-{formatMoney(summary.sickDeduction + summary.menstrualDeduction + summary.personalDeduction + summary.absenceDeduction)}</div></div>
 
                             <div className="bg-violet-50 border border-violet-100 rounded-xl p-3"><div className="text-[11px] font-bold text-violet-700">特休</div><div className="mt-1 font-black text-violet-700">{summary.leaveSummary.annualHours} hr <span className="text-[10px] font-bold">扣薪 $0</span></div></div>
 
                         </div>
 
-                        <div className="px-4 pt-4"><div className="text-xs font-black text-gray-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">建議核對順序：① 薪資結算基數　② 加項　③ 病假 / 事假扣薪　④ 特休時數（不扣薪）　⑤ 最後確認實領。</div></div>
+                        <div className="px-4 pt-4"><div className="text-xs font-black text-gray-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">建議核對順序：① 薪資結算基數　② 加項　③ 病假 / 生理假 / 事假 / 出勤異常扣薪　④ 特休時數（不扣薪）　⑤ 最後確認實領。</div></div>
 
                         <div className="p-4 grid xl:grid-cols-3 gap-4">
 
@@ -7074,7 +7083,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                     <input type="number" min="0" placeholder="例如：3000" className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 font-black text-emerald-700 focus:outline-none focus:border-emerald-500" value={record.attendanceBonus ?? user.attendanceBonus ?? (Number(user.salaryAmount || 0) > 3000 ? 3000 : '')} onChange={event => updatePayroll(user.uid, 'attendanceBonus', event.target.value)} disabled={payrollStatus === 'locked'} />
 
-                                    <div className="text-[11px] text-indigo-600 mt-2">扣薪結算基數：{formatMoney(summary.settlementBase)}｜每小時：{formatMoney(summary.hourlyRate)} / hr</div>
+                                    <div className="text-[11px] text-indigo-600 mt-2">扣薪結算基數：{formatMoney(summary.settlementBase)}｜每小時：{formatHourlyRate(summary.hourlyRate)} / hr</div>
 
                                 </div>
 
@@ -7120,7 +7129,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                             <div className="text-sm font-black text-red-800">請假扣薪明細</div>
 
-                                            <div className="text-[11px] text-red-600 mt-1">病假固定扣半薪；事假固定扣全薪。</div>
+                                            <div className="text-[11px] text-red-600 mt-1">病假、生理假固定扣半薪；事假與出勤異常未出勤時數扣全薪。</div>
 
                                         </div>
 
@@ -7136,7 +7145,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                             <div className="flex justify-between text-xs font-bold text-gray-700"><span>病假：{summary.leaveSummary.sickHours} hr</span><span className="text-red-700">-{formatMoney(summary.sickDeduction)}</span></div>
 
-                                            <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.sickHours} hr × {formatMoney(summary.hourlyRate)} × 50%</div>
+                                            <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.sickHours} hr × {formatHourlyRate(summary.hourlyRate)} × 50%</div>
 
                                             {summary.leaveSummary.sickDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.sickDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
 
@@ -7146,7 +7155,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                             <div className="flex justify-between text-xs font-bold text-gray-700"><span>事假：{summary.leaveSummary.personalHours} hr</span><span className="text-red-700">-{formatMoney(summary.personalDeduction)}</span></div>
 
-                                            <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.personalHours} hr × {formatMoney(summary.hourlyRate)} × 100%</div>
+                                            <div className="text-[10px] text-gray-500 mt-1">{summary.leaveSummary.personalHours} hr × {formatHourlyRate(summary.hourlyRate)} × 100%</div>
 
                                             {summary.leaveSummary.personalDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.personalDetails.map(detail => <div key={`${detail.date}_${detail.hours}`} className="text-[10px] text-gray-500 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr{detail.useComp ? ' / 補休抵扣已勾選' : ''}</span></div>)}</div>}
 
@@ -7154,9 +7163,23 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                         <div className="bg-pink-50 rounded-lg p-2 border border-pink-100">
 
-                                            <div className="text-xs font-bold text-pink-800">生理假：本月 {summary.leaveSummary.menstrualDays} 天｜年度累計 {summary.menstrualYearStats.days} 天</div>
+                                            <div className="flex justify-between text-xs font-bold text-pink-800"><span>生理假：{summary.leaveSummary.menstrualHours} hr｜本月 {summary.leaveSummary.menstrualDays} 天</span><span className="text-red-700">-{formatMoney(summary.menstrualDeduction)}</span></div>
+
+                                            <div className="text-[10px] text-pink-700 mt-1">{summary.leaveSummary.menstrualHours} hr × {formatHourlyRate(summary.hourlyRate)} × 50%｜年度累計 {summary.menstrualYearStats.days} 天</div>
 
                                             <div className="text-[10px] text-pink-700 mt-1">前 3 日不併病假 {summary.menstrualYearStats.firstThreeDays} 天｜第 4 日起併病假 {summary.menstrualYearStats.mergedIntoSickDays} 天｜每月最多 1 日</div>
+
+                                            {summary.leaveSummary.menstrualDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.menstrualDetails.map(detail => <div key={`menstrual_${detail.date}_${detail.hours}`} className="text-[10px] text-gray-600 flex justify-between"><span>{detail.date}{detail.note ? ` (${detail.note})` : ''}</span><span>{detail.hours} hr / 半薪</span></div>)}</div>}
+
+                                        </div>
+
+                                        <div className="bg-red-50 rounded-lg p-2 border border-red-200">
+
+                                            <div className="flex justify-between text-xs font-bold text-red-800"><span>出勤異常未出勤：{summary.leaveSummary.absenceHours} hr</span><span className="text-red-700">-{formatMoney(summary.absenceDeduction)}</span></div>
+
+                                            <div className="text-[10px] text-red-700 mt-1">{summary.leaveSummary.absenceHours} hr × {formatHourlyRate(summary.hourlyRate)} × 100%</div>
+
+                                            {summary.leaveSummary.absenceDetails.length > 0 && <div className="mt-2 space-y-1">{summary.leaveSummary.absenceDetails.map(detail => <div key={`absence_${detail.date}_${detail.hours}`} className="text-[10px] text-gray-600 flex justify-between gap-2"><span>{detail.date}｜{detail.kind === 'early_leave' ? '早退' : detail.kind === 'late' ? '遲到' : detail.kind === 'other' ? '其他未出勤' : '曠職'}{detail.actualStart && detail.actualEnd ? `（${detail.actualStart}–${detail.actualEnd}）` : ''}</span><span className="shrink-0">{detail.hours} hr</span></div>)}</div>}
 
                                         </div>
 
