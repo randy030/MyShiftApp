@@ -22,9 +22,11 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.5.1";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.6.1";
 
 const CURRENT_RELEASE_NOTES = [
+
+    '11.16.6.1：主管可登記出勤異常；新增早退／遲到／曠職／其他未出勤，依實際出勤時間自動計算未出勤時數並帶入薪資扣薪與員工薪資單。',
 
     '細微更新與系統整理。',
 
@@ -804,6 +806,7 @@ const TAIWAN_PUBLIC_HOLIDAYS = [
 
     { date: '2026-12-25', name: '行憲紀念日', type: 'national' },
 
+
     // ===== 2027 / 民國116年 =====
 
     { date: '2027-01-01', name: '元旦', type: 'national' },
@@ -1563,6 +1566,7 @@ const SignModal = ({ formType, onClose, currentUserInfo, db, appId, setView, sto
     
 
     const { workLocation, salaryAmount, baseSalary, attendanceBonus, fixedAllowance, contractStart, contractEnd, isIndefinite } = currentUserInfo;
+
     const contractScheme = resolveContractScheme(currentUserInfo);
 
     const resolvedWorkLocation = workLocation || storeConfig?.name || storeConfig?.address || '台中東山店';
@@ -2294,12 +2298,15 @@ const FormsView = ({ users, currentUserInfo, db, appId, isPrivileged, signatures
     const startServiceSalaryAdjustment = async (record) => {
 
         const targetUser = (Array.isArray(users) ? users : []).find(u => u.uid === record.uid) || {};
+
         const targetScheme = resolveContractScheme(targetUser);
+
         const agreement = signatures.filter(s => s.uid === record.uid && (targetScheme === 'B' ? (s.formType === 'contract' && s.customData?.contractScheme === 'B' && s.customData?.serviceTermsIncluded) : (s.formType === 'serviceSupplement' && s.customData?.status === 'signed_effective'))).sort((a,b)=>Number(b.agreedAt||0)-Number(a.agreedAt||0))[0];
 
         if (!agreement) return alert(targetScheme === 'B' ? '⚠️ 此員工尚未簽署含服務品質條款的 B 版勞動契約，不得啟動薪資調整協商。' : '⚠️ 此員工沒有已簽署並生效的 A 版補充協議，不得啟動薪資調整協商。');
 
         const agreementEffectiveDate = targetScheme === 'B' ? (agreement.customData?.serviceTermsEffectiveDate || agreement.customData?.contractStart || '9999-12-31') : (agreement.customData?.effectiveDate || '9999-12-31');
+
         if (record.eventDate < agreementEffectiveDate) return alert('🔒 本事件發生於適用契約條款生效前，只能作為歷史改善紀錄。');
 
         if (!(record.result==='established' && record.serviceAttitudeRelated && record.sameNature && record.attributable)) return alert('⚠️ 必須同時符合：查證成立、服務態度相關、同性質、可歸責，才能啟動薪資調整協商。');
@@ -4444,9 +4451,13 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                         const leaveAssignments = (data.assignments || []).filter(assignment => assignment.type === 'LEAVE');
 
-                        const leaveUserIds = new Set(leaveAssignments.map(assignment => assignment.uid));
+                        const absenceAssignments = (data.assignments || []).filter(assignment => assignment.type === 'ABSENCE');
 
-                        const workingUsers = activeUsers.filter(user => !leaveUserIds.has(user.uid));
+                        const getAnomalyLabel = assignment => assignment?.absenceKind === 'early_leave' ? '早退' : assignment?.absenceKind === 'late' ? '遲到' : assignment?.absenceKind === 'other' ? '其他未出勤' : '曠職';
+
+                        const unavailableUserIds = new Set([...leaveAssignments, ...absenceAssignments].map(assignment => assignment.uid));
+
+                        const workingUsers = activeUsers.filter(user => !unavailableUserIds.has(user.uid));
 
                         const isStaffShortage = !data.isClosed && activeUsers.length > 1 && workingUsers.length <= 1;
 
@@ -4454,7 +4465,7 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                             <div key={day} onClick={() => setSelectedDate(dateStr)} title={data.note || ''} className={`min-h-[148px] border-b border-r p-1 cursor-pointer transition-colors flex flex-col ${publicHoliday ? 'ring-1 ring-inset ring-red-400' : ''} ${data.isClosed ? 'bg-gray-200' : isStaffShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-indigo-50'}`}>
 
-                                <div className="flex justify-between items-start mb-1"><span className={`text-sm font-bold ml-1 ${publicHoliday ? 'text-red-600' : 'text-gray-700'}`}>{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}</div></div>
+                                <div className="flex justify-between items-start mb-1"><span className={`text-sm font-bold ml-1 ${publicHoliday ? 'text-red-600' : 'text-gray-700'}`}>{day}</span><div className="flex gap-1">{data.note && <div className="w-0 h-0 border-t-[10px] border-r-[10px] border-t-red-500 border-r-transparent" />}{leaveAssignments.length > 0 && <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1 rounded">休假 {leaveAssignments.length}</span>}{absenceAssignments.length > 0 && <span className="text-[10px] font-black text-red-700 bg-red-100 px-1 rounded">出勤異常 {absenceAssignments.length}</span>}</div></div>
 
                                 {publicHoliday && <div className="text-[10px] leading-tight font-black text-red-600 px-1 mb-1 truncate" title={publicHoliday.name}>{publicHoliday.name}</div>}
 
@@ -4464,7 +4475,21 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
 
                                     <div className="space-y-1 flex-1">
 
-                                        {isCalendarLoading ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded px-2 py-1.5 font-bold animate-pulse">班表載入中…</div> : leaveAssignments.length === 0 ? null : leaveAssignments.map((assignment, assignmentIndex) => {
+                                        {isCalendarLoading ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded px-2 py-1.5 font-bold animate-pulse">班表載入中…</div> : (leaveAssignments.length === 0 && absenceAssignments.length === 0) ? null : <>
+
+                                        {absenceAssignments.map((assignment, assignmentIndex) => {
+
+                                            const user = users[assignment.uid];
+
+                                            if (!user) return null;
+
+                                            const anomalyLabel = getAnomalyLabel(assignment);
+
+                                            return <div key={`absence-${assignmentIndex}`} className="border border-red-400 bg-red-50 text-red-800 rounded px-1.5 py-1 text-[11px] font-black"><span className="sm:hidden">{getMobileName(user.name)}{anomalyLabel} {assignment.absenceHours || 0}H</span><span className="hidden sm:inline">{user.name}｜{anomalyLabel} {assignment.absenceHours || 0}H{Number(assignment.actualWorkHours || 0) > 0 ? `｜出勤 ${assignment.actualWorkHours}H` : ''}</span></div>;
+
+                                        })}
+
+                                        {leaveAssignments.map((assignment, assignmentIndex) => {
 
                                             const user = users[assignment.uid];
 
@@ -4497,6 +4522,8 @@ const CalendarView = ({ currentDate, setCurrentDate, dbData, currentUserInfo, db
                                             );
 
                                         })}
+
+                                        </>}
 
                                     </div>
 
@@ -4663,6 +4690,155 @@ const getYearlyBalance = (uid, yearToFind) => {
     };
 
   
+
+    // 11.16.6.1：出勤異常可由最高管理員、主管／店長操作；不因此開放薪資結算等其他最高權限。
+
+    const canManageAttendance = isSuperAdmin || currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isManager === true;
+
+    const getShiftDefinition = shiftCode => (Array.isArray(shiftsDef) ? shiftsDef : DEFAULT_SHIFT_TYPES).find(item => item.id === shiftCode) || DEFAULT_SHIFT_TYPES.find(item => item.id === shiftCode) || null;
+
+    const timeToMinutes = value => {
+
+        const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+
+        if (!match) return null;
+
+        const hour = Number(match[1]); const minute = Number(match[2]);
+
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+
+        return hour * 60 + minute;
+
+    };
+
+    const getWorkedHoursFromTimes = (startTime, endTime) => {
+
+        const start = timeToMinutes(startTime); const end = timeToMinutes(endTime);
+
+        if (start === null || end === null) return null;
+
+        const minutes = end >= start ? end - start : (24 * 60 - start + end);
+
+        return Math.round((minutes / 60) * 100) / 100;
+
+    };
+
+    const getAttendanceAnomalyLabel = kind => kind === 'early_leave' ? '早退' : kind === 'late' ? '遲到' : kind === 'other' ? '其他未出勤' : '曠職';
+
+
+    const recordAttendanceAnomaly = async (user, existingAssign) => {
+
+        if (!canManageAttendance || isReadOnly) return alert('只有管理員或主管可以登記出勤異常。');
+
+        const shiftCode = existingAssign?.shiftCode || null;
+
+        const shiftDef = getShiftDefinition(shiftCode);
+
+        const scheduledHours = Number(shiftDef?.hours || resolveDefaultLeaveHours(existingAssign, shiftsDef || DEFAULT_SHIFT_TYPES) || 12);
+
+        const typeRaw = window.prompt(`登記 ${user.name} ${dateStr} 出勤異常：\n1 = 曠職\n2 = 早退\n3 = 遲到\n4 = 其他未出勤`, '2');
+
+        if (typeRaw === null) return;
+
+        const kindMap = { '1':'absence', '2':'early_leave', '3':'late', '4':'other' };
+
+        const absenceKind = kindMap[String(typeRaw).trim()];
+
+        if (!absenceKind) return alert('請輸入 1、2、3 或 4。');
+
+
+        let actualStart = shiftDef?.start || '';
+
+        let actualEnd = shiftDef?.end || '';
+
+        let actualWorkHours = 0;
+
+        let absenceHours = scheduledHours;
+
+
+        if (absenceKind !== 'absence') {
+
+            const startInput = window.prompt('實際開始上班時間（HH:MM）：', actualStart || '09:00');
+
+            if (startInput === null) return;
+
+            const endInput = window.prompt('實際離開／下班時間（HH:MM）：', absenceKind === 'early_leave' ? '12:00' : (actualEnd || '21:00'));
+
+            if (endInput === null) return;
+
+            const worked = getWorkedHoursFromTimes(startInput, endInput);
+
+            if (worked === null) return alert('時間格式錯誤，請使用 HH:MM，例如 09:00、12:00。');
+
+            actualStart = startInput;
+
+            actualEnd = endInput;
+
+            actualWorkHours = Math.min(scheduledHours, worked);
+
+            absenceHours = Math.max(0, Math.round((scheduledHours - actualWorkHours) * 100) / 100);
+
+            if (absenceHours <= 0) return alert('依輸入的實際出勤時間計算，沒有未出勤時數，無需登記異常。');
+
+        }
+
+
+        const reason = window.prompt(`${getAttendanceAnomalyLabel(absenceKind)}原因／聯絡紀錄或備註（可留空）：`, '') ?? '';
+
+        const summary = absenceKind === 'absence'
+
+            ? `${getAttendanceAnomalyLabel(absenceKind)} ${absenceHours} 小時`
+
+            : `實際出勤 ${actualStart}–${actualEnd}（${actualWorkHours}H）\n${getAttendanceAnomalyLabel(absenceKind)}未出勤 ${absenceHours}H`;
+
+        if (!window.confirm(`確定登記 ${user.name} 於 ${dateStr}：\n\n${summary}\n\n未出勤 ${absenceHours}H 將自動帶入當月薪資扣薪。`)) return;
+
+
+        const next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
+
+        const idx = next.findIndex(item => item.uid === user.uid);
+
+        const anomalyEntry = {
+
+            uid:user.uid, type:'ABSENCE', absenceKind, absenceHours, scheduledHours,
+
+            actualStart, actualEnd, actualWorkHours,
+
+            shiftCode, reason:reason.trim(), recordedAt:Date.now(),
+
+            recordedByUid:currentUserInfo?.uid || '', recordedByName:currentUserInfo?.name || '主管／管理員'
+
+        };
+
+        if (idx >= 0) next[idx] = anomalyEntry; else next.push(anomalyEntry);
+
+        await update({ assignments:next });
+
+        await writeAuditLog({ db, appId, actor:currentUserInfo, action:'RECORD_ATTENDANCE_ANOMALY', targetType:'attendance', targetId:`${dateStr}_${user.uid}`, detail:{ employeeName:user.name || '', date:dateStr, absenceKind, absenceHours, scheduledHours, actualStart, actualEnd, actualWorkHours, shiftCode, reason:reason.trim() } });
+
+    };
+
+
+    const cancelAttendanceAnomaly = async (user, assignment) => {
+
+        if (!canManageAttendance || assignment?.type !== 'ABSENCE') return;
+
+        const label = getAttendanceAnomalyLabel(assignment.absenceKind);
+
+        const reason = window.prompt(`請輸入更正／取消${label}原因：`, '');
+
+        if (reason === null || !reason.trim()) return alert('更正／取消出勤異常必須填寫原因，以保留稽核軌跡。');
+
+        if (!window.confirm(`確定取消 ${user.name} ${dateStr} 的${label}紀錄？`)) return;
+
+        const next = (Array.isArray(dayData.assignments) ? dayData.assignments : []).filter(item => item.uid !== user.uid);
+
+        await update({ assignments:next });
+
+        await writeAuditLog({ db, appId, actor:currentUserInfo, action:'CANCEL_ATTENDANCE_ANOMALY', targetType:'attendance', targetId:`${dateStr}_${user.uid}`, detail:{ employeeName:user.name || '', date:dateStr, previousKind:assignment.absenceKind || 'absence', previousHours:Number(assignment.absenceHours || 0), correctionReason:reason.trim() } });
+
+    };
+
 
     const updateShiftCode = (uid, code) => {
 
@@ -5164,6 +5340,8 @@ const getYearlyBalance = (uid, yearToFind) => {
 
               const hasLeave = assign?.type === 'LEAVE';
 
+              const hasAbsence = assign?.type === 'ABSENCE';
+
   
 
               const pendingApproveReq = requests.find(r => r.date === dateStr && r.fromUid === u.uid && r.type === 'admin_ot_approve');
@@ -5177,6 +5355,26 @@ const getYearlyBalance = (uid, yearToFind) => {
               const canEditOT = isPrivileged || (isMe && !hasOT && !pendingApproveReq && !pendingConfirmReq && !isReadOnly);
 
   
+
+              if (hasAbsence) {
+
+                  return (
+
+                      <div key={u.uid} className="border-2 border-red-300 rounded-lg p-3 bg-red-50 shadow-sm">
+
+                          <div className="flex flex-wrap justify-between items-center gap-2">
+
+                              <div><div className="font-black text-red-800">{u.name}｜{getAttendanceAnomalyLabel(assign.absenceKind)} {assign.absenceHours || 0}H</div><div className="text-xs text-red-600 mt-1">原班別：{assign.shiftCode || '未記錄'}{Number(assign.actualWorkHours || 0) > 0 ? `｜實際出勤 ${assign.actualStart || ''}–${assign.actualEnd || ''}（${assign.actualWorkHours}H）` : ''}{assign.reason ? `｜備註：${assign.reason}` : ''}</div></div>
+
+                              {!isReadOnly && canManageAttendance && <button onClick={()=>cancelAttendanceAnomaly(u, assign)} className="text-xs font-black px-3 py-2 rounded-lg bg-white text-red-700 border border-red-200">更正／取消異常</button>}
+
+                          </div>
+
+                      </div>
+
+                  );
+
+              }
 
               if (hasLeave) {
 
@@ -5323,6 +5521,8 @@ const getYearlyBalance = (uid, yearToFind) => {
                                 {otButtonUi}
 
                                 {!hasLeave && isSuperAdmin && <button onClick={async () => { await toggle(u.uid,'LEAVE','official',null); onClose(); }} disabled={!canEditLeave} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold'}`}>排休</button>}
+
+                                {canManageAttendance && <button onClick={()=>recordAttendanceAnomaly(u, assign)} className="flex-1 py-2 text-xs rounded border shadow-sm bg-red-50 text-red-700 border-red-200 hover:bg-red-100 font-black">出勤異常</button>}
 
                                 <button onClick={() => canEditLeave ? setExpanded(expanded===u.uid?null:u.uid) : alert("無權限或已鎖定。")} className={`flex-1 py-2 text-xs rounded border shadow-sm transition-colors ${!canEditLeave ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-600 hover:bg-gray-50 font-bold'}`}>請休假 ▼</button>
 
@@ -5750,6 +5950,100 @@ const calc = (uid) => {
 
 // ==========================================
 
+// 👤 員工薪資單：僅顯示已完成結算並鎖定後，由系統發布給登入本人之薪資快照
+
+const EmployeePayslipView = ({ db, appId, currentUserInfo }) => {
+
+    const [items, setItems] = useState([]);
+
+    useEffect(() => {
+
+        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'payrolls'), snap => {
+
+            const next = [];
+
+            snap.forEach(payrollDoc => {
+
+                const data = payrollDoc.data() || {};
+
+                if (data.status !== 'locked') return;
+
+                const slip = data.publishedPayslips?.[currentUserInfo.uid];
+
+                if (slip) next.push({ ...slip, month:slip.month || payrollDoc.id, lockedAt:data.lockedAt || slip.publishedAt || 0 });
+
+            });
+
+            next.sort((a,b)=>String(b.month).localeCompare(String(a.month)));
+
+            setItems(next);
+
+        });
+
+        return () => unsub();
+
+    }, [db, appId, currentUserInfo.uid]);
+
+
+    const money = value => `$${Math.round(Number(value || 0)).toLocaleString('zh-TW')}`;
+
+    return (
+
+        <div className="max-w-4xl mx-auto space-y-4 pb-24">
+
+            <div className="bg-white border rounded-2xl p-5 shadow-sm"><div className="text-xs font-black text-indigo-600">員工專區</div><h2 className="text-xl font-black text-gray-800 mt-1">我的薪資單</h2><p className="text-xs text-gray-500 mt-2">只有管理員完成薪資結算並「鎖定薪資」後，該月份才會出現在這裡。您只能查看自己的薪資單。</p></div>
+
+            {items.length === 0 ? <div className="bg-gray-50 border border-dashed rounded-2xl p-8 text-center text-gray-500 font-bold">目前尚無已發布的薪資單。</div> : items.map(slip => (
+
+                <details key={slip.month} className="bg-white border rounded-2xl shadow-sm overflow-hidden" open={items[0]?.month===slip.month}>
+
+                    <summary className="cursor-pointer p-4 flex items-center justify-between gap-3"><div><div className="font-black text-gray-800">{slip.month} 薪資單</div><div className="text-xs text-gray-500 mt-1">{slip.employeeName}</div></div><div className="text-right"><div className="text-xs text-gray-400">應實發</div><div className="font-black text-xl text-emerald-700">{money(slip.netPay)}</div></div></summary>
+
+                    <div className="border-t p-4 space-y-4">
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+
+                            <div className="bg-indigo-50 rounded-xl p-3"><div className="text-xs text-indigo-500">基本薪資</div><div className="font-black">{money(slip.baseSalary)}</div></div>
+
+                            <div className="bg-emerald-50 rounded-xl p-3"><div className="text-xs text-emerald-600">全勤獎金</div><div className="font-black">{money(slip.attendanceBonus)}</div></div>
+
+                            <div className="bg-sky-50 rounded-xl p-3"><div className="text-xs text-sky-600">其他加項</div><div className="font-black">{money(slip.totalAdditions)}</div></div>
+
+                            <div className="bg-rose-50 rounded-xl p-3"><div className="text-xs text-rose-600">扣款合計</div><div className="font-black">-{money(slip.totalDeductions)}</div></div>
+
+                        </div>
+
+                        <div className="border rounded-xl divide-y text-sm">
+
+                            <div className="flex justify-between p-3"><span>病假 {slip.sickHours || 0}H（半薪）</span><b>-{money(slip.sickDeduction)}</b></div>
+
+                            <div className="flex justify-between p-3"><span>生理假 {slip.menstrualHours || 0}H（半薪）</span><b>-{money(slip.menstrualDeduction)}</b></div>
+
+                            <div className="flex justify-between p-3"><span>事假 {slip.personalHours || 0}H</span><b>-{money(slip.personalDeduction)}</b></div>
+
+                            <div className="p-3 text-red-700"><div className="flex justify-between"><span>出勤異常未出勤 {slip.absenceHours || 0}H</span><b>-{money(slip.absenceDeduction)}</b></div>{Array.isArray(slip.absenceDetails) && slip.absenceDetails.length > 0 && <div className="mt-2 space-y-1 text-xs text-red-600">{slip.absenceDetails.map((item, index) => <div key={`${item.date}-${index}`}>{item.date}｜{item.kind === 'early_leave' ? '早退' : item.kind === 'late' ? '遲到' : item.kind === 'other' ? '其他未出勤' : '曠職'} {item.hours || 0}H{Number(item.actualWorkHours || 0) > 0 ? `｜實際出勤 ${item.actualWorkHours}H` : ''}</div>)}</div>}</div>
+
+                            <div className="flex justify-between p-3"><span>特休使用</span><b>{slip.annualHours || 0}H／不扣薪</b></div>
+
+                            <div className="flex justify-between p-3"><span>其他扣款</span><b>-{money(slip.manualDeduction)}</b></div>
+
+                        </div>
+
+                        <div className="bg-gray-50 border rounded-xl p-3 text-sm space-y-1"><div className="flex justify-between"><span>銀行轉帳</span><b>{money(slip.bankTransfer)}</b></div><div className="flex justify-between"><span>現金支付</span><b>{money(slip.cashPayment)}</b></div>{slip.note && <div className="pt-2 mt-2 border-t text-xs text-gray-600">備註：{slip.note}</div>}</div>
+
+                    </div>
+
+                </details>
+
+            ))}
+
+        </div>
+
+    );
+
+};
+
+
 // 💰 薪資管理 (PayrollView)
 
 // ==========================================
@@ -5940,9 +6234,59 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         if (nextStatus === 'draft' && payrollStatus === 'locked' && !window.confirm(`確定解除 ${targetMonth} 薪資鎖定？`)) return;
 
+        const publishedPayslips = isLocking ? Object.fromEntries(
+
+            users.map(employee => {
+
+                const record = payrollData[employee.uid] || {};
+
+                const summary = getPayrollSummary(employee, record, targetMonth);
+
+                return [employee.uid, {
+
+                    uid:employee.uid, employeeName:employee.name || '', month:targetMonth,
+
+                    baseSalary:summary.baseSalary, attendanceBonus:summary.attendanceBonus,
+
+                    fixedAllowance:summary.fixedAllowance, hourlyRate:summary.hourlyRate,
+
+                    gasCapped:summary.gasCapped, subsidy:summary.subsidy,
+
+                    birthdayBonus:summary.birthdayBonus, festivalBonus:summary.festivalBonus, yearBonus:summary.yearBonus,
+
+                    manualAdjustment:summary.manualAdjustment, customIncomeItems:summary.customIncomeItems,
+
+                    sickHours:summary.leaveSummary.sickHours, menstrualHours:summary.leaveSummary.menstrualHours,
+
+                    personalHours:summary.leaveSummary.personalHours, annualHours:summary.leaveSummary.annualHours,
+
+                    absenceHours:summary.leaveSummary.absenceHours, absenceDetails:summary.leaveSummary.absenceDetails,
+
+                    sickDeduction:summary.sickDeduction, menstrualDeduction:summary.menstrualDeduction,
+
+                    personalDeduction:summary.personalDeduction, absenceDeduction:summary.absenceDeduction,
+
+                    manualDeduction:summary.manualDeduction, totalAdditions:summary.totalAdditions,
+
+                    totalDeductions:summary.totalDeductions, grossPay:summary.grossPay, netPay:summary.netPay,
+
+                    bankTransfer:summary.bankTransfer, cashPayment:summary.cashPayment,
+
+                    paymentDifference:summary.paymentDifference, note:record.note || '',
+
+                    publishedAt:Date.now(), version:CURRENT_VERSION
+
+                }];
+
+            })
+
+        ) : undefined;
+
         const payload = {
 
             records: payrollData,
+
+            ...(isLocking ? { publishedPayslips } : {}),
 
             status: nextStatus,
 
@@ -5970,7 +6314,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
 
-        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪（半薪）</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>生理假扣薪（半薪）</td><td>-${formatMoney(summary.menstrualDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、生理假扣半薪、事假扣全薪；生理假不影響全勤獎金；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪（半薪）</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>生理假扣薪（半薪）</td><td>-${formatMoney(summary.menstrualDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>出勤異常未出勤扣薪</td><td>-${formatMoney(summary.absenceDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、生理假扣半薪、事假扣全薪；生理假不影響全勤獎金；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
 
         printWindow.document.close();
 
@@ -6040,6 +6384,10 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             annualHours: 0,
 
+            absenceHours: 0,
+
+            absenceDetails: [],
+
             menstrualDays: 0,
 
             menstrualHours: 0,
@@ -6070,19 +6418,35 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             const assignment = Array.isArray(dayData?.assignments)
 
-                ? dayData.assignments.find(item => {
-
-                    if (item.uid !== uid) return false;
-
-                    return Boolean(normalizePayrollLeaveType(item));
-
-                })
+                ? dayData.assignments.find(item => item.uid === uid && (item.type === 'ABSENCE' || Boolean(normalizePayrollLeaveType(item))))
 
                 : null;
 
  
 
             if (!assignment) return;
+
+            if (assignment.type === 'ABSENCE') {
+
+                const absenceHours = Math.max(0, Number(assignment.absenceHours || 0));
+
+                summary.absenceHours += absenceHours;
+
+                summary.absenceDetails.push({
+
+                    date:dateStr, hours:absenceHours, kind:assignment.absenceKind || 'absence',
+
+                    actualStart:assignment.actualStart || '', actualEnd:assignment.actualEnd || '',
+
+                    actualWorkHours:Number(assignment.actualWorkHours || 0), scheduledHours:Number(assignment.scheduledHours || 0),
+
+                    note:assignment.reason || '', sourceType:'ABSENCE'
+
+                });
+
+                return;
+
+            }
 
  
 
@@ -6155,6 +6519,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         summary.annualDetails.sort((a, b) => a.date.localeCompare(b.date));
 
         summary.menstrualDetails.sort((a, b) => a.date.localeCompare(b.date));
+
+        summary.absenceDetails.sort((a, b) => a.date.localeCompare(b.date));
 
  
 
@@ -6238,6 +6604,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
     };
 
+
     const getSettlementBase = (user, record = {}) => {
 
         const legacyTotal = getNumber(user?.salaryAmount || record.base);
@@ -6273,6 +6640,8 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
         const menstrualDeduction = leaveSummary.menstrualHours * hourlyRate * 0.5;
 
         const personalDeduction = leaveSummary.personalHours * hourlyRate;
+
+        const absenceDeduction = leaveSummary.absenceHours * hourlyRate;
 
         const gasRecords = gasReceipts?.[monthStr]?.[user.uid] || [];
 
@@ -6310,7 +6679,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const grossPay = regularPay + totalAdditions;
 
-        const totalDeductions = sickDeduction + menstrualDeduction + personalDeduction + manualDeduction;
+        const totalDeductions = sickDeduction + menstrualDeduction + personalDeduction + absenceDeduction + manualDeduction;
 
         const netPay = grossPay - totalDeductions;
 
@@ -6332,7 +6701,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             annualUsedYearHours, annualEntitledHours, annualRemainingHours,
 
-            sickDeduction, menstrualDeduction, personalDeduction, gasTotal, gasCapped, subsidy,
+            sickDeduction, menstrualDeduction, personalDeduction, absenceDeduction, gasTotal, gasCapped, subsidy,
 
             birthdayBonus, festivalBonus, yearBonus, manualAdjustment, customIncomeItems, customIncomeTotal,
 
@@ -7143,6 +7512,7 @@ const SettingsView = ({ users = {}, currentUserInfo, inventoryItems = [], shiftT
           isAdmin: ['boss', 'supervisor'].includes(formData.role),
 
           workLocation: formData.workLocation || storeConfig?.name || storeConfig?.address || '台中東山店',
+
           contractScheme: formData.contractScheme || resolveContractScheme(formData),
 
       };
@@ -8694,6 +9064,7 @@ useEffect(() => {
     const canApproveLeaveRequests = currentUserInfo?.role === 'boss' || currentUserInfo?.role === 'supervisor' || currentUserInfo?.isAdmin === true || currentUserInfo?.isManager === true;
 
     const currentContractScheme = resolveContractScheme(currentUserInfo || user || {});
+
     const hasSignedContract = safeSignatures.some(s => s.uid === user?.uid && s.formType === 'contract' && (currentContractScheme === 'A' ? s.customData?.contractScheme !== 'B' : s.customData?.contractScheme === 'B'));
 
     const isLocked = !isSuperAdmin && !hasSignedContract;
@@ -9388,6 +9759,8 @@ ${fromName} ⇄ ${toName}
 
             case 'payroll': return <PayrollView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} gasReceipts={dbData.gasReceipts} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} />;
 
+            case 'payslips': return <EmployeePayslipView db={db} appId={appId} currentUserInfo={currentUserInfo} />;
+
             case 'attendance': return <AttendanceView users={Object.values(safeUsers)} currentDate={currentDate} db={db} appId={appId} shifts={dbData.shifts} shiftTypes={safeShiftTypes} currentUserInfo={currentUserInfo} isSuperAdmin={isSuperAdmin} setView={setView} gasReceipts={dbData.gasReceipts} />;
 
             
@@ -9760,7 +10133,7 @@ ${fromName} ⇄ ${toName}
 
                                 onClick={() => setMenuOpen(!menuOpen)} 
 
-                                className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs relative transition-all ${['salary','attendance','payroll','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-100':'text-gray-400 hover:bg-gray-100'}`}
+                                className={`flex items-center gap-1 px-4 py-2.5 rounded-2xl font-black text-xs relative transition-all ${['salary','attendance','payroll','payslips','forms','settings'].includes(view)?'bg-indigo-600 text-white shadow-xl shadow-indigo-100':'text-gray-400 hover:bg-gray-100'}`}
 
                             >
 
@@ -9781,6 +10154,8 @@ ${fromName} ⇄ ${toName}
                                 <div className="absolute right-0 mt-3 w-56 bg-white border border-gray-100 rounded-[2rem] shadow-2xl py-3 z-50 animate-scale-in">
 
                                     {isSuperAdmin ? <DropdownItem onClick={() => { setView('payroll'); setMenuOpen(false); }} icon={Wallet} label="薪資結算" /> : null}
+
+                                    <DropdownItem onClick={() => {setView('payslips'); setMenuOpen(false)}} icon={Wallet} label="我的薪資單" />
 
                                     <DropdownItem onClick={() => {setView('attendance'); setMenuOpen(false)}} icon={FileCheck} label="出勤統計" />
 
@@ -9899,3 +10274,4 @@ ${fromName} ⇄ ${toName}
 }
 
 export { App as default };
+
