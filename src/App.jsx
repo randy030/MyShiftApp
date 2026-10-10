@@ -22,9 +22,13 @@ import {
 
 } from 'lucide-react';
 
-const CURRENT_VERSION = "V14.0.0-alpha11.16.6.3";
+const CURRENT_VERSION = "V14.0.0-alpha11.16.6.5";
 
 const CURRENT_RELEASE_NOTES = [
+
+    '11.16.6.5：A版補充協議整合每月3000元全勤獎金、排休及10/1適用說明；跨行匯費不再列為員工扣款。',
+
+    '11.16.6.4：薪資預估實領四捨五入至整數元。',
 
     '11.16.6.2：修正生理假為半薪扣薪；所有請假時數與出勤異常未出勤時數統一無條件進位至 0.5 小時，早退時間向前取整至半小時（例 12:15→12:00、15:40→15:30）。',
 
@@ -826,7 +830,6 @@ const TAIWAN_PUBLIC_HOLIDAYS = [
 
     { date: '2026-12-25', name: '行憲紀念日', type: 'national' },
 
-
     // ===== 2027 / 民國116年 =====
 
     { date: '2027-01-01', name: '元旦', type: 'national' },
@@ -1413,7 +1416,7 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                 meetingDate,
 
-                agreementVersion: '11.16.1-1',
+                agreementVersion: '11.16.6.5-1',
 
                 status: 'signed_effective',
 
@@ -1422,6 +1425,14 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
                 employerSignedAt: Date.now(),
 
                 effectiveDate: meetingDate,
+
+                proposedTermsDate: '2026-10-01',
+
+                monthlyAttendanceBonus: 3000,
+
+                attendanceBonusRule: '已發月份不追回；後續月份依事先有效約定及法定假別保障判斷',
+
+                agreementTextVersion: '2026-10-monthly-attendance-bonus',
 
                 originalBaseSalary: 34500,
 
@@ -1471,7 +1482,7 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                         <div><label className="block text-xs font-bold mb-1">簽署員工</label><select value={employeeUid} onChange={e=>setEmployeeUid(e.target.value)} className="w-full border rounded px-3 py-2 bg-white">{activeUsers.map(u=><option key={u.uid} value={u.uid}>{u.name}</option>)}</select></div>
 
-                        <div><label className="block text-xs font-bold mb-1">面談／簽署日期</label><input type="date" value={meetingDate} onChange={e=>setMeetingDate(e.target.value)} className="w-full border rounded px-3 py-2"/></div>
+                        <div><label className="block text-xs font-bold mb-1">實際面談／簽署日期</label><input type="date" value={meetingDate} onChange={e=>setMeetingDate(e.target.value)} className="w-full border rounded px-3 py-2"/></div>
 
                     </div>
 
@@ -1495,7 +1506,15 @@ const ServiceSupplementModal = ({ isOpen, onClose, users, currentUserInfo, db, a
 
                         <p><strong>第七條｜陳述及異議</strong><br/>乙方對客訴成立之認定有異議時，得提出書面或系統內說明；提出異議本身不得作為不利益處分之理由。客訴紀錄、成立認定與薪資調整應分別記錄，不得僅因收到顧客抱怨即逕行認定符合薪資調整條件。</p>
 
-                        <p><strong>第八條｜自由協商</strong><br/>雙方確認已充分閱讀及理解本協議內容，簽署係基於自由意思及協商結果。本協議完成後由系統保存完整簽署紀錄，雙方均得留存副本。</p>
+                        <p><strong>第八條｜全勤獎金改為按月發放</strong><br/>原規劃於年度終了發放之全勤獎金，雙方同意改採每月 <strong>3,000 元</strong> 按月認定及發放，列於薪資明細；已包含於約定之月薪總額，非額外加發。先前已符合條件並領取之月份不因後續缺勤追回；後續月份依各該月份合法且事先有效約定的出勤條件認定。全勤獎金是否屬工資應依實際性質判斷，不因稱為恩惠性獎金而排除工資保障。</p>
+
+                        <p><strong>第九條｜全勤獎金發放資格</strong><br/>一般事假或無故曠職，得依事先有效且合法之約定影響該月全勤獎金資格；曠職須先查明並非依法請假或其他正當事由。普通傷病假、生理假、特別休假不影響全勤獎金，依本店原有較優約定辦理；家庭照顧假等依法不得不利認定的假別亦不得據以減發。請假期間工資另依法及原契約計算，不與全勤獎金混同。</p>
+
+                        <p><strong>第十條｜排班及預排休假</strong><br/>門市採輪班與排假制度。員工每月可提出最多 3 日希望排休，其中假日最多 2 日；此為排班協調上限，不限制依法申請事假、病假、特休或其他法定假別。實際班表應符合勞動法令。</p>
+
+                        <p><strong>第十一條｜約定適用日期與簽署</strong><br/>雙方擬約定自民國 115 年 10 月 1 日（2026/10/01）起適用本協議之合法條款。實際簽署日期應如實記載；如簽署日晚於 10 月 1 日，不得僅憑事後簽署追溯減少簽署前已取得之工資或獎金。若當時已有有效合意，應保存原始同意紀錄。第五條未來薪資調整仍須另行再次確認，並自下一完整薪資月份起適用。</p>
+
+                        <p><strong>第十二條｜自由協商與文件留存</strong><br/>雙方已充分閱讀、理解本協議並有機會詢問，基於自由意思簽署；各得留存完整副本。本次補充協議不自動更改任何已結算薪資或已簽署契約。</p>
 
                     </div>
 
@@ -4783,7 +4802,6 @@ const getYearlyBalance = (uid, yearToFind) => {
 
     const getAttendanceAnomalyLabel = kind => kind === 'early_leave' ? '早退' : kind === 'late' ? '遲到' : kind === 'other' ? '其他未出勤' : '曠職';
 
-
     const recordAttendanceAnomaly = async (user, existingAssign) => {
 
         if (!canManageAttendance || isReadOnly) return alert('只有管理員或主管可以登記出勤異常。');
@@ -4804,7 +4822,6 @@ const getYearlyBalance = (uid, yearToFind) => {
 
         if (!absenceKind) return alert('請輸入 1、2、3 或 4。');
 
-
         let actualStart = shiftDef?.start || '';
 
         let actualEnd = shiftDef?.end || '';
@@ -4812,7 +4829,6 @@ const getYearlyBalance = (uid, yearToFind) => {
         let actualWorkHours = 0;
 
         let absenceHours = ceilToHalfHour(scheduledHours);
-
 
         if (absenceKind !== 'absence') {
 
@@ -4848,7 +4864,6 @@ const getYearlyBalance = (uid, yearToFind) => {
 
         }
 
-
         const reason = window.prompt(`${getAttendanceAnomalyLabel(absenceKind)}原因／聯絡紀錄或備註（可留空）：`, '') ?? '';
 
         const summary = absenceKind === 'absence'
@@ -4858,7 +4873,6 @@ const getYearlyBalance = (uid, yearToFind) => {
             : `實際出勤 ${actualStart}–${actualEnd}（${actualWorkHours}H）\n${getAttendanceAnomalyLabel(absenceKind)}未出勤 ${absenceHours}H`;
 
         if (!window.confirm(`確定登記 ${user.name} 於 ${dateStr}：\n\n${summary}\n\n未出勤 ${absenceHours}H 將自動帶入當月薪資扣薪。`)) return;
-
 
         const next = Array.isArray(dayData.assignments) ? [...dayData.assignments] : [];
 
@@ -4884,7 +4898,6 @@ const getYearlyBalance = (uid, yearToFind) => {
 
     };
 
-
     const cancelAttendanceAnomaly = async (user, assignment) => {
 
         if (!canManageAttendance || assignment?.type !== 'ABSENCE') return;
@@ -4904,7 +4917,6 @@ const getYearlyBalance = (uid, yearToFind) => {
         await writeAuditLog({ db, appId, actor:currentUserInfo, action:'CANCEL_ATTENDANCE_ANOMALY', targetType:'attendance', targetId:`${dateStr}_${user.uid}`, detail:{ employeeName:user.name || '', date:dateStr, previousKind:assignment.absenceKind || 'absence', previousHours:Number(assignment.absenceHours || 0), correctionReason:reason.trim() } });
 
     };
-
 
     const updateShiftCode = (uid, code) => {
 
@@ -6050,7 +6062,6 @@ const EmployeePayslipView = ({ db, appId, currentUserInfo }) => {
 
     }, [db, appId, currentUserInfo.uid]);
 
-
     const money = value => { const amount = Number(value || 0); return `$${amount.toLocaleString('zh-TW', { minimumFractionDigits:Number.isInteger(amount) ? 0 : 2, maximumFractionDigits:2 })}`; };
 
     return (
@@ -6108,7 +6119,6 @@ const EmployeePayslipView = ({ db, appId, currentUserInfo }) => {
     );
 
 };
-
 
 // 💰 薪資管理 (PayrollView)
 
@@ -6332,9 +6342,9 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                     personalDeduction:summary.personalDeduction, absenceDeduction:summary.absenceDeduction,
 
-                    manualDeduction:summary.manualDeduction, totalAdditions:summary.totalAdditions,
+                    manualDeduction:summary.manualDeduction, transferFee:summary.transferFee, totalAdditions:summary.totalAdditions,
 
-                    totalDeductions:summary.totalDeductions, grossPay:summary.grossPay, netPay:summary.netPay,
+                    totalDeductions:summary.totalDeductions, grossPay:summary.grossPay, exactNetPay:summary.exactNetPay, netPay:summary.netPay,
 
                     bankTransfer:summary.bankTransfer, cashPayment:summary.cashPayment,
 
@@ -6380,7 +6390,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         if (!printWindow) return alert('請允許瀏覽器開啟列印視窗。');
 
-        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪（半薪）</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>生理假扣薪（半薪）</td><td>-${formatMoney(summary.menstrualDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>出勤異常未出勤扣薪</td><td>-${formatMoney(summary.absenceDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、生理假扣半薪、事假扣全薪；生理假不影響全勤獎金；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
+        printWindow.document.write(`<html><head><title>${targetMonth} 薪資單</title><style>body{font-family:Arial,'Microsoft JhengHei',sans-serif;padding:32px;color:#1f2937}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:20px}td{border-bottom:1px solid #e5e7eb;padding:10px}.total{font-weight:700;font-size:20px}</style></head><body><h1>TEATOP 台中東山店｜${targetMonth} 薪資明細</h1><p>員工：${user.name || ''}</p><table><tr><td>基本薪資</td><td>${formatMoney(summary.baseSalary)}</td></tr><tr><td>全勤獎金</td><td>${formatMoney(summary.attendanceBonus)}</td></tr><tr><td>油資 / 津貼 / 獎金 / 其他加項</td><td>${formatMoney(summary.totalAdditions)}</td></tr><tr><td>病假扣薪（半薪）</td><td>-${formatMoney(summary.sickDeduction)}</td></tr><tr><td>生理假扣薪（半薪）</td><td>-${formatMoney(summary.menstrualDeduction)}</td></tr><tr><td>事假扣薪</td><td>-${formatMoney(summary.personalDeduction)}</td></tr><tr><td>出勤異常未出勤扣薪</td><td>-${formatMoney(summary.absenceDeduction)}</td></tr><tr><td>特休使用</td><td>${summary.leaveSummary.annualHours} hr（扣薪 $0）</td></tr><tr><td>其他扣款</td><td>-${formatMoney(summary.manualDeduction)}</td></tr><tr class='total'><td>應實發（四捨五入）</td><td>${formatMoney(summary.netPay)}</td></tr><tr><td>銀行轉帳</td><td>${formatMoney(summary.bankTransfer)}</td></tr><tr><td>現金支付</td><td>${formatMoney(summary.cashPayment)}</td></tr><tr><td>支付差額</td><td>${formatMoney(summary.paymentDifference)}</td></tr></table><p style='margin-top:24px;font-size:12px;color:#6b7280'>病假扣半薪、生理假扣半薪、事假扣全薪；生理假不影響全勤獎金；每小時扣薪 = 薪資結算基數 ÷ 30 ÷ 8。</p><script>window.onload=()=>window.print()<\/script></body></html>`);
 
         printWindow.document.close();
 
@@ -6674,7 +6684,6 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
     };
 
-
     const getSettlementBase = (user, record = {}) => {
 
         const legacyTotal = getNumber(user?.salaryAmount || record.base);
@@ -6743,15 +6752,23 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
         const manualDeduction = getNumber(record.manualDeduction);
 
+        // 跨行匯費為獨立扣款項目，只有實際發生時才輸入；不與其他扣款混在一起。
+
+        const transferFee = 0; // 跨行轉帳手續費由店家另付，不屬員工薪資扣款
+
         const regularPay = baseSalary + attendanceBonus;
 
         const totalAdditions = gasCapped + fixedAllowance + subsidy + birthdayBonus + festivalBonus + yearBonus + manualAdjustment + customIncomeTotal;
 
         const grossPay = regularPay + totalAdditions;
 
-        const totalDeductions = sickDeduction + menstrualDeduction + personalDeduction + absenceDeduction + manualDeduction;
+        const totalDeductions = sickDeduction + menstrualDeduction + personalDeduction + absenceDeduction + manualDeduction + transferFee;
 
-        const netPay = grossPay - totalDeductions;
+        const exactNetPay = grossPay - totalDeductions;
+
+        // 實際發薪金額採一般四捨五入至整數元；扣薪公式本身仍保留原始小數，不先行進位。
+
+        const netPay = Math.round(exactNetPay);
 
         const bankTransfer = getNumber(record.bankTransfer);
 
@@ -6775,7 +6792,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
             birthdayBonus, festivalBonus, yearBonus, manualAdjustment, customIncomeItems, customIncomeTotal,
 
-            manualDeduction, totalAdditions, totalDeductions, netPay, salaryStructure,
+            manualDeduction, transferFee, totalAdditions, totalDeductions, exactNetPay, netPay, salaryStructure,
 
             bankTransfer, cashPayment, paymentTotal, paymentDifference
 
@@ -7041,7 +7058,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                             <div className="text-right">
 
-                                <div className="text-xs text-gray-500 font-bold">預估實領薪資</div>
+                                <div className="text-xs text-gray-500 font-bold">預估實領薪資（四捨五入）</div>
 
                                 <div className="text-2xl font-black text-indigo-700">{formatMoney(summary.netPay)}</div>
 
@@ -7209,11 +7226,25 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                     </div>
 
-                                    <div className="bg-orange-50 border border-orange-100 rounded-xl p-3">
+                                    <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 space-y-2">
 
-                                        <label className="block text-xs font-black text-orange-800 mb-1">其他扣款</label>
+                                        <div>
 
-                                        <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.manualDeduction || ''} onChange={event => updatePayroll(user.uid, 'manualDeduction', event.target.value)} disabled={payrollStatus === 'locked'} />
+                                            <label className="block text-xs font-black text-orange-800 mb-1">其他扣款</label>
+
+                                            <input type="number" placeholder="0" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.manualDeduction || ''} onChange={event => updatePayroll(user.uid, 'manualDeduction', event.target.value)} disabled={payrollStatus === 'locked'} />
+
+                                        </div>
+
+                                        <div>
+
+                                            <label className="block text-xs font-black text-orange-800 mb-1">跨行匯費</label>
+
+                                            <input type="number" min="0" step="1" placeholder="例如 15" className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500" value={record.transferFee || ''} onChange={event => updatePayroll(user.uid, 'transferFee', event.target.value)} disabled={payrollStatus === 'locked'} />
+
+                                            <div className="text-[10px] text-orange-600 mt-1">有實際跨行匯款費用時再填入，會自動列入扣款合計。</div>
+
+                                        </div>
 
                                     </div>
 
@@ -7253,7 +7284,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                             <div className="flex justify-between"><span className="text-gray-500">扣款合計</span><span className="font-bold text-red-700">-{formatMoney(summary.totalDeductions)}</span></div>
 
-                                            <div className="flex justify-between border-t pt-2 text-base"><span className="font-black text-gray-800">預估實領</span><span className="font-black text-indigo-700">{formatMoney(summary.netPay)}</span></div>
+                                            <div className="flex justify-between border-t pt-2 text-base"><span className="font-black text-gray-800">預估實領（四捨五入）</span><span className="font-black text-indigo-700">{formatMoney(summary.netPay)}</span></div>
 
                                         </div>
 
@@ -7299,7 +7330,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                     <table className="w-full min-w-[760px] text-xs text-left bg-white border rounded-lg overflow-hidden">
 
-                                        <thead className="bg-indigo-50 text-indigo-800"><tr><th className="p-2">月份</th><th className="p-2">結算基數</th><th className="p-2">病假</th><th className="p-2">事假</th><th className="p-2">特休</th><th className="p-2">請假扣薪</th><th className="p-2">加項</th><th className="p-2">其他扣款</th><th className="p-2">預估實領</th></tr></thead>
+                                        <thead className="bg-indigo-50 text-indigo-800"><tr><th className="p-2">月份</th><th className="p-2">結算基數</th><th className="p-2">病假</th><th className="p-2">事假</th><th className="p-2">特休</th><th className="p-2">請假扣薪</th><th className="p-2">加項</th><th className="p-2">其他扣款＋匯費</th><th className="p-2">預估實領</th></tr></thead>
 
                                         <tbody>{recentMonthOptions.map(monthStr => {
 
@@ -7309,7 +7340,7 @@ const PayrollView = ({ users, currentDate, db, appId, gasReceipts, shifts = {}, 
 
                                             const hasRecord = Object.keys(historyRecord).length > 0 || historySummary.leaveSummary.sickHours > 0 || historySummary.leaveSummary.personalHours > 0;
 
-                                            return <tr key={monthStr} className={`border-t ${monthStr === targetMonth ? 'bg-yellow-50' : ''}`}><td className="p-2 font-bold">{monthStr}{monthStr === targetMonth ? '（本月）' : ''}</td><td className="p-2">{hasRecord ? formatMoney(historySummary.settlementBase) : '—'}</td><td className="p-2">{historySummary.leaveSummary.sickHours} hr</td><td className="p-2">{historySummary.leaveSummary.personalHours} hr</td><td className="p-2 text-emerald-700">{historySummary.leaveSummary.annualHours} hr</td><td className="p-2 text-red-700">-{formatMoney(historySummary.sickDeduction + historySummary.personalDeduction)}</td><td className="p-2 text-green-700">+{formatMoney(historySummary.totalAdditions)}</td><td className="p-2 text-red-700">-{formatMoney(historySummary.manualDeduction)}</td><td className="p-2 font-black text-indigo-700">{hasRecord ? formatMoney(historySummary.netPay) : '—'}</td></tr>;
+                                            return <tr key={monthStr} className={`border-t ${monthStr === targetMonth ? 'bg-yellow-50' : ''}`}><td className="p-2 font-bold">{monthStr}{monthStr === targetMonth ? '（本月）' : ''}</td><td className="p-2">{hasRecord ? formatMoney(historySummary.settlementBase) : '—'}</td><td className="p-2">{historySummary.leaveSummary.sickHours} hr</td><td className="p-2">{historySummary.leaveSummary.personalHours} hr</td><td className="p-2 text-emerald-700">{historySummary.leaveSummary.annualHours} hr</td><td className="p-2 text-red-700">-{formatMoney(historySummary.sickDeduction + historySummary.personalDeduction)}</td><td className="p-2 text-green-700">+{formatMoney(historySummary.totalAdditions)}</td><td className="p-2 text-red-700">-{formatMoney(historySummary.manualDeduction + historySummary.transferFee)}</td><td className="p-2 font-black text-indigo-700">{hasRecord ? formatMoney(historySummary.netPay) : '—'}</td></tr>;
 
                                         })}</tbody>
 
@@ -10358,4 +10389,3 @@ ${fromName} ⇄ ${toName}
 }
 
 export { App as default };
-
